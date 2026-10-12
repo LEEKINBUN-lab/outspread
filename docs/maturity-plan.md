@@ -206,7 +206,7 @@
 
 ## 六、10-12 下午这一轮做掉了什么（现读，含装置读数）
 
-代码从 20,403 行到 21,7**4** 行（`find src tests -name '*.cs' -not -path '*/obj/*' | xargs wc -l` ⇒ 21,745 总行，含本轮新增）；Core 测试 362 → **388**（新增 26 项 `BoardSearchTests`）。`check.cmd` 全过。
+代码 20,403 行 → **22,195** 行（`find src tests -name '*.cs' -not -path '*/obj/*' -not -path '*/bin/*' | xargs wc -l`，本回合现读）；Core 测试 362 → **388**（新增 26 项 `BoardSearchTests`）。`check.cmd` 全过。
 
 | 期 | 落地 | 现读凭据 |
 |---|---|---|

@@ -165,7 +165,8 @@
 
 顺序按"一行属性 > 一个钩子 > 一个 workflow > 一个更新器"：
 
-1. `WindowsAppSDKSelfContained=true`——摆脱"机器上必须先装 Windows App Runtime"。**先量体积差再合**，产物体积当闸（Files 就是这么做的）。
+1. `WindowsAppSDKSelfContained=true`——摆脱"机器上必须先装 Windows App Runtime"。**体积差已经量过（10-12，临时工作树里两档各构建一次，主树没动）**：Debug/x64 输出目录 **40 MB / 52 个文件 → 155 MB / 337 个文件**（+115 MB），自包含那一档 `--selftest` 一次通过（rc=0，`SELFTEST PASS` 16:08:51 北京时）。
+   **判决：建议翻，但合之前要在 Release/publish 上再量一次。** 理由不是体积，是"双击 exe 就要能用"这条承诺——不自包含就要求对方机器装过 Windows App Runtime，而 `README.md` 现在**没写**这条前置，那正是新装用户第一发会撞上的墙。
 2. 三个异常钩子（若 P1 未做则并到 P1）。
 3. `LICENSE`（MIT）+ `NOTICE.md`（第三方声明）+ `SECURITY.md`/`SUPPORT.md` + `.github/workflows/check.yml` 把 `check.cmd` 变成真闸（矩阵 `fail-fast: false`，失败时上传诊断）。
 4. "报告问题"＝一个 zip（日志 + 版本 + 显示器/DPI + 板子文件名不含内容），抄 PowerToys 的 `BugReportTool`；**遥测默认关，且开关本身有 `AutomationProperties.Name`**。

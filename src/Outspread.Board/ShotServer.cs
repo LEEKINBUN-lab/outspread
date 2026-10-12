@@ -16,7 +16,7 @@ internal sealed class ShotServer : IDisposable
 {
     private readonly CancellationTokenSource _closed = new();
 
-    private readonly Thread _loop;
+    private readonly Task _loop;
 
     private readonly Func<ShotRequest, ShotReply> _onUiThread;
 
@@ -26,13 +26,8 @@ internal sealed class ShotServer : IDisposable
         _onUiThread = handlerOnUiThread;
         BoardPath = boardPath;
 
-        _loop = new Thread(Run)
-        {
-            IsBackground = true,
-            Name = "outspread-shot",
-        };
-
-        _loop.Start();
+        // 线程池上的异步循环，不是一枚专门起的线程：见 Dispose 里那段"关窗口为什么要等一秒"。
+        _loop = Task.Run(RunAsync);
     }
 
     public string PipeName { get; }
@@ -42,7 +37,7 @@ internal sealed class ShotServer : IDisposable
     /// <summary>Set when the pipe could not be created at all, so it is not reported as listening.</summary>
     public string? StartupError { get; private set; }
 
-    private void Run()
+    private async Task RunAsync()
     {
         var reportedFailure = false;
 
@@ -57,12 +52,12 @@ internal sealed class ShotServer : IDisposable
                     PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous);
 
-                pipe.WaitForConnection();
+                await pipe.WaitForConnectionAsync(_closed.Token);
 
                 using var reader = new StreamReader(pipe, Encoding.UTF8);
                 using var writer = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = false };
 
-                var line = reader.ReadLine();
+                var line = await reader.ReadLineAsync(_closed.Token);
 
                 if (line is null)
                 {
@@ -76,7 +71,7 @@ internal sealed class ShotServer : IDisposable
                     : _onUiThread(request);
 
                 writer.WriteLine(ShotProtocol.Serialize(reply));
-                writer.Flush();
+                await writer.FlushAsync(_closed.Token);
                 pipe.WaitForPipeDrain();
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
@@ -96,11 +91,15 @@ internal sealed class ShotServer : IDisposable
     {
         _closed.Cancel();
 
+        /* 这里以前是 `_loop.Join(1s)`，而那一秒每次都花满：专用线程卡在不可取消的
+           WaitForConnection 上，取消信号它根本看不见，所以每关一次窗口都要白等一秒
+           （现读：`window closed · 收尾 1016ms`）。换成异步等待以后取消真的能打断它，
+           这 200ms 等的只是"管道名确实交出去了"，好让下一台实例建得起同一根管道。 */
         try
         {
-            _loop.Join(TimeSpan.FromSeconds(1));
+            _loop.Wait(TimeSpan.FromMilliseconds(200));
         }
-        catch (Exception ex) when (ex is InvalidOperationException or ThreadStateException)
+        catch (Exception ex) when (ex is AggregateException or InvalidOperationException)
         {
         }
 

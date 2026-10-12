@@ -96,6 +96,8 @@ public sealed partial class MainWindow : Window
 
     private string? _pendingLabel;
 
+    private (CanvasNode Node, double Height)? _shotShrunk;
+
     private FileWatcher? _watcher;
 
     private ShotServer? _shotServer;
@@ -108,6 +110,8 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        Diagnostics.Write($"startup: 皮与控件建好 +{App.SinceBoot():0}ms");
 
         Title = "铺陈";
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1320, 840));
@@ -212,13 +216,16 @@ public sealed partial class MainWindow : Window
 
         Closed += (_, _) =>
         {
+            var at = Environment.TickCount64;
+
             _watcher?.Dispose();
             _shotServer?.Dispose();
             _sync?.Stop();
-            Diagnostics.Write("window closed");
+
+            Diagnostics.Write($"window closed · 收尾 {Environment.TickCount64 - at}ms · 活着 {App.SinceBoot():0}ms");
         };
 
-        Diagnostics.Write($"window created; log at {Diagnostics.LogPath ?? "disabled"}");
+        Diagnostics.Write($"window created; log at {Diagnostics.LogPath ?? "disabled"} · 构造完 +{App.SinceBoot():0}ms");
 
         LoadBoard();
     }
@@ -2932,6 +2939,63 @@ public sealed partial class MainWindow : Window
             }
         }
 
+        /* 压小以后：藏起来的行必须还够得着，而且窗口停在整行上。
+           这一发不问像素问的是状态——板子上那枚"不许出现滚动宿主"的闸还在，
+           所以够得着靠的是窗口走行，不是多出一根条。 */
+        {
+            var tall = BoardNotes()
+                .Where(candidate => (candidate.Text ?? string.Empty).Contains("\n"))
+                .OrderByDescending(candidate => candidate.Height)
+                .FirstOrDefault();
+
+            if (tall is not null && _realized.TryGetValue(tall.Id, out var card))
+            {
+                var was = tall.Height;
+
+                tall.Height = Math.Max(40, was / 4);
+
+                ArrangeAll();
+                BoardArea.UpdateLayout();
+
+                var before = card.WindowState();
+
+                if (before.Visible <= 0)
+                {
+                    problems.Add($"压到 {tall.Height:0}px 以后这一格一行都放不下（可见 {before.Visible} 行）");
+                }
+
+                if (before.Total <= before.Visible)
+                {
+                    problems.Add($"这一格压小了却没有藏行（共 {before.Total} 行、可见 {before.Visible}）");
+                }
+
+                var wanted = Math.Min(2, Math.Max(0, before.Total - before.Visible));
+
+                if (wanted > 0 && !card.ScrollByLines(2))
+                {
+                    problems.Add("滚轮往下两行没被这一格接手：藏着的行够不着");
+                }
+
+                var after = card.WindowState();
+
+                if (wanted > 0 && after.First != wanted)
+                {
+                    problems.Add($"滚两行以后停在第 {after.First} 行，应为第 {wanted} 行");
+                }
+
+                card.ScrollByLines(-after.First);
+
+                if (card.WindowState().First != 0)
+                {
+                    problems.Add("滚回顶部以后没有回到第一行");
+                }
+
+                tall.Height = was;
+
+                ArrangeAll();
+            }
+        }
+
         // 右下角那一组是不是照原型那枚"发丝边的容器"长的：高度 34（28 的成员 + 2 的内距 + 2 条边），
         // 成员无边框、漏斗是一枚 PathIcon（不是 SymbolIcon 那套微软字形）。
         {
@@ -3459,6 +3523,45 @@ public sealed partial class MainWindow : Window
                         SetRestorePanel(true);
                         break;
 
+                    case "shrink":
+                    case "scrolled":
+                        // 取证"压小以后后面的行还在不在"：同一格压到四分之一，一发不滚、
+                        // 一发往下走两行——两张图一比就知道够不够得着。
+                        {
+                            // 只挑**此刻在屏幕上**的那格：压到视野外的一格，两张取证图当然一模一样，
+                            // 那种"没有差别"会被读成"滚动没有效果"。
+                            var tall = BoardNotes()
+                                .Where(candidate => (candidate.Text ?? string.Empty).Contains("\n"))
+                                .Where(candidate => _realized.TryGetValue(candidate.Id, out var onScreen) && onScreen.IsHitTestVisible)
+                                .OrderByDescending(candidate => candidate.Height)
+                                .FirstOrDefault();
+
+                            if (tall is null || !_realized.TryGetValue(tall.Id, out var card))
+                            {
+                                return new ShotReply(false, null, Error: "屏幕上没有多行文字的格子，这一发没有可压的格");
+                            }
+
+                            Diagnostics.Write($"shot {panelArg}: 压的是 {tall.Id}（{_realized[tall.Id].WindowState().ToString()}）");
+
+                            _shotShrunk = (tall, tall.Height);
+
+                            tall.Height = Math.Max(40, tall.Height / 4);
+
+                            ArrangeAll();
+                            BoardArea.UpdateLayout();
+
+                            Diagnostics.Write($"shot {panelArg}: 压完 {card.WindowState()}");
+
+                            if (panelArg == "scrolled")
+                            {
+                                var moved = card.ScrollByLines(2);
+
+                                Diagnostics.Write($"shot scrolled: 接手={moved} 滚完 {card.WindowState()}");
+                            }
+                        }
+
+                        break;
+
                     case "pull":
                         // 那根虚线只在拉线途中存在，所以取证也要真的拉起来：起点钉在第一格的
                         // 右边，自由端停在第二格中心前面——拍的就是"还没落定"那一帧。
@@ -3615,6 +3718,15 @@ public sealed partial class MainWindow : Window
                 {
                     // 取证不许留下一根没落定的线：文档本来也没动过。
                     CancelPull();
+                }
+
+                if (_shotShrunk is { } shrunk)
+                {
+                    // 压小是这一发借去的，不是留下的：格子回到它原来的高度，文档一个字节没写。
+                    shrunk.Node.Height = shrunk.Height;
+                    _shotShrunk = null;
+
+                    ArrangeAll();
                 }
             }
 

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.UI.Xaml;
 
 namespace Outspread.Board;
@@ -10,8 +11,15 @@ public partial class App : Application
     private static bool SelfTestMode
         => Environment.GetCommandLineArgs().Contains("--selftest", StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>进程起来的那一刻，用来把"打开慢"切成几段分别量。</summary>
+    private static readonly DateTime Boot = Process.GetCurrentProcess().StartTime;
+
+    public static double SinceBoot() => (DateTime.Now - Boot).TotalMilliseconds;
+
     public App()
     {
+        Diagnostics.Write($"startup: 进到 App 构造 +{SinceBoot():0}ms");
+
         InitializeComponent();
 
         // 自检里抛出来的东西必须以非零退出码落地：cmd 的 `if errorlevel 1` 看不见负数

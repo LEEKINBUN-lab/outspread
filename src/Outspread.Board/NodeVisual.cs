@@ -85,6 +85,26 @@ public sealed class NodeVisual : ContentControl
     /// the layout a card has not changed.</summary>
     private string _mdKey = string.Empty;
 
+    /* 整行窗口：格子被压得比内容矮时（只有人手动拖小、或整块板子切到"固定"才会这样），
+       后面的行不许变成"看不见也够不着"。以前的做法是截到看得下的行数加一枚省略号——
+       它诚实地说了"后面还有"，可没有任何办法把还有的那部分调出来。
+       这里不加滚动宿主：那条闸（`CountBoardScrollers`）是定的——板子上不许出现滚动条，
+       而一枚"看不见条"的宿主同样让滚轮在那一格上改姓。所以窗口按**行文字**（编辑器里
+       回车切开的那种）上下走，画出来的顶和底永远是整行，"不许半行被横切"这条也就没破。 */
+    private CanvasNode? _windowNode;
+
+    private BoardViewState? _windowView;
+
+    private double _windowScale;
+
+    private string _windowKey = string.Empty;
+
+    private int _firstLine;
+
+    private int _visibleLines = 1;
+
+    private int _totalLines = 1;
+
     /// <summary>
     /// The card's own marks, bottom-left: the date it carries and its tags, one chip each. Hovering a
     /// chip brings out the × and clicking it takes that span out of the text — which is the whole
@@ -194,6 +214,21 @@ public sealed class NodeVisual : ContentControl
         paint.Children.Add(_dueBar);
         Content = paint;
 
+        // 滚轮先问这一格要不要窗口：藏着的行归它，走到头了再让板子接手去缩放。
+        PointerWheelChanged += (_, args) =>
+        {
+            var page = Math.Max(1, _visibleLines);
+            var step = args.KeyModifiers.HasFlag(Windows.System.VirtualKeyModifiers.Shift) ? page : 1;
+
+            // 这一枚事件带的是指针包，滚轮的格数在它的属性里。
+            var wheel = args.GetCurrentPoint(null).Properties.MouseWheelDelta;
+
+            if (ScrollByLines(wheel > 0 ? -step : step))
+            {
+                args.Handled = true;
+            }
+        };
+
         ResolveAsset = resolveAsset;
 
         if (!ShowText)
@@ -201,6 +236,34 @@ public sealed class NodeVisual : ContentControl
             LoadImage(node);
         }
     }
+
+    /// <summary>滚轮在那一格上＝窗口上下走。回到顶或底就交回板子去缩放（返回 false）。</summary>
+    /// <param name="lines">正数往下、负数往上；一格＝一行文字。</param>
+    internal bool ScrollByLines(int lines)
+    {
+        var max = Math.Max(0, _totalLines - _visibleLines);
+
+        if (_windowNode is null || _windowView is null || max <= 0)
+        {
+            return false;
+        }
+
+        var next = Math.Clamp(_firstLine + lines, 0, max);
+
+        if (next == _firstLine)
+        {
+            return false;
+        }
+
+        _firstLine = next;
+
+        Update(_windowNode, _windowView, _windowScale);
+
+        return true;
+    }
+
+    /// <summary>自检那一发读的三件事：这格一共几行、视窗装得下几行、现在从第几行开始。</summary>
+    internal (int Total, int Visible, int First) WindowState() => (_totalLines, _visibleLines, _firstLine);
 
     public string NodeId { get; }
 
@@ -246,6 +309,10 @@ public sealed class NodeVisual : ContentControl
 
     public void Update(CanvasNode node, BoardViewState view, double rasterizationScale)
     {
+        _windowNode = node;
+        _windowView = view;
+        _windowScale = rasterizationScale;
+
         var surface = NoteStyling.SurfaceFor(node.Color);
         var ink = NoteStyling.InkFor(node.Color, surface);
         var isGroup = Kind == CanvasNodeKind.Group;
@@ -303,7 +370,8 @@ public sealed class NodeVisual : ContentControl
 
             _label.FontSize = Math.Max(4, type.Size * view.Zoom);
             _label.LineHeight = leading;
-            _label.Text = Kind == CanvasNodeKind.Text ? marks.Body : DisplayText(node);
+
+            var body = Kind == CanvasNodeKind.Text ? marks.Body : DisplayText(node);
 
 
             // 不许出现"半行字被横切"。卡片高度可能是在网页那侧量出来的——同一串字在
@@ -328,6 +396,23 @@ public sealed class NodeVisual : ContentControl
             // under them, so it comes off before anything asks how many lines fit.
             var roomText = Math.Max(0, showChips ? room - band : room);
 
+            _visibleLines = Math.Max(1, showChips ? withChips : (int)Math.Floor(room / leading));
+
+            var sourceLines = body.Split('\n');
+
+            _totalLines = Math.Max(1, sourceLines.Length);
+
+            // 文字换了（或换了一格）就回到第一行：谁都不该在一段新内容中间接着上次的位置读。
+            if (!string.Equals(_windowKey, $"{node.Id}|{body}", StringComparison.Ordinal))
+            {
+                _windowKey = $"{node.Id}|{body}";
+                _firstLine = 0;
+            }
+
+            _firstLine = Math.Clamp(_firstLine, 0, Math.Max(0, _totalLines - 1));
+
+            _label.Text = _firstLine == 0 ? body : string.Join('\n', sourceLines.Skip(_firstLine));
+
             var blocks = Kind == CanvasNodeKind.Text && Markdown.LooksLikeMarkdown(marks.Body);
 
             _label.Visibility = blocks ? Visibility.Collapsed : Visibility.Visible;
@@ -335,9 +420,11 @@ public sealed class NodeVisual : ContentControl
 
             if (blocks)
             {
-                var lines = Markdown.Lines(marks.Body);
+                var lines = Markdown.Lines(marks.Body).Skip(_firstLine).ToList();
                 var count = MarkdownPaint.Count(type, view.Zoom, lines, roomText);
-                var key = $"{marks.Body}|{type.Size}|{view.Zoom:0.####}|{count}|{NoteStyling.IsDark}|{ink}";
+                // 窗口走了第几行必须进这把钥匙：以前只按"画了几行"缓存，
+                // 于是滚完两行以后这里判定"没变"，屏幕上还是一模一样的那一屏字。
+                var key = $"{marks.Body}|{type.Size}|{view.Zoom:0.####}|{count}|{_firstLine}|{NoteStyling.IsDark}|{ink}";
 
                 if (key != _mdKey)
                 {

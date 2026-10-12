@@ -105,6 +105,17 @@ public sealed class NodeVisual : ContentControl
 
     private int _totalLines = 1;
 
+    /* "还有没有藏起来的行"必须按**视觉行**算：一段长句子在窄格子里会绕成三四行，
+       按回车切开的那种行数会算成"装得下"，于是滚轮交给了板子——整页被缩放，
+       而他想看的是这格剩下的字（他 10-12 报的第二条）。 */
+    private bool _hasMore;
+
+    private TextBlock? _naturalProbe;
+
+    private string _naturalKey = string.Empty;
+
+    private int _naturalVisual = 1;
+
     /// <summary>
     /// The card's own marks, bottom-left: the date it carries and its tags, one chip each. Hovering a
     /// chip brings out the × and clicking it takes that span out of the text — which is the whole
@@ -237,11 +248,57 @@ public sealed class NodeVisual : ContentControl
         }
     }
 
+
+    /// <summary>这份文字在这宽度上要占几行视觉行；量不了（还没进过树）返回 0，调用方按源行数兜底。</summary>
+    private int NaturalVisualLines(string text, double width, double size, double leading)
+    {
+        if (XamlRoot is null)
+        {
+            return 0;
+        }
+
+        var key = $"{text.Length}|{text.GetHashCode()}|{width:0.#}|{size:0.###}|{leading:0.###}";
+
+        if (key == _naturalKey)
+        {
+            return _naturalVisual;
+        }
+
+        _naturalKey = key;
+
+        _naturalProbe ??= new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            IsHitTestVisible = false,
+            MaxLines = int.MaxValue,
+            TextTrimming = TextTrimming.None,
+            FontFamily = NoteStyling.NoteFont,
+            XamlRoot = XamlRoot,
+        };
+
+        _naturalProbe.Text = text;
+        _naturalProbe.FontSize = size;
+        _naturalProbe.LineHeight = leading;
+        _naturalProbe.Measure(new Windows.Foundation.Size(width, double.PositiveInfinity));
+
+        // 四舍五入到整行，不是向上取整：行盒本身会多出一两个像素（这台的 LineHeight 是
+        // 整像素 half-up），向上取整会把"刚好 12 行"读成 13 行，于是每一格都自称还有藏行，
+        // 滚轮在放得下的格子上也不还给板子了。
+        _naturalVisual = Math.Max(1, (int)Math.Floor(
+            (_naturalProbe.DesiredSize.Height + (leading * 0.5)) / Math.Max(1, leading)));
+
+        return _naturalVisual;
+    }
+
+    /// <summary>这格现在是不是还有没露出来的行。</summary>
+    private bool HiddenBelow(string text, double width, double size, double leading)
+        => NaturalVisualLines(text, width, size, leading) > _visibleLines;
+
     /// <summary>滚轮在那一格上＝窗口上下走。回到顶或底就交回板子去缩放（返回 false）。</summary>
     /// <param name="lines">正数往下、负数往上；一格＝一行文字。</param>
     internal bool ScrollByLines(int lines)
     {
-        var max = Math.Max(0, _totalLines - _visibleLines);
+        var max = _hasMore ? Math.Max(0, _totalLines - 1) : 0;
 
         if (_windowNode is null || _windowView is null || max <= 0)
         {
@@ -263,7 +320,8 @@ public sealed class NodeVisual : ContentControl
     }
 
     /// <summary>自检那一发读的三件事：这格一共几行、视窗装得下几行、现在从第几行开始。</summary>
-    internal (int Total, int Visible, int First) WindowState() => (_totalLines, _visibleLines, _firstLine);
+    internal (int Total, int Visible, int First, bool HasMore, bool Blocks) WindowState()
+        => (_totalLines, _visibleLines, _firstLine, _hasMore, _md.Visibility == Visibility.Visible);
 
     public string NodeId { get; }
 
@@ -413,6 +471,11 @@ public sealed class NodeVisual : ContentControl
 
             _label.Text = _firstLine == 0 ? body : string.Join('\n', sourceLines.Skip(_firstLine));
 
+            var innerWidth = Math.Max(20, (node.Width * view.Zoom) - (inset * 2));
+
+            _hasMore = HiddenBelow(_label.Text, innerWidth, _label.FontSize, leading)
+                       || _totalLines - _firstLine > _visibleLines;
+
             var blocks = Kind == CanvasNodeKind.Text && Markdown.LooksLikeMarkdown(marks.Body);
 
             _label.Visibility = blocks ? Visibility.Collapsed : Visibility.Visible;
@@ -422,6 +485,8 @@ public sealed class NodeVisual : ContentControl
             {
                 var lines = Markdown.Lines(marks.Body).Skip(_firstLine).ToList();
                 var count = MarkdownPaint.Count(type, view.Zoom, lines, roomText);
+
+                _hasMore = lines.Count > count;
                 // 窗口走了第几行必须进这把钥匙：以前只按"画了几行"缓存，
                 // 于是滚完两行以后这里判定"没变"，屏幕上还是一模一样的那一屏字。
                 var key = $"{marks.Body}|{type.Size}|{view.Zoom:0.####}|{count}|{_firstLine}|{NoteStyling.IsDark}|{ink}";

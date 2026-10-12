@@ -410,7 +410,6 @@ public sealed partial class MainWindow : Window
             _boardPath is null ? null : AssetStore.ResolveExisting(_boardPath, relative));
 
         visual.PointerPressed += OnNodePressed;
-        visual.DoubleTapped += OnNodeDoubleTapped;
 
         // 卡片左下角那排牌子的删除路径走这里：它删的是正文里那一枚 token，所以是一步可撤销的文档改动，
         // 不是视图状态。
@@ -998,31 +997,6 @@ public sealed partial class MainWindow : Window
         // Captured on the surface, not the node: a fast drag leaves the node's bounds
         // within a frame, and capture on the node would drop the gesture mid-drag.
         BoardArea.CapturePointer(e.Pointer);
-        e.Handled = true;
-    }
-
-    private void OnNodeDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
-    {
-        if (sender is not NodeVisual visual)
-        {
-            return;
-        }
-
-        var screen = e.GetPosition(BoardArea);
-
-        // 双击落在边缘那 6 屏幕像素带上＝把线起在那一面，不是编辑：边缘那一发的按下已经归了
-        // 缩放，双击是这块面上唯一还没被占用的动作。双击格内＝编辑，双击空白＝新建，三条不打架。
-        if (NodeOf(visual.NodeId) is { } node && EdgeOf(node, screen) is { } edge)
-        {
-            SelectOnly(node.Id);
-            StartPull(node.Id, edge);
-            e.Handled = true;
-
-            return;
-        }
-
-        SelectOnly(visual.NodeId);
-        BeginEdit(visual.NodeId);
         e.Handled = true;
     }
 
@@ -1796,10 +1770,47 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>双击那一发落到哪儿：格子的边缘带＝拉线，格内＝编辑，空白＝新建。</summary>
+    private (string Route, CanvasNode? Node, string? Side) DoubleTapTarget(Point at)
+    {
+        if (NodeAt(at) is not { } under)
+        {
+            return ("新建", null, null);
+        }
+
+        return EdgeOf(under, at) is { } side ? ("拉线", under, side) : ("编辑", under, null);
+    }
+
     private void OnSurfaceDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
         if (e.Handled)
         {
+            return;
+        }
+
+        var at = e.GetPosition(BoardArea);
+
+        /* 三条路都在板子这一侧判，不在卡片自己的 DoubleTapped 里判：按下时板子把指针捕获走了
+           （快速拖动不能掉捕获），于是手势事件发到 BoardArea，卡片那个 handler 根本收不到——
+           结果双击格内也走到"新建一格"，他 10-12 报的就是这个。判据抽在 DoubleTapTarget 里，
+           自检那一发直接问它，不靠把这发手势演出来。 */
+        var (route, hit, side) = DoubleTapTarget(at);
+
+        if (route != "新建")
+        {
+            SelectOnly(hit!.Id);
+
+            if (route == "拉线")
+            {
+                StartPull(hit.Id, side!);
+            }
+            else
+            {
+                BeginEdit(hit.Id);
+            }
+
+            e.Handled = true;
+
             return;
         }
 
@@ -2942,60 +2953,109 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        /* 压小以后：藏起来的行必须还够得着，而且窗口停在整行上。
-           这一发不问像素问的是状态——板子上那枚"不许出现滚动宿主"的闸还在，
-           所以够得着靠的是窗口走行，不是多出一根条。 */
+        /* 压小以后：藏起来的行必须还够得着，够得着的时候滚轮归这一格、不归整页缩放。
+           "还有没有藏行"按视觉行算（长句在窄格里会绕行），所以这里用一枚 12 行的正文测。 */
         {
-            var tall = BoardNotes()
-                .Where(candidate => (candidate.Text ?? string.Empty).Contains("\n"))
-                .OrderByDescending(candidate => candidate.Height)
-                .FirstOrDefault();
+            // 要的是文字格：文件格的正文是文件名，往它身上写 12 行是量不到东西的。
+            var probe = BoardNotes().FirstOrDefault(node => node.Kind == CanvasNodeKind.Text);
 
-            if (tall is not null && _realized.TryGetValue(tall.Id, out var card))
+            if (probe is not null && _realized.TryGetValue(probe.Id, out var card))
             {
-                var was = tall.Height;
+                var was = probe.Height;
+                var wasText = probe.Text;
 
-                tall.Height = Math.Max(40, was / 4);
+                probe.Text = string.Join("\n", Enumerable.Range(1, 12).Select(n => $"第 {n} 行"));
 
-                ArrangeAll();
-                BoardArea.UpdateLayout();
+                Rebuild();
 
-                var before = card.WindowState();
-
-                if (before.Visible <= 0)
+                if (!_realized.TryGetValue(probe.Id, out card))
                 {
-                    problems.Add($"压到 {tall.Height:0}px 以后这一格一行都放不下（可见 {before.Visible} 行）");
+                    problems.Add("重画以后找不到那一格");
+                }
+                else
+                {
+                    // 自动高度那一半的判据：换成 12 行正文并走一次提交时走的那条路，
+                    // 格子必须长到装得下；装得下了，滚轮就该还给板子去缩放。
+                    FitNoteHeight(probe);
+
+                    ArrangeAll();
+                    BoardArea.UpdateLayout();
+
+                    var fit = card.WindowState();
+
+                    if (fit.Visible < fit.Total)
+                    {
+                        problems.Add($"自动高度以后还差 {fit.Total - fit.Visible} 行没地方放（可见 {fit.Visible} / 共 {fit.Total}）");
+                    }
+
+                    if (card.ScrollByLines(1))
+                    {
+                        problems.Add($"这格放得下（可见 {fit.Visible} / 共 {fit.Total}），滚轮却抢了板子的缩放");
+                    }
+
+                    card.ScrollByLines(-99);
+                    probe.Height = Math.Max(40, fit.Visible * 2);
+
+                    ArrangeAll();
+                    BoardArea.UpdateLayout();
+
+                    var cut = card.WindowState();
+
+                    if (!card.ScrollByLines(2))
+                    {
+                        problems.Add($"压到 {probe.Height:0}px（可见 {cut.Visible} 行 / 共 {cut.Total} 行）滚轮仍不归这一格：整页会被缩放，剩下的字够不着");
+                    }
+
+                    if (card.WindowState().First != 2)
+                    {
+                        problems.Add($"滚两行以后停在第 {card.WindowState().First} 行");
+                    }
+
+                    card.ScrollByLines(-99);
+
+                    if (card.WindowState().First != 0)
+                    {
+                        problems.Add("滚回顶部以后没有回到第一行");
+                    }
                 }
 
-                if (before.Total <= before.Visible)
+                probe.Text = wasText;
+                probe.Height = was;
+
+                Rebuild();
+            }
+
+            // 双击那三条路的判据：同一格的上边正中该被认成"边缘"，中心该被认成"格内"，
+            // 而落点必须认得出是哪一格（路由本身在 OnSurfaceDoubleTapped——卡片收不到手势，
+            // 因为按下时板子把指针捕获走了）。
+            if (BoardNotes().FirstOrDefault(node => node.Kind == CanvasNodeKind.Text) is { } tapped)
+            {
+                var onEdge = new Point(
+                    _view.ToScreenX(tapped.X + (tapped.Width / 2)),
+                    _view.ToScreenY(tapped.Y));
+
+                var inMiddle = new Point(
+                    _view.ToScreenX(tapped.X + (tapped.Width / 2)),
+                    _view.ToScreenY(tapped.Y + (tapped.Height / 2)));
+
+                var farOff = new Point(
+                    _view.ToScreenX(tapped.X + 40000),
+                    _view.ToScreenY(tapped.Y + 40000));
+
+                if (DoubleTapTarget(onEdge) is not ("拉线", var pullNode, _) || pullNode?.Id != tapped.Id)
                 {
-                    problems.Add($"这一格压小了却没有藏行（共 {before.Total} 行、可见 {before.Visible}）");
+                    problems.Add("双击上边正中没走到拉线（他 10-12 点名的那一条）");
                 }
 
-                var wanted = Math.Min(2, Math.Max(0, before.Total - before.Visible));
-
-                if (wanted > 0 && !card.ScrollByLines(2))
+                if (DoubleTapTarget(inMiddle) is not ("编辑", var editNode, _))
                 {
-                    problems.Add("滚轮往下两行没被这一格接手：藏着的行够不着");
+                    problems.Add("双击格子正中没走到编辑");
                 }
 
-                var after = card.WindowState();
-
-                if (wanted > 0 && after.First != wanted)
+                if (DoubleTapTarget(farOff).Route != "新建")
                 {
-                    problems.Add($"滚两行以后停在第 {after.First} 行，应为第 {wanted} 行");
+                    problems.Add("双击空白没走到新建");
                 }
-
-                card.ScrollByLines(-after.First);
-
-                if (card.WindowState().First != 0)
-                {
-                    problems.Add("滚回顶部以后没有回到第一行");
-                }
-
-                tall.Height = was;
-
-                ArrangeAll();
             }
         }
 

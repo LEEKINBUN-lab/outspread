@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>铺陈 · 图标方案 5（材质版）</title>
+<style>
+  :root { --ink:#12161d; --sub:#5b6472; --line:#e3e6eb; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:34px 40px 90px; background:#f3f4f6; color:var(--ink);
+         font:14px/1.65 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  h1 { font-size:22px; margin:0 0 6px; }
+  .lede { color:var(--sub); margin:0 0 26px; max-width:74ch; }
+  .rig { background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px 20px; margin:0 0 34px; }
+  .rig b { display:block; margin-bottom:8px; font-size:15px; }
+  .rig dl { margin:0; display:grid; grid-template-columns:110px 1fr; gap:5px 16px; }
+  .rig dt { color:var(--sub); } .rig dd { margin:0; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:22px 24px; margin:0 0 26px;
+          box-shadow:0 1px 2px rgba(16,24,40,.04); }
+  .card h2 { font-size:17px; margin:0 0 2px; }
+  .card .lang { color:var(--sub); margin:0 0 18px; font-size:13px; max-width:78ch; }
+  .row { display:flex; align-items:flex-end; gap:26px; flex-wrap:wrap; }
+  .cell { text-align:center; }
+  .cell .tag { display:block; margin-top:7px; font-size:11px; color:var(--sub); font-variant-numeric:tabular-nums; }
+  .ico { display:inline-block; border-radius:22.5%; background-size:cover; background-position:center;
+         box-shadow:0 6px 14px rgba(13,26,48,.18), 0 1px 2px rgba(13,26,48,.16); }
+  .mock { display:flex; gap:18px; align-items:center; margin-top:20px; padding-top:18px; border-top:1px dashed var(--line); flex-wrap:wrap; }
+  .scr { width:200px; height:96px; border-radius:10px; display:flex; flex-direction:column;
+         align-items:center; justify-content:center; gap:7px; }
+  .scr.l { background:linear-gradient(160deg,#eef1f6,#d8dee8); }
+  .scr.d { background:linear-gradient(160deg,#161c26,#0b0f16); }
+  .scr .lbl { font-size:10px; letter-spacing:.02em; }
+  .scr.l .lbl { color:#3a4351; } .scr.d .lbl { color:#c3ccd9; }
+  .squint { display:flex; gap:10px; align-items:center; }
+  .squint > span { font-size:11px; color:var(--sub); }
+  .links { margin-top:16px; font-size:12px; } .links a { color:#2a5bd7; margin-right:12px; }
+  .h2 { font-size:19px; margin:38px 0 8px; }
+  .lede2 { color:var(--sub); margin:0 0 22px; max-width:78ch; }
+  .sw { display:flex; gap:5px; align-items:center; margin-top:14px; font-size:11px; color:var(--sub); flex-wrap:wrap; }
+  .sw i { width:46px; height:17px; border-radius:3px; display:inline-block; border:1px solid rgba(0,0,0,.14); }
+  .sw em { font-style:normal; margin-left:8px; }
+  .delt { font-size:12px; font-weight:400; color:#1c7a4d; margin-left:10px; font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+<h1>图标方案 5 · 材质版</h1>
+<p class="lede">上一版的诊断：均匀填充 + 一条硬边线性渐变 + 完美几何 = 塑料。这一版四张都从同一套光照走 —— 每张纸有厚度（露出的侧边）、顶边高光（中段亮两头消失）、两层投影（外围 + 接触，偏蓝不偏黑）、卷角/抬起处有朝向主光的曲面，最后压一层颗粒破掉 CG 感。</p>
+
+<div class="rig">
+  <b>共用光照（一套，四版都从这走）</b>
+  <dl>
+    <dt>主光</dt><dd>左上 45°，全场唯一。渐变亮端朝左上，阴影落向右下。</dd>
+    <dt>阴影</dt><dd>两层：外围 dy20 / blur15 / 20% + 接触 dy4 / blur3 / 30%。影的颜色跟着板面的色相走 —— 冷板配偏蓝影，暖板配偏棕影，从来不用纯黑。</dd>
+    <dt>厚度</dt><dd>同轮廓下移 3–4px 的暗侧边；顶边 1.6px 高光，用横向渐变（两头透明）× 纵向遮罩（往下消失）。</dd>
+    <dt>反光</dt><dd>板面 = 左上径向柔光 + 右下压暗；抬起物体的右下边缘再吃一层来自板面的补光。</dd>
+    <dt>颗粒</dt><dd>feTurbulence 灰噪点 5.5–7.5%，overlay 混合。</dd>
+    <dt>装裱</dt><dd>画面满幅不烧圆角，内容落中央 80%；圆角由系统遮罩给（手机图标都是这样）。</dd>
+  </dl>
+</div>
+
+<h2 class="h2">V2 的配色 · 八套</h2>
+<p class="lede2">构图锁死不动（板面 + 一张抬起的白纸 + 后面一张暗卡），只换颜色。每套下面给了色板，方便你直接说"要 C7 的板配 C1 的纸"。</p>
+<div id="pal"></div>
+
+<h2 class="h2">C8 定了 · 五档治法（带实测）</h2>
+<p class="lede2">C8 的已知缺陷：浅板在浅色桌面上丢轮廓。下面五档，每档标题后括号里的三个数是<b>实测</b>：图标贴边那一格与壁纸的亮度差（0–255），顺序是 浅壁纸 #E7EAF1 / 纯白 / 深壁纸 #151A21。取上边和左边两处的较小值，因为上边是板面最亮的一头、最先丢轮廓。脚本 <code>D:\Temp\outspread-check\c8scan.mjs</code>。</p>
+<div id="fix"></div>
+
+<div id="meas"></div>
+
+<h2 class="h2">四版构图 · 归档</h2>
+<div id="grid"></div>
+<div id="store"></div>
+
+<script>
+const S = 512;
+
+/* ============ 共用零件 ============ */
+
+// 两层投影：外围 + 接触（第二个 feDropShadow 吃第一个的结果，得到双层）
+function shadow(id, amb, con) {
+  return `<filter id="${id}" x="-45%" y="-45%" width="190%" height="190%" color-interpolation-filters="sRGB">
+    <feDropShadow dx="${amb.dx}" dy="${amb.dy}" stdDeviation="${amb.sd}" flood-color="${amb.c}" flood-opacity="${amb.o}"/>
+    <feDropShadow dx="${con.dx}" dy="${con.dy}" stdDeviation="${con.sd}" flood-color="${con.c}" flood-opacity="${con.o}"/>
+  </filter>`;
+}
+
+// 板面三件套：底色斜渐变 + 左上柔光 + 右下压暗
+function plateDef(k, a, b, sheen, vig, vigo) {
+  return `
+  <linearGradient id="pg${k}" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient>
+  <radialGradient id="ps${k}" cx="0.22" cy="0.14" r="1.05">
+    <stop offset="0" stop-color="#fff" stop-opacity="${sheen}"/>
+    <stop offset="0.35" stop-color="#fff" stop-opacity="${(sheen * 0.55).toFixed(3)}"/>
+    <stop offset="0.7" stop-color="#fff" stop-opacity="${(sheen * 0.14).toFixed(3)}"/>
+    <stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+  <radialGradient id="pv${k}" cx="0.84" cy="0.92" r="0.85">
+    <stop offset="0" stop-color="${vig}" stop-opacity="${vigo === undefined ? 0.36 : vigo}"/>
+    <stop offset="1" stop-color="${vig}" stop-opacity="0"/></radialGradient>`;
+}
+function platePaint(k) {
+  return `<rect width="${S}" height="${S}" fill="url(#pg${k})"/>
+          <rect width="${S}" height="${S}" fill="url(#ps${k})"/>
+          <rect width="${S}" height="${S}" fill="url(#pv${k})"/>`;
+}
+
+// 颗粒
+function grain(k, op) {
+  return `<filter id="gn${k}" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.92" numOctaves="4" stitchTiles="stitch" seed="7"/>
+      <feColorMatrix type="saturate" values="0"/></filter>
+    <rect width="${S}" height="${S}" filter="url(#gn${k})" opacity="${op}" style="mix-blend-mode:overlay"/>`;
+}
+
+// 一张带厚度的纸：暗侧边（下移 5px）→ 纸面（三段渐变）→ 顶边高光
+// suf 用于让多张纸各自持有独立的渐变/遮罩 id
+function sheetParts(suf, x, y, w, h, face, edge, hlOp, th) {
+  const t = th === undefined ? 5 : th;
+  return {
+    defs: `
+    <linearGradient id="fc${suf}" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="${face[0]}"/><stop offset="0.5" stop-color="${face[1]}"/><stop offset="1" stop-color="${face[2]}"/></linearGradient>
+    <linearGradient id="eg${suf}" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="${edge[0]}"/><stop offset="1" stop-color="${edge[1]}"/></linearGradient>
+    <linearGradient id="hx${suf}" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.3" stop-color="#fff" stop-opacity="${hlOp}"/>
+      <stop offset="0.72" stop-color="#fff" stop-opacity="${(hlOp * 0.38).toFixed(3)}"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <linearGradient id="mk${suf}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff"/><stop offset="0.34" stop-color="#fff"/>
+      <stop offset="0.58" stop-color="#000"/></linearGradient>
+    <mask id="hm${suf}" maskUnits="userSpaceOnUse" x="${x - 4}" y="${y}" width="${w + 8}" height="${h + 8}">
+      <rect x="${x - 4}" y="${y}" width="${w + 8}" height="${h + 8}" fill="url(#mk${suf})"/></mask>`,
+    paint: r => `
+      <rect x="${x}" y="${y + t}" width="${w}" height="${h}" rx="${r}" fill="url(#eg${suf})"/>
+      <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}" fill="url(#fc${suf})"/>
+      <rect x="${x + 0.8}" y="${y + 0.8}" width="${w - 1.6}" height="${h - 1.6}" rx="${r}" fill="none"
+            stroke="url(#hx${suf})" stroke-width="1.6" mask="url(#hm${suf})"/>`
+  };
+}
+
+function wrap(defsBody, body) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${S} ${S}" width="${S}" height="${S}">
+    <defs>${defsBody}</defs>${body}</svg>`;
+}
+
+/* ============ V1 · 翘角的那张（纸质 / 冷板暖纸） ============ */
+function v1() {
+  const k = 'a';
+  const x = 118, y = 112, w = 276, h = 286, r = 20, cut = 96;
+  // 折角是几何题，不是手感题：角尖 = 原角点关于折痕的镜像，再沿法线抬 15%
+  const A = [x + w - cut, y + h], B = [x + w, y + h - cut];      // 折痕两端
+  const mid = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
+  const refl = [x + w - cut, y + h - cut];                        // 压平时的角尖（镜像点）
+  const tip = [mid[0] + (refl[0] - mid[0]) * 1.15, mid[1] + (refl[1] - mid[1]) * 1.15];
+  const cardD = `M${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r}
+    V${B[1]} L${A[0]},${A[1]} H${x + r} Q${x},${y + h} ${x},${y + h - r} V${y + r} Q${x},${y} ${x + r},${y} Z`;
+  const flapD = `M${A[0]},${A[1]} L${tip[0]},${tip[1]} L${B[0]},${B[1]} Z`;
+  return wrap(
+    // 暖沙板 + 近白纸：层次靠明度差和色温差，不靠把板画黑
+    plateDef(k, '#E9DCC4', '#AC926A', 0.30, '#3A2A12', 0.26) +
+    shadow('sh' + k, { dx: 0, dy: 22, sd: 16, c: '#3A2A14', o: 0.26 }, { dx: 0, dy: 5, sd: 3.5, c: '#2A1E0E', o: 0.34 }) +
+    // 掀起的那块离桌面高：外围影更远更散，接触影几乎断了
+    shadow('sf' + k, { dx: 0, dy: 15, sd: 10, c: '#3A2A14', o: 0.26 }, { dx: 0, dy: 4, sd: 2.5, c: '#2A1E0E', o: 0.24 }) +
+    `
+    <linearGradient id="fc${k}" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#FFFFFE"/><stop offset="0.5" stop-color="#FAF7F1"/><stop offset="1" stop-color="#E7E0D3"/></linearGradient>
+    <linearGradient id="eg${k}" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#BCA98B"/><stop offset="1" stop-color="#8B7757"/></linearGradient>
+    <linearGradient id="fl${k}" x1="1" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#E2DACC"/><stop offset="0.5" stop-color="#F6F2EA"/><stop offset="1" stop-color="#FFFFFE"/></linearGradient>
+    <linearGradient id="hx${k}" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.3" stop-color="#fff" stop-opacity="0.95"/>
+      <stop offset="0.72" stop-color="#fff" stop-opacity="0.36"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <linearGradient id="mk${k}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff"/><stop offset="0.3" stop-color="#fff"/><stop offset="0.56" stop-color="#000"/></linearGradient>
+    <mask id="hm${k}" maskUnits="userSpaceOnUse" x="${x - 4}" y="${y}" width="${w + 8}" height="${h + 8}">
+      <rect x="${x - 4}" y="${y}" width="${w + 8}" height="${h + 8}" fill="url(#mk${k})"/></mask>`,
+    platePaint(k) +
+    // 纸：厚度 = 同一轮廓右下挪 3px 的暗层（薄薄一层纸边，不是纸板）
+    `<g filter="url(#sh${k})">
+       <path d="${cardD}" fill="url(#eg${k})" transform="translate(2 3.4)"/>
+       <path d="${cardD}" fill="url(#fc${k})"/>
+       <path d="${cardD}" fill="none" stroke="url(#hx${k})" stroke-width="1.6" mask="url(#hm${k})"/>
+     </g>
+     <!-- 墨条：左上重、右下轻，和主光同向；长度递减避开翻过来的角 -->
+     <g fill="#33404F">
+       <rect x="${x + 34}" y="${y + 56}" width="152" height="15" rx="7.5" opacity="0.9"/>
+       <rect x="${x + 34}" y="${y + 96}" width="116" height="15" rx="7.5" opacity="0.66"/>
+       <rect x="${x + 34}" y="${y + 136}" width="82" height="15" rx="7.5" opacity="0.42"/>
+     </g>
+     <g stroke="#fff" stroke-opacity="0.35" stroke-width="1.1" fill="none">
+       <path d="M${x + 34},${y + 55} H${x + 186}"/><path d="M${x + 34},${y + 95} H${x + 150}"/>
+       <path d="M${x + 34},${y + 135} H${x + 116}"/>
+     </g>
+     <!-- 翻过来的背面：朝光的那面最亮；影由 sf 自己吐，同时落在桌面和纸面上 -->
+     <path d="${flapD}" fill="url(#fl${k})" filter="url(#sf${k})"/>
+     <!-- 折痕是棱，两条原边是切口，都吃光 -->
+     <path d="M${A[0]},${A[1]} L${B[0]},${B[1]}" fill="none" stroke="#fff" stroke-opacity="0.85" stroke-width="2"/>
+     <path d="M${A[0]},${A[1]} L${tip[0]},${tip[1]} L${B[0]},${B[1]}"
+           fill="none" stroke="#fff" stroke-opacity="0.5" stroke-width="1.4"/>
+     ${grain(k, 0.05)}`);
+}
+
+/* ============ V2 的八套配色（构图不动，只换颜色） ============ */
+// 每套都要回答三件事：板面往哪走、纸的暗端掉不掉进卡其灰、后面的暗卡跟不跟板面同色相
+const PAL = [
+  { name: 'C1 墨蓝·宣纸（现状修正）', note: '把浊的蓝提纯、把纸的暗端从卡其灰拉回暖白。最稳的一版。',
+    plate: ['#2E4A6E', '#08131F'], sheen: 0.16, vig: '#01050B', vigo: 0.30,
+    paper: ['#FFFFFE', '#F5F2EB', '#DED8CC'], paperEdge: ['#A9A59C', '#6C6862'],
+    back: ['#728AAC', '#465A73', '#212C3B'], backEdge: ['#1A222E', '#0A1018'],
+    ink: '#25303E', barHi: '#fff', sh: ['#000814', '#00060F'], sho: [0.36, 0.42, 0.26, 0.30], grain: 0.07 },
+  { name: 'C2 松墨·宣', note: '深绿板。文房气最重，但也最容易显旧。',
+    plate: ['#1F5344', '#05140E'], sheen: 0.14, vig: '#020A06', vigo: 0.30,
+    paper: ['#FFFFFC', '#F4F2E9', '#DCD8C9'], paperEdge: ['#A6A296', '#68645C'],
+    back: ['#5F8A78', '#3A5C4E', '#1A2E27'], backEdge: ['#121E19', '#08110D'],
+    ink: '#22332B', barHi: '#fff', sh: ['#00100A', '#000805'], sho: [0.36, 0.42, 0.26, 0.30], grain: 0.07 },
+  { name: 'C3 石墨·冷白', note: '几乎无色相。开发者工具的气质，最耐看也最不像品牌。',
+    plate: ['#4A5058', '#0D0F12'], sheen: 0.14, vig: '#000103', vigo: 0.32,
+    paper: ['#FFFFFF', '#F3F5F8', '#D9DEE5'], paperEdge: ['#A5A9AF', '#656970'],
+    back: ['#8B939E', '#5A626D', '#2B3138'], backEdge: ['#1C2126', '#0C0F13'],
+    ink: '#2A2F36', barHi: '#fff', sh: ['#000205', '#000103'], sho: [0.36, 0.44, 0.26, 0.32], grain: 0.075 },
+  { name: 'C4 品牌蓝', note: '和 V3 同族，色相最"产品"。桌面上最跳，但也最容易和别家撞。',
+    plate: ['#4A6DF0', '#101F6E'], sheen: 0.16, vig: '#050C2E', vigo: 0.28,
+    paper: ['#FFFFFF', '#F4F8FF', '#D8E2F4'], paperEdge: ['#A9B0BE', '#666D7C'],
+    back: ['#93A9EA', '#5D76BE', '#2C3D70'], backEdge: ['#1B2444', '#0C1128'],
+    ink: '#22314F', barHi: '#fff', sh: ['#050E34', '#03081F'], sho: [0.34, 0.40, 0.24, 0.28], grain: 0.06 },
+  { name: 'C5 靛紫·暖白', note: '少有人用的色相，识别度最高。风险：紫在深色桌面上容易发灰。',
+    plate: ['#4B3C8C', '#100C24'], sheen: 0.15, vig: '#06030F', vigo: 0.30,
+    paper: ['#FFFDFA', '#F6F1F0', '#E0D8D6'], paperEdge: ['#ABA5AE', '#6A646E'],
+    back: ['#8A7CBB', '#5A4E88', '#2C2548'], backEdge: ['#1A1630', '#0B0917'],
+    ink: '#2B2444', barHi: '#fff', sh: ['#0A0620', '#050310'], sho: [0.36, 0.42, 0.26, 0.30], grain: 0.07 },
+  { name: 'C6 赭石·奶白', note: '唯一整套暖的。像文具/手帐，不像效率工具；深色桌面上会显得"旧"。',
+    plate: ['#6B4325', '#180C05'], sheen: 0.16, vig: '#0A0402', vigo: 0.28,
+    paper: ['#FFFCF5', '#F7EFE0', '#E2D4BB'], paperEdge: ['#B3A894', '#75695A'],
+    back: ['#A67C52', '#77543A', '#3D2B1D'], backEdge: ['#241A11', '#100A06'],
+    ink: '#3A2A1C', barHi: '#fff', sh: ['#1A0E05', '#0C0602'], sho: [0.34, 0.40, 0.24, 0.28], grain: 0.075 },
+  { name: 'C7 青瓷', note: '深青板 + 冷白卡。介于 C1 和 C3 之间，最"干净"的一套。',
+    plate: ['#12656F', '#032128'], sheen: 0.15, vig: '#010D11', vigo: 0.30,
+    paper: ['#FFFFFF', '#F0F7F7', '#D3E0E1'], paperEdge: ['#A2AAAB', '#616A6C'],
+    back: ['#5F9AA0', '#37717A', '#163840'], backEdge: ['#0E2529', '#061417'],
+    ink: '#1D3A3E', barHi: '#fff', sh: ['#00121A', '#00080D'], sho: [0.36, 0.42, 0.26, 0.30], grain: 0.065 },
+  { name: 'C8 浅底反相（对照）', note: '板面浅、卡深 —— 反过来做才知道浅板在浅色桌面上会不会糊。',
+    plate: ['#EDF0F5', '#BFC7D4'], sheen: 0.26, vig: '#4A5568', vigo: 0.20,
+    paper: ['#3A4759', '#2A3546', '#18202C'], paperEdge: ['#1B222C', '#0B0F16'],
+    back: ['#B7C0CE', '#8E99AA', '#616C7D'], backEdge: ['#4A5462', '#2C3540'],
+    ink: '#EEF2F8', barHi: '#000', sh: ['#2E3A4C', '#1E2734'], sho: [0.26, 0.32, 0.18, 0.22], grain: 0.05 },
+];
+
+function v2p(k, p) {
+  // 16/24 档上三条 14/512 高的墨条会并成一团灰，颗粒会变成噪点 —— 小尺寸换两条加粗的、并去掉颗粒。
+  const BARS3 = [[170, 152, 14, 0.9], [206, 112, 14, 0.64], [242, 176, 14, 0.4]];
+  const BARS2 = [[178, 166, 24, 0.95], [224, 118, 24, 0.62]];
+  const BARS1 = [[196, 152, 44, 0.95]];
+  const tier = p.bars || 3;
+  const tiny = tier <= 2;
+  const bars = tier === 1 ? BARS1 : tier === 2 ? BARS2 : BARS3;
+  // 后面那张压得低：值只提一档，作用是"还有一张"，不是抢焦点
+  const back = sheetParts('B' + k, 154, 184, 214, 208, p.back, p.backEdge, 0.34, 3.5);
+  // 纸的厚度边偏中性，不偏棕 —— 偏棕是上一版塑料感的来源之一
+  const front = sheetParts('F' + k, 128, 124, 236, 230, p.paper, p.paperEdge, 0.9, 3.5);
+  return wrap(
+    plateDef(k, p.plate[0], p.plate[1], p.sheen, p.vig, p.vigo) +
+    shadow('sh' + k, { dx: 0, dy: 24, sd: 17, c: p.sh[0], o: p.sho[0] }, { dx: 0, dy: 4, sd: 3, c: p.sh[1], o: p.sho[1] }) +
+    shadow('ss' + k, { dx: 0, dy: 10, sd: 7, c: p.sh[0], o: p.sho[2] }, { dx: 0, dy: 2, sd: 2, c: p.sh[1], o: p.sho[3] }) +
+    back.defs + front.defs,
+    platePaint(k) +
+    `<g transform="rotate(-8 256 262)" filter="url(#ss${k})">${back.paint(20)}</g>
+     <g transform="rotate(6 256 240)" filter="url(#sh${k})">${front.paint(20)}</g>
+     <g transform="rotate(6 256 240)" fill="${p.ink}">
+       ${bars.map(([y, w, h, o]) => `<rect x="160" y="${y}" width="${w}" height="${h}" rx="${h / 2}" opacity="${o}"/>`).join("")}
+     </g>
+     ${tiny ? "" : `<g transform="rotate(6 256 240)" stroke="${p.barHi}" stroke-opacity="0.3" stroke-width="1.1" fill="none">
+       <path d="M160 169 H312"/><path d="M160 205 H272"/>
+     </g>`}
+     ${p.rim ? `<rect x="${(p.rimw || 18) / 2}" y="${(p.rimw || 18) / 2}" width="${512 - (p.rimw || 18)}" height="${512 - (p.rimw || 18)}" rx="115" fill="none" stroke="${p.rim}" stroke-opacity="${p.rimo}" stroke-width="${p.rimw || 18}"/>` : ''}
+     ${p.grain ? grain(k, p.grain) : ""}`);
+}
+const v2 = () => v2p('b', PAL[0]);
+
+/* ============ V3 · 铺陈的三张（品牌色 / 扇形层叠） ============ */
+function v3() {
+  const k = 'c';
+  // 每张绕自己的底边中点转：上面铺陈、下面还是叠着的一摞。
+  // 绕整组中心转会变成"蝴蝶结"—— 两张的下角在底下交叉，那是上一稿的败笔。
+  const spec = [
+    { suf: 'L', x: 132, y: 152, w: 170, h: 186, rot: -17, face: ['#C9D7FF', '#A7BDF8', '#7A93DD'], edge: ['#5568B0', '#2C3C74'], hl: 0.55, sh: 'ss' + k },
+    { suf: 'R', x: 214, y: 152, w: 170, h: 186, rot: 17, face: ['#E6EBFF', '#C9D5FB', '#9BB1EA'], edge: ['#6A7CBB', '#39487E'], hl: 0.55, sh: 'ss' + k },
+    { suf: 'T', x: 171, y: 138, w: 170, h: 216, rot: 0, face: ['#FFFFFF', '#F0F5FF', '#CCD8F0'], edge: ['#8E99B8', '#525D7A'], hl: 0.95, sh: 'sh' + k },
+  ];
+  const parts = spec.map(s => ({ s, p: sheetParts(s.suf + k, s.x, s.y, s.w, s.h, s.face, s.edge, s.hl, 3.5) }));
+  const piv = s => [s.x + s.w / 2, s.y + s.h];
+  return wrap(
+    plateDef(k, '#6B8CFF', '#1C35AE', 0.30, '#0A1740', 0.32) +
+    shadow('sh' + k, { dx: 0, dy: 20, sd: 15, c: '#0A1640', o: 0.32 }, { dx: 0, dy: 4, sd: 3, c: '#060F30', o: 0.36 }) +
+    shadow('ss' + k, { dx: 0, dy: 11, sd: 8, c: '#0A1640', o: 0.24 }, { dx: 0, dy: 3, sd: 2, c: '#060F30', o: 0.26 }) +
+    parts.map(o => o.p.defs).join(''),
+    platePaint(k) +
+    parts.map(o => {
+      const v = piv(o.s);
+      return `<g transform="rotate(${o.s.rot} ${v[0]} ${v[1]})" filter="url(#${o.s.sh})">${o.p.paint(18)}</g>`;
+    }).join('') +
+    `<g fill="#26365E">
+       <rect x="198" y="188" width="116" height="14" rx="7" opacity="0.88"/>
+       <rect x="198" y="222" width="84" height="14" rx="7" opacity="0.6"/>
+       <rect x="198" y="256" width="116" height="14" rx="7" opacity="0.36"/>
+     </g>
+     <g stroke="#fff" stroke-opacity="0.26" stroke-width="1.1" fill="none">
+       <path d="M198 187 H314"/><path d="M198 221 H282"/>
+     </g>
+     ${grain(k, 0.06)}`);
+}
+
+/* ============ V4 · 出格的那张（石墨 / 纯浮雕） ============ */
+function v4() {
+  const k = 'd';
+  const g = 126, w = 152, gap = 24;
+  const cx = i => g + i * (w + gap), cy = j => g + j * (w + gap);
+  const up = sheetParts('P' + k, cx(1), cy(1), w, w,
+    ['#F4F7FA', '#DCE3EC', '#AFBACA'], ['#6A7484', '#363E4A'], 0.95, 4);
+  const sunk = (px, py) => `
+    <rect x="${px}" y="${py}" width="${w}" height="${w}" rx="20" fill="#5E6775" filter="url(#in${k})"/>
+    <rect x="${px}" y="${py}" width="${w}" height="${w}" rx="20" fill="none" stroke="#0B0F14" stroke-opacity="0.3"/>
+    <path d="M${px + 22},${py + w - 1.2} H${px + w - 22}" stroke="#CBD3DE" stroke-opacity="0.28" stroke-width="1.8"/>`;
+  return wrap(
+    plateDef(k, '#7C8697', '#2B323C', 0.18, '#0C1016', 0.30) +
+    shadow('sh' + k, { dx: 0, dy: 18, sd: 13, c: '#070A0F', o: 0.30 }, { dx: 0, dy: 3, sd: 2, c: '#04070A', o: 0.38 }) +
+    `<filter id="in${k}" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB">
+       <feOffset dx="3" dy="5"/><feGaussianBlur stdDeviation="5" result="o"/>
+       <feComposite operator="out" in="SourceGraphic" in2="o" result="inv"/>
+       <feFlood flood-color="#070A10" flood-opacity="0.6" result="c"/>
+       <feComposite operator="in" in="c" in2="inv" result="s"/>
+       <feComposite operator="over" in="s" in2="SourceGraphic"/>
+     </filter>` + up.defs,
+    platePaint(k) +
+    sunk(cx(0), cy(0)) + sunk(cx(1), cy(0)) + sunk(cx(0), cy(1)) +
+    `<g transform="translate(-14 -16) rotate(-7 ${cx(1) + w / 2} ${cy(1) + w / 2})" filter="url(#sh${k})">${up.paint(20)}</g>
+     ${grain(k, 0.075)}`);
+}
+
+/* ============ 版面 ============ */
+const VARIANTS = [
+  { name: 'V1 · 翘角的那张', lang: '纸质 / 文具感 · 高调暖白。一张纸摊在桌面上，右下角被掀起：背面是全场最亮的一块（它转向了主光），折痕那条棱吃满高光，落影越靠近角尖越重。暖色调、暖阴影，16px 时读作"一张带缺口的纸"。', f: v1 },
+  { name: 'V2 · 抬起来的那张', lang: '墨色 / 夜读 · 低-key 高反差。板面只有柔光和压暗两件事，一张白纸从暗底上抬起（转 6°），后面一张暗卡压得低（转 -8°）形成层次；白纸右下边缘那条冷调细线是来自板面的补光，不是描边。', f: v2 },
+  { name: 'V3 · 铺陈的三张', lang: '品牌色 / 明快 · 扇形层叠。三张纸绕同一支点铺陈，中间那张最高最亮、投影最远，两侧压得低 —— 层与层之间各自有影，所以是"叠在桌上"而不是"贴在一起"。', f: v3 },
+  { name: 'V4 · 出格的那张', lang: '石墨 / 工业 · 不用彩色，全部靠光影：三格凹（内阴影落在左上、右下吃反光）+ 一格凸（抬起 16px、偏向左上）。浮雕逻辑本身就是这块板子的"格子 + 出格"。', f: v4 },
+];
+
+const uriOf = m => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(m);
+const tile = (u, s) => `<div class="ico" style="width:${s}px;height:${s}px;background-image:url(&quot;${u}&quot;)"></div>`;
+
+const BIG = /[?&]big=1/.test(location.search);
+const ONLY = (location.search.match(/[?&]only=(\d+)/) || [])[1];
+const store = {};
+document.getElementById('grid').innerHTML = VARIANTS.map((v, i) => {
+  const m = v.f(), u = uriOf(m);
+  store['v' + i] = m;
+  if (BIG) {
+    if (ONLY !== undefined && +ONLY !== i) return '';
+    const px = ONLY !== undefined ? 460 : 440;
+    return `<div class="card"><h2>${v.name}</h2>
+      <div class="row"><div class="cell">${tile(u, px)}<span class="tag">${px}px（放大看材质）</span></div>
+      <div class="cell">${tile(u, 128)}<span class="tag">128</span></div>
+      <div class="cell">${tile(u, 64)}<span class="tag">64</span></div>
+      <div class="cell">${tile(u, 32)}<span class="tag">32</span></div>
+      <div class="cell">${tile(u, 16)}<span class="tag">16</span></div></div></div>`;
+  }
+  return `<div class="card">
+    <h2>${v.name}</h2><p class="lang">${v.lang}</p>
+    <div class="row">${[128, 64, 32, 16].map(s => `<div class="cell">${tile(u, s)}<span class="tag">${s}px</span></div>`).join('')}</div>
+    <div class="mock">
+      <div class="scr l">${tile(u, 60)}<span class="lbl">浅色桌面</span></div>
+      <div class="scr d">${tile(u, 60)}<span class="lbl">深色桌面</span></div>
+      <div class="squint"><span>眯眼 29px ×5：</span>${[0, 1, 2, 3, 4].map(() => tile(u, 29)).join('')}</div>
+    </div>
+    <div class="links"><a href="${u}" download="v${i}.svg">下载 v${i}.svg（${(m.length / 1024).toFixed(1)} KB）</a></div>
+  </div>`;
+}).join('');
+/* ---- V2 配色矩阵 ---- */
+const DENSE = /[?&]dense=1/.test(location.search);
+document.getElementById('pal').innerHTML = PAL.map((p, i) => {
+  const m = v2p('X' + i, p), u = uriOf(m);
+  const swatches = [p.plate[0], p.plate[1], p.paper[0], p.paper[2], p.back[1], p.ink];
+  const labels = ['板亮', '板暗', '纸亮', '纸暗', '暗卡', '墨'];
+  if (DENSE) return `<div class="card dcard">
+    <h2>${p.name}</h2>
+    <div class="row">${[190, 64, 32].map(s => `<div class="cell">${tile(u, s)}<span class="tag">${s}</span></div>`).join('')}
+      <div class="cell" style="margin-left:6px">${tile(u, 46)}<span class="tag">浅桌面</span></div>
+      <div class="cell"><div style="background:#12161d;padding:6px;border-radius:8px">${tile(u, 46)}</div><span class="tag">深桌面</span></div></div>
+    <div class="sw">${swatches.map((c, j) => `<i style="background:${c}" title="${labels[j]} ${c}"></i>`).join('')}</div>
+  </div>`;
+  return `<div class="card">
+    <h2>${p.name}</h2><p class="lang">${p.note}</p>
+    <div class="row">${[200, 128, 64, 32, 16].map(s => `<div class="cell">${tile(u, s)}<span class="tag">${s}px</span></div>`).join('')}</div>
+    <div class="mock">
+      <div class="scr l">${tile(u, 60)}<span class="lbl">浅色桌面</span></div>
+      <div class="scr d">${tile(u, 60)}<span class="lbl">深色桌面</span></div>
+      <div class="squint"><span>眯眼 29px ×5：</span>${[0, 1, 2, 3, 4].map(() => tile(u, 29)).join('')}</div>
+    </div>
+    <div class="sw">色板：${swatches.map((c, j) => `<i style="background:${c}" title="${labels[j]} ${c}"></i><em>${labels[j]} ${c}</em>`).join('')}</div>
+    <div class="links"><a href="${u}" download="${p.name.split(' ')[0]}.svg">下载 ${p.name.split(' ')[0]}.svg（${(m.length / 1024).toFixed(1)} KB）</a></div>
+  </div>`;
+}).join('');
+/* ---- C8 的三档治法（治"浅板在浅色桌面上丢轮廓"） ---- */
+const B8 = PAL[7];
+const FIXES = [
+  { n: 'F1 原样（你点的那版）', d: '贴边亮度差：浅 1 ／ 白 22 ／ 深 207', w: '板面 #EDF0F5 → #BFC7D4，不加任何东西。',
+    p: Object.assign({}, B8) },
+  { n: 'F2 板面压深一档', d: '贴边亮度差：浅 10 ／ 白 31 ／ 深 198', w: '只把渐变暗端从 #BFC7D4 压到 #8F9CB1、压暗范围放大。板子仍然读作"浅"，但任何壁纸都压得过它。',
+    p: Object.assign({}, B8, { plate: [B8.plate[0], '#8F9CB1'], vig: '#39455A', vigo: 0.30 }) },
+  { n: 'F3 外缘冷灰带（按真实尺寸加宽）', d: '贴边亮度差：浅 55 ／ 白 76 ／ 深 154', w: '板面一字不动，沿边一条 18/512 宽的冷灰带 —— 46px 档下正好 1.6px。上一版我写成 2/512，量出来和原样一模一样，因为它落在半个像素里，等于没画。',
+    p: Object.assign({}, B8, { rim: '#5E6C82', rimo: 0.42, rimw: 18 }) },
+  { n: 'F4 压深 + 冷灰带', d: '贴边亮度差：浅 35 ／ 白 56 ／ 深 173', w: '两档各上一半：暗端压到 #A2AEC1、边上再给一条 24% 的带。',
+    p: Object.assign({}, B8, { plate: [B8.plate[0], '#A2AEC1'], vigo: 0.26, rim: '#5E6C82', rimo: 0.24, rimw: 18 }) },
+  { n: 'F5 整块压深（亮端也压）', d: '贴边亮度差：浅 22 ／ 白 43 ／ 深 185', w: '亮端从 #EDF0F5 压到 #DCE3EC、暗端到 #7E8CA3。板子仍然读作"浅"，但白壁纸上也有轮廓。代价：它不再是八套里最亮的那张。',
+    p: Object.assign({}, B8, { plate: ['#DCE3EC', '#7E8CA3'], vig: '#2F3B4E', vigo: 0.30 }) },
+];
+const wall = (bg, fg, u, s, label) =>
+  `<div class="cell"><div style="background:${bg};padding:12px 14px;border-radius:10px;display:flex;gap:10px;align-items:center">
+     ${tile(u, s)}${tile(u, Math.round(s * 0.63))}${tile(u, Math.round(s * 0.42))}</div>
+   <span class="tag">${label}</span></div>`;
+document.getElementById('fix').innerHTML = FIXES.map((f, i) => {
+  const m = v2p('Z' + i, f.p), u = uriOf(m);
+  return `<div class="card"><h2>${f.n}<span class="delt">${f.d}</span></h2><p class="lang">${f.w}</p>
+    <div class="row">
+      <div class="cell">${tile(u, 190)}<span class="tag">190 白底</span></div>
+      ${wall('#E7EAF1', '', u, 56, '浅壁纸 #E7EAF1')}
+      ${wall('#FFFFFF', '', u, 56, '纯白壁纸 #FFFFFF')}
+      ${wall('#151A21', '', u, 56, '深壁纸 #151A21')}
+    </div>
+    <div class="links"><a href="${u}" download="C8-${f.n.slice(0, 2)}.svg">下载 ${f.n.slice(0, 2)}.svg</a></div>
+  </div>`;
+}).join('');
+
+if (DENSE) {
+  document.querySelectorAll('h1,.lede,.rig,.h2,.lede2,#fix,#grid,#store').forEach(n => n.remove());
+  const st = document.createElement('style');
+  st.textContent = 'body{padding:16px}#pal{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}' +
+    '.dcard{padding:14px 16px;margin:0}.dcard h2{font-size:14px}.dcard .row{gap:12px}.card{border-radius:10px}';
+  document.head.appendChild(st);
+}
+if (/[?&]sec=measure/.test(location.search)) {
+  // 4 档 × 3 壁纸 = 12 格，每格 200×200、图标 128 居中 → 格原点 (c*200, r*200)，图标占 36..164
+  const W = [['#E7EAF1'], ['#FFFFFF'], ['#151A21']];
+  document.getElementById('meas').innerHTML = FIXES.map((f, i) => {
+    const u = uriOf(v2p('M' + i, f.p));
+    return W.map(([bg]) => `<div style="width:200px;height:200px;background:${bg};display:flex;align-items:center;justify-content:center">
+      <div style="width:128px;height:128px;border-radius:22.5%;background-image:url(&quot;${u}&quot;);background-size:cover"></div></div>`).join('');
+  }).join('');
+  document.querySelectorAll('h1,.lede,.rig,.h2,.lede2,#pal,#fix,#grid,#store').forEach(n => n.remove());
+  const st = document.createElement('style');
+  st.textContent = 'body{margin:0;padding:0}#meas{display:grid;grid-template-columns:repeat(3,200px);gap:0}';
+  document.head.appendChild(st);
+}
+if (/[?&]sec=fix/.test(location.search)) {  document.getElementById('pal').remove();
+  document.querySelectorAll('h1,.lede,.rig,#grid,#store').forEach(n => n.remove());
+  const hs = document.querySelectorAll('.h2,.lede2');   // 静态表：0/1=配色段，2/3=C8 段，4=归档标题
+  [0, 1, 4].forEach(i => hs[i] && hs[i].remove());
+  document.body.style.padding = '16px 20px 60px';
+}
+
+/* ---- 出图给 make-ico.mjs：?sec=ico&s=128 只画选定那一枚（C8·F1 原样），透明底、烧好 squircle ---- */
+if (/[?&]sec=ico/.test(location.search)) {
+  const s = +((location.search.match(/[?&]s=(\d+)/) || [])[1] || 256);
+  const tier = s <= 20 ? 1 : s <= 32 ? 2 : 3;   // 墨条在 16px 上只有 0.44 个像素，必须换形而不是缩放
+  const svg = v2p('I', Object.assign({}, B8, tier < 3 ? { bars: tier, grain: 0 } : {}));
+  document.querySelectorAll('h1,.lede,.rig,.h2,.lede2,#pal,#fix,#meas,#grid,#store').forEach(n => n.remove());
+  const st = document.createElement('style');
+  st.textContent = 'html,body{margin:0;padding:0;background:transparent;overflow:hidden}';
+  document.head.appendChild(st);
+  const holder = document.createElement('div');
+  holder.style.cssText = `position:absolute;left:0;top:0;width:${s}px;height:${s}px;` +
+    `border-radius:22.5%;overflow:hidden;background-size:cover;background-image:url("${uriOf(svg)}")`;
+  document.body.appendChild(holder);
+  document.title = 'ICO ' + s;
+}
+
+document.body.style.padding = BIG ? '18px 24px' : '';
+if (ONLY !== undefined) document.querySelectorAll('h1,.lede,.rig,.h2,.lede2,#pal').forEach(n => n.remove());
+</script>
+</body>
+</html>

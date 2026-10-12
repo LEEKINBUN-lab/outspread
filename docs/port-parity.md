@@ -1,0 +1,89 @@
+# 复刻契约 · 网页原型 → WinUI 界面
+
+目标是**一模一样**：样式与手感都以 `design/feel.html` 为唯一基准，逐项搬进 `src/Outspread.Board`。
+这份表是判据——每一行都写了"网页那侧本轮现读到的值"、"App 这侧的现值/状态"、"差距"和"用什么测试钉住它"。
+不在表里的东西不算复刻范围；表里没打勾的不许说成完成。
+
+现读时间：2026-10-11（网页侧用内置浏览器 `getComputedStyle` 取值；App 侧用源码常量 + `outspread shot` 出的 PNG）。
+网页侧取值时页眉"动效＝关"，所以时长那几行读回 0ms，写的是 CSS 源里的声明值（同一文件 24–36 行）。
+
+## 一、数值契约
+
+| 项 | 网页实测 | App 现值 / 状态 | 差距与要做什么 | 钉它的测试 | 阶段 |
+|---|---|---|---|---|---|
+| 便签字号 / 行距 / 内边距 | 15px / 21px / 17px（成对走，14→19/16、16→22/18） | 15 / 21 / 17（`NoteTypography`，`NodeVisual` 与编辑器都从这一份取） | 已对齐 | `NoteSurfaceTests.Each_size_carries_its_own_leading_and_padding` | ✅ |
+| 圆角 | `--radius: 0`（直角） | `CornerRadius(0)`（卡片、编辑器、覆盖层） | 已对齐 | 界面自检看视觉树；XAML 里 0 是字面量 | ✅ |
+| 便签底色（淡纸） | 浅 amber3 `#fff7c2`（实测 `rgb(255,247,194)`） | Radix 3 步两套（`NotePalette.LightPresets/DarkPresets`） | 已对齐 | `NotePaletteTests` 两档各 6 枚 + 深浅必须真的不同 | ✅ |
+| 便签墨色 | 浅 amber12 `#4f3422`（实测 `rgb(79,52,34)`） | 同上，第 12 步 | 已对齐 | 同上（墨/底 ≥4.5:1，实测 10.2–13.2:1） | ✅ |
+| 轮廓＝纸影 | 一张卡是**三样叠出来的**：① `background-color` ＋ ② `linear-gradient(180deg, --paper-top, transparent 42%, --paper-bottom)` 的纸受光 ＋ ③ `paperShadow(id,z)` 三层（`(4.14,5,−5,.6)`、`(10.01,12.01,−9.16,.39)`、inset`(48,10,−10,.023)`，lift 按 id 播种 0.5–1.5）。**纸影档没有那条 1px 环**——环属于「环＋影」档（`data-edge` 默认是 ringpaper，他给这版定的是 paper） | ①②＝`NoteSurface.PaperLight/Over` → `NodeVisual.PaperFor` 三段渐变；③＝`BandsFor` 每层一枚矩形、用该层自己的尾函数打渐变（`FootprintFor` 那枚折叠椭圆已删） | **这一格本轮被他的眼睛推翻过一次**：原来只在"卡片下边缘那一行"取一个采样点标定（178 对 181）就打了勾，而两张并排一看就不同——差在①平色卡是贴纸不是纸，②影是**一枚椭圆**所以衰减太长太散。现在两张同位置并排量：卡顶 234,247,238／底 221,236,226（网页 227,241,232 边缘 AA／底 221,237,226）；影在 0.65／2／3.9 世界像素处 Δ71／55／36，网页在 1／2／3 处 Δ73／57／44。**近场对上，8 世界像素以外的尾巴仍偏重**（网页那里已衰到 Δ15，App 约 Δ30） | `NoteSurfaceTests` 钉层数值、带形、尾函数、"受光只动亮度不动色相"与"合成峰值灰阶＝178±6"；层数值与浏览器逐点对照 maxErr=0.0000；像素由 `cmp/app-paper3.png` 与两张并排截图现读 | ✅ 远尾待再标一档 |
+| 阴影的降级档 | zoom < 0.25 关影、改画一条 2px×scale 下边线，色 `rgb(144,144,144)` / 深 `rgb(20,20,20)` | 同阈值同双线（`ShadowMinZoom` / `FallbackLineColor`） | 已对齐 | `NoteSurfaceTests.The_shadow_survives_at_the_level_of_detail_threshold…` | ✅ |
+| 手势词汇 | 左键拖空白＝框选 · 右键拖＝平移 · 空格＋拖＝平移 · 静止右键＝菜单 | 同一套（判定函数在 `Core/BoardGestures.cs`） | 本轮改完 | `BoardGesturesTests` 六行真值表 + 4px 阈值 | ✅ |
+| 拖动阈值 / 吸附阈值 / 边带 | 4px / 8 屏幕像素 / 6px | 4px（`BoardGestures.DragThresholdPx`）/ 8px（`SnapThreshold`）/ 6px（`SelectionChrome.EdgeBandPx`） | 三格都有值了；边带的判据函数还在界面里（`EdgeOf`），要真鼠标验过再抽进 Core | 前两格各有测试；边带见下面"边缘拖缩放"那一行 | ✅ 待真鼠标 |
+| 边缘拖缩放 | 压在某条边 6 屏幕像素以内＝改那条边，其余＝移动 | 单格选中时 `EdgeOf(node, screen)` 命中就 `BeginResize`（之前抓哪儿都是移动，这一格在 App 里等于没做） | 距离按**屏幕**像素算：命中区不随缩放变小 | 界面自检仍走手柄那条路；边缘这条要他拖一遍 | ✅ 待真鼠标 |
+| 缩放开间 | 5%–800% | `MinZoom/MaxZoom` 直接取 `SelectionChrome` 的两个常量（之前 10%–400%） | 已放宽 | `SelectionChromeTests.The_zoom_clamp_is_the_prototype_s_not_the_first_guess` | ✅ |
+| 点阵底 | `--grid: hsl(0 0% 43%)`，r=1，世界步长 64/16/4/1，可见性按**屏幕间距** 24–72px 满亮、12/96 淡出；100% 时墨点占视口 **1.56%**、每 64×64 格 **15.60** 单位墨（PNG 现读，空板底窗口） | 一枚视口位图（`WriteableBitmap`）：`BoardGrid` 出档位/亮度/相位，`BoardAtmosphere.PaintGrid` 画进预乘 BGRA 缓冲 | **已画出来并对上**：档位 `[64@1, 16@0.333]`、间距 16/64 都在 PNG 上量到；强/细档峰值 0.89 对 0.30＝比值 3.0（设计值 3.16）；每格墨量 App **14.97** 对网页 **15.60**（−4%）。形状仍不同：网页是一枚 2×2 均匀块（峰值 .72），App 是硬心＋十字（中心 .89、十字 .53），单点总墨量相同 | `BoardGridTests`：淡入淡出按屏幕间距（六行）、100% 只有两档、步长整除周期、相位取模、**source-over 合成不许把亮点压暗**、墨质量＝圆的积分、预乘后反解仍是那支墨色 | ✅ |
+| 板底色 | `--bg: hsl(210 20% 98%)` = `rgb(249,250,251)`（PNG 现读，空板底） | `BoardGrid.BoardBackground` 覆盖 XAML 里的初值 | **本轮改对**：之前吃的是 WinUI 主题刷 `SolidBackgroundFillColorBase`＝#F3F3F3（243），比原型灰两级；深档主题刷 39 对原型 16，差得更多 | `BoardGridTests.The_board_floor_is_the_prototype_bg_not_the_winui_theme_brush`；PNG 现读 App 中心 249,250,251 ＝ 网页同值 | ✅ |
+| 板底压暗 | 一层独立 div，夹在点阵与便签**之间**；`radial-gradient(120% 90% at 50% 42%, transparent 45%, rgba(0,0,0,.055))` | `VignetteLayer`（Rectangle + `RadialGradientBrush`），排在 `ItemLayer` 之前 | **半径纠正**：CSS 的 120%/90% 是半径不是直径，第一版写成 0.6/0.45 ⇒ 暗角强三倍（角上 .055 对原型 .0175）。改后 App 角上实测 246,247,248（模型 245.5），板腰 249,250,251＝网页同位置"一点没压暗"的读数 | `BoardGridTests.The_vignette_is_the_css_ellipse_not_half_of_it`（含"放大标度结论不许变"的不变量） | ✅ |
+| 选中外观 | 1px `rgb(49,130,237)` 描边 + `rgba(31,143,255,.24)` 填充 + 内侧 1px `rgba(255,255,255,.85)` 对比线（深档：`rgb(100,164,247)` / `rgba(51,153,255,.20)` / `rgba(0,0,0,.55)`） | `Core/SelectionChrome.cs` 一套令牌，`ChromeStyling` 换成画刷；内侧线是一枚往里缩 1px 的第二描边（WinUI 没有 inset box-shadow） | 描边**已按像素量到**：shot 里 ≈`rgb(49,130,237)` 的像素 1060 个，逐点读数就是 49,130,237。填充与内对比线走同一张令牌（值有测试钉），但**没有各自的像素读数**——网页那张 PNG 里没有选中态可对照 | `SelectionChromeTests` 十项：两支蓝各自钉死、填充比框选更实、内对比线两档分明白/黑、手柄三尺寸、缩放区间、参考线色 | ✅ 待补：网页侧带选中态的出图 |
+| 手柄 | 可见 8px、命中 24px、悬停长到 10px（83ms 线性）、选中框与手柄**瞬时**出现；柄面＝`--panel`，1px 描边＝`--accent`，外面再一圈 1px `rgba(0,0,0,.22/.50)` | 一枚 24×24 透明命中矩形 + 居中 8×8 Border（面/描边/外圈齐），悬停改尺寸 | 尺寸与配色已照搬；**长大目前是瞬时的**，83ms 那一格并入 S4 | 尺寸见 `SelectionChromeTests.A_handle_is_big_enough_to_hit_and_small_enough_to_see`（命中 ≥24 是 WCAG 2.5.8 那扇门）；界面自检仍数到 8 枚 | ✅ 时长并入 S4 |
+| 框选矩形 | 1px 实线 + `rgba(31,143,255,.12)` 填充（`--marquee-fill`） | 同一枚实线＋填充画刷（原来是虚线 `[4,3]` 且无填充） | 线型与填充已改齐；**这一格没有像素读数**——要一次真拖才画得出来 | `SelectionChromeTests.The_marquee_is_lighter_than_the_selection`；PNG 待他拖一遍 | ✅ 待像素 |
+| 参考线 | `#ff6b6b`（深档 `#ff9090`）1px 瞬时 | 改用 `ChromeStyling.Snap`（之前错用了强调蓝） | 色值已对齐；读数待一次真拖动 | `SelectionChromeTests.The_snap_line_is_the_red_the_prototype_measures` | ✅ 待像素 |
+| 动效 | 悬停状态层 120ms `cubic-bezier(0.16,1,0.3,1)`；布局 250ms emphasized-decelerate；相机 320ms easeInOutCubic；入场 250ms / 退场 167ms；微调 83ms 线性；总闸＝`prefers-reduced-motion` | **一条动画都没有** | 整项要做（Composition + `CompositionEasingFunction.Function(x1,y1,x2,y2)`），总闸接 `UISettings.AnimationsEnabled` | Core 里放时长/曲线常量表 + 测试；观感由他判 | S4 |
+| 组 | 几何包含（规范里没有成员列表）、第一次点＝整组、第二次点＝单枚、拖一格带整组、组框实线表示"选中了组这一层"、名字牌双击改名；框比成员包围盒外扩 10 世界像素 | `Core/Grouping.cs`（`Enclose/Holds/GroupOf/Members/OnNotePressed/DragSet`）＋ `BoardCommands.cs` 的成组/拆组（`Ctrl+G` / `Ctrl+Shift+G`，菜单同项）；两层选中接在格子按下那条路径上，`_groupFocus` 与选中一起清（10 处 `_selection.Clear()` 全换成 `ClearSelection()`） | 数据与判定已搬；**组框仍是虚线**（原型用实线表示"停在组这一层"，这一格没做）；名字牌双击改名未做；"拖出框即自动脱组"是几何的必然结果，但**没有截图或自测证明它在界面上真的发生**——两层点击需要真鼠标一遍 | `GroupingAndTagsTests` 七项：外扩 10、成员按中心不按轮廓、嵌套取最内、第一次点整组／第二次点单枚、加选永远走单枚、无组时清掉层次 | 🟡 点击层次待真鼠标 |
+| 连线 | 贝塞尔 + 四边中点端点 + 右键拖端点换面 + `fromSide/toSide` 落盘；`paintLinks()` 现量：`stroke-width 1.5`、`--link rgb(144,144,144)`／深 `rgb(150,157,168)`、控制臂 `max(28,min(180,距离×0.45))`、箭头**沿末端切线** 9×4.5px、端点命中圈 r=13（26px）可见点 r=4.5 | `Core/Edges.cs`（`CanvasEdge` 模型 + `EdgeGeometry` 那串数）＋ `Board/Links.cs`（画在 `LinkLayer`，排在 `ItemLayer` **之前**＝压在纸底下，与原型 `#links` 在 `#items` 之前同一层序）；`Alt+C` 连线/拆链走同一份命令表；边随 patch 落盘（`DocPatch.EdgeAdditions/EdgeRemovals`，`DocDiff` 按 id 比，字段变了记"先删后加"） | **这一格本轮从"完全不画"变成画出来了**：出图里两根箭头都在（一根从绿卡下缘弯到下面那格上缘、一根从黄卡右缘进橙卡左缘），头按切线收口。**没做的**：端点把手已补：那一端被选中时出现一枚点（可见 r=4.5、命中 r=13＝26px），拖到哪个面就写 fromSide/toSide；本来就在那一面就不留撤销步；边上的 `color/label` 读进来原样留着但不生效 | 界面自检一发：加一条边 ⇒ `LinkLayer` 必须正好 2 个图元（一根线＋一枚箭头），撤掉 ⇒ 归零；控制臂钳位／自动面朝向／箭头切线在 Core 可测 | 🟡 端点把手未做 |
+| 命令 | 29 条（对齐 6 / 均分 2 / 堆叠 / 聚拢 2 / 连线 / 成组 / 拆组 / 复制 / 层序 2 / 锁定 / 缩放 3 / 聚焦 / 查找 / 跳格 / 骨架 3 / 撤销重做 2） | 只有右键菜单那几项 | 全部要做，且**按他的档：只做 Ctrl/Alt 组合 + 菜单/按钮，不做单键快捷** | 每条命令的几何在 Core（对齐/均分/堆叠/聚拢），逐条测 | S7 |
+| 到期 / 标签 | `#due:YYYY-MM-DD` 左边缘 2px 色条 + 侧栏清单；`#名字` 标签清单与筛选 | 色条＝`NoteMarks.BarFor`（2 屏幕像素，逾期/今天/读不出三档）；读数行＝卡片底下一行 `逾期 10-09 · #周会`（`NoteMarks.Readout`）；筛选＝右下角漏斗后的一格面板 + **只在激活时**出现的板顶横幅 | 网页那版是**常驻侧栏清单**，这一格按调研判撤了常驻（`docs/research-chrome-and-properties.md` §5：别家都不常驻）。属性落盘的形状改成 `@due(2026-10-09) @tag(周会)` 单独一行，旧写法 `#due:`/`#标签` 继续能读；**token 只有在整行都是 token 时才算属性**，否则演示格会把自己的例子吃掉 | `NoteMarksTests` 28 项（每种形状落哪一档、读数行的写法、未来档无色条但有读数、band 与行距同源）+ `GroupingAndTagsTests` 23 项（两种括号、多标签、两种写法同一个标签、行内 token 不算、读不出的日期不许静默）。本轮全仓 274 项，比上轮 241 多 33 项 | 🟡 编译过、Core 测试过；界面侧待新 build 的 PNG 读数 |
+| 平移的帧成本 | 平移＝改相机，不重排 DOM（浏览器只挪一层 transform），所以 60fps 是默认的 | 拖动中**只搬一枚 `TranslateTransform`**（`PanLayer` 装 Link/Item/Guide/Handle/Editor 五层），松手才结算成逐格排布并把变换归零 | 他判"右键移动总有些滞涩"。日志给的账：16 格的板子一次 `ArrangeAll` 要 **16.1–17.3ms**，尖峰 **38.0 / 60.8ms**——每帧重排就是 20fps 甚至更糟，滞涩不是错觉。位移不改缩放 ⇒ 字形不会因为走变换而糊（那条"不用 render transform"的规矩针对的是缩放）。**没做的**：拖一格与拖一个角也走了同一条路（只重量被拖的那几格＋一次 PaintLinks，松手补 ArrangeAll）；"到底多少帧"要真鼠标才量得到；松手惯性（S4） | 自检仍走完整排布那条路（`arrange took` 那行照旧打）；手感只能他拖——变换路径的正确性由"松手后位置与拖中一致"这一发观察 | 🟡 手感待他判 |
+| 右下角控件簇（↶ ↷·− 100% ＋） | `#badge`：一枚容器，`--panel` 白底 + 1px `--line` 发丝边、直角、内距 2、成员间隔 2，离板右/下各 12；成员无边框透明底、`--muted` 字色、**内距 7px 11px、13px 字站 20px 行 ⇒ ≈31–35×33.5**（2026-10-11 20:4x 加大一档：他判"其余按钮太小"）；比例是 span（52 宽、居中、`--text`）；分隔线 1px、`margin 2px 3px`。全部 `getComputedStyle` 现读 | `Core/Chrome.cs` 的 `Badge` 一族令牌 + `ZoomControls.StyleBadge()`；成员仍是真 `Button`（键盘到得了），但边框/底色/内距/字形一律按令牌钉死 | **漏斗那颗按他的意思删了**（红框那一枚"看不懂是什么"）；筛选不能没有门，所以门挪到右键菜单里一条"筛选：日期与标签…"，激活时的板顶横幅照旧。第一版这组是 XAML 默认 `Button` 拼的三枚 `SymbolIcon`——那等于把微软的控件设计当我们的设计交出去；根因不是"复刻能力"，是**这一组当时没经过原型** | 界面自检：`host 206.9×39.5`（原型 206.91×39.5，容差 ±8/±1.5）、成员按令牌钉；`ChromeTests` 钉命中区 ≥24、键帽 23 高/圆角 4、深浅两档的相对可见性；出图 `cmp/cap-view.png`、`cmp/cap-cheat.png` | 🟡 悬停态未证（120ms 过渡属 S4） |
+| 牌子（日期/标签） | 四版样张在 `design/feel.html#chips`，全部 `font-size:12`、行高 16、高 22-24：A 描边胶囊／B 实底软块／C 面板色描边／D 左色条。**10-12 他打回：「一个方框看起来很廉价」，并要我先调研** ⇒ 见 docs/research-chrome-and-properties.md §二·6，落成第 5 种：**日期＝状态点＋文字、无容器；标签＝无描边胶囊（半径＝半高）、底色 8%**。两者同一带高（22）、同一字号（12）、同一字重，所以是"一套里的两种"，不是两套。 | `ChromeStyling.Chip` **一处画**（卡片左下角与编辑器左下角共用——这里以前是两份实现，卡片那份画的正是那个 1px 实线方框），尺寸与形状在 `NoteType`：`ChipFontPx=12 / ChipBandPx=22 / ChipDotPx=6 / ChipPadX=7 / ChipGapPx=5 / ChipFillAlpha=0.08 / ChipHoverAlpha=0.16 / ChipInkAlpha=0.82 / ChipRadiusPx=ChipBandPx/2`；点的颜色＝卡片左缘那条到期色条的同一枚（`NoteMarks.BarFor`），一件事在一格上只说一种颜色 | 调研四条一手事实：① **没有一家给标记用直角**（M3 chip `container_shape`=cornerSmall 8dp、Fluent 2 Tag `borderRadiusMedium` 4px、Carbon Tag `border-radius:16px`、Ant Tag 4px、GitHub Primer `.Label` `2em`）；② **日期与标签在正经产品里是两种容器**（Trello 到期是整块换色的状态徽牌、标签是色块；GitLab／Planner／Asana 的到期是"文字自己变红"、根本没有盒子；Todoist 把颜色挂在标签名上）；③ **描边那一格是留白不画**（Fluent 默认边 `colorTransparentStroke`、Carbon 非可选 tag 一律 `border:0`、Ant 文档建议弱层级用 `bordered={false}`）；④ 状态用"点＋文字"是成文模式（Ant Badge status 6px 点）。调研点名的唯一实质风险是"没有盒子就看不出可点" ⇒ 悬停时胶囊上色到 16% 并长出 ×（Fluent 那枚透明描边留槽位的同一思路） | `ChromeTests` 钉：`ChipRadiusPx*2==ChipBandPx`（真胶囊，不是"圆了一点"）、`0<ChipFillAlpha<=0.18`（淡彩卡上撞色的下限）、`ChipHoverAlpha>ChipFillAlpha`（悬停必须更实）、`0<ChipDotPx<ChipBandPx`；`NoteMarksTests` 仍钉摘行/读数/牌子计数 | ✅ 现读（`shot --mode view`，缩放 1）：粉色卡左下角 `● 逾期 10-09`——点 rgb(209,52,21) 与左缘色条同值、无容器；绿色卡 `#周会` 是胶囊、底色一档、无描边（`v4-cards.png` 裁切）。**未证的一格**：悬停上色与 × 只在真鼠标移上去才出现，这一轮没有移上去（探针拍不到 hover 态） |
+| 键位清单（按住 Tab） | 居中模态：`#scrim` 压暗 `rgba(0,0,0,.46)`、面板 `--panel` 白＋1px 发丝边＋圆角 8（圆角是他这条的要求，不是原型的默认）、内距 22/26/18、两栏、栏间 34、正文 13、键位拆成一枚枚键帽（[Alt][A]，最小宽 22、高 23、1px 边带 2px 下唇、圆角 4、间隔 4，量自 #cheat .keys kbd）、分组标题 11；标题只写"键位" | `MainWindow.xaml` 的 `CheatScrim`＋`CheatPanel`（都在板子树里，所以拍得到），`Cheatsheet.ShowCheatsheet()` 按分组轮流分栏 | 删掉了"键位（松手就收起）"与末尾"Tab：这份清单（按住不放）"两行自我说明。压暗不是装饰：不压暗就分不清哪一层能点。**徽章栏（右下角）故意不被压暗**——看清单时还能缩放 | 出图 `cmp/arrow-cheat.png` 现读：面板居中、板子整体压暗、两栏、无那两行字 | ✅ |
+| 应用图标 | 无（原型不管这个） | `design/logo-variants.html`（形状与材质都活在这里）→ `node design/logo/make-ico.mjs` → `src/Outspread.Board/Assets/outspread.ico`，csproj `ApplicationIcon` | 定档 C8·F1：浅色板 + 一张抬起的深色卡。脚本只驱动无头浏览器按档出 PNG 再装进 .ico（材质是 SVG 滤镜：两层投影、内阴影、高光条、颗粒 —— 纯 JS 光栅化做不了）。16/20 与 24/32 是**换形**不是缩放：墨条在 16px 上只有 0.44 个像素，所以那两档并成一条粗的。**已知取舍**（10-12 他看过实测数后拍的）：F1 原样在浅色壁纸上贴边亮度差只有 1，桌面上会丢轮廓 | `make-ico.mjs` 自己回读验：9 档目录偏移相接、每档 IHDR 宽高等于目录声明值、colorType=6 说明透明底生效；逐档像素看 `D:\Temp\outspread-check\ico-check.html`。改形状＝改 `logo-variants.html` 再跑一次，不手改二进制。**标题栏／任务栏那一枚是另一件事**：无包工程不会自己带上 csproj 的 `ApplicationIcon`，运行时左上角一直是系统默认那枚彩色方块 ⇒ 建窗时显式喂路径 `AppWindow.SetIcon(AppContext.BaseDirectory\Assets\outspread.ico)`，文件不在就把原因写进日志而不是静默留着默认图 | ✅ 盘上 9 档已验；运行时那一发：把窗口抬到前台截屏，左上角读到的是深色卡那一枚（`D:\Temp\popup-measure\titlebar2.png`，2026-10-12 11:5x） |
+| 浮层外观（键位清单 / 筛选面板 / 激活横幅 / 回执那一句话） | 网页只有板下 DOM，没有可比的一层 | **基准＝他点头的那枚右键菜单**。**行只有一种**：`PanelKit.Row`（能点的，正文墨）与 `PanelKit.Line`（不能点的分节／静默行，禁用档墨），同一枚 `SheetRow`、同一条带（`Sheet.RowPx`）、同一套字号；右列是菜单那一栏（12px）——同日他又点名把 `Ctrl` 这类文字换成**键帽**（「更美观一点」），所以键帽回来了：它是同一栏的第二种画法，不是第三种线。带高 10-12 同日按他「间距能不能拉大」从 32 抬到 **40**（＝一枚真 `MenuFlyoutItem` 没人压它时自己量出来的 39.62，四块浮层共用这一个数；系统那枚菜单仍按它自己的 32，它不是我们的面）。令牌在 `Core/Chrome.cs`：`Sheet.OuterPx=4`、`Sheet.PadX=12`、`Sheet.FontPx=14`、`Sheet.HintPx=12`、`Sheet.Ink=27,27,27`、`Sheet.HintInk=96,96,96`、`Sheet.Quiet=161,161,162`、`Chrome.Radius=8`、`Badge.PanelColour=251,252,253` 压到 `Chrome.PanelAlpha=0.94`、`Lift.ZPx=24`。穿皮仍只有一处：`ChromeStyling.ApplyFloatingChrome`（四块浮层都是 Border，都从它走） | **直角那条规矩的对象是纸**，浮层不是纸；浮层放在 BoardArea 自己的树里而不是 `Popup`，否则 `outspread shot` 拍不到、样式就成了没有读数的断言。**两件事量过之后写死在这里**：① 菜单那层白与那层影借不到——现读 `MenuFlyoutPresenterBackground`＝`#00000000`、`BorderBrush`＝`#0F000000`，是系统 popup 宿主画的；② **菜单那枚行控件在树外用不了**（WindowsAppSDK 2.5.1）：裸 `MenuFlyoutItem` 让 `RenderAsync` 永不返回；放进 `MenuFlyoutPresenter` 能画，但行盒 39.62（真菜单 32，那一发来自逐行容器）、宿主自动宽塌成 240、而右列在模板里是 `Collapsed`（现读 `『2』Collapsed/12px/0w`）且这版没有 `IsKeyboardAcceleratorTextVisible`。⇒ 只能逐项复现，而**复现的数全部来自平台那一发本身**（禁用档墨与右列字号是从一枚落地的真菜单行上量的，不是从截图猜的） | `ChromeTests`（`OuterPx=4`、`OuterPx+PadX=16`、`Lift.ZPx>0`、三档墨 27/96/161 互不相同且由浅到深、`HintPx=12`）；界面自检两发：`selftest 同一枚控件`（四块浮层的每一行都是 `SheetRow`、行高四处相等、字号与墨色只许落在 {正文墨, 禁用墨} 两档里）与 `selftest 皮`（同枚填充对象、圆角、外缩、各抬 1 件、`PopupThemeTransition` 在不在）；`selftest 行内` 把一行的内部倒出来当凭据 | ✅ 现读（`shot --panel filter`，缩放 1 ⇒ 1 图素＝1 DIP）：`键位清单 28 行、筛选面板 6 行、筛选横幅 1 行、回执 1 行，行高 40px、14px/23 行正文墨、5 行禁用墨，四处同一套`；`逾期『180×32』⇒『逾期』Visible/14px + 『2』Visible/12px`（右列在场）；像素——边在 x=1142、字的左缘 x=1159 ⇒ 内缩 16＝基准；行距 40 ✓；**正文墨读到 rgb(27,27,27)＝他截图里菜单的 27**；**右列墨 rgb(96,96,96)＝菜单"双击空白"的 96**；**分节墨 rgb(161,161,162)＝平台禁用档本身**；剖面两侧 1px 处比地面暗 5.5%（基准 5.6%）。**仍未证的三格**：① 动画只证到"挂的是平台那个 `PopupThemeTransition`"——菜单自己那支 `PopupMenuThemeAnimation` 现读＝未定义（在 popup 宿主那一侧），借不来，播得对不对要他眼睛判；② 下方影 18%（基准 14%）、上方留 6% 余影（基准 0），是 `ThemeShadow` 的形状，压低 `ZPx` 会连"抬起"一起削；③ 键位清单在 46% 压暗层上读到 244–246、菜单 252，差的是 `PanelAlpha=0.94` 透了 6%——要一样白就得改不透明，那会动 `ChromeTests` 那条"挡得住色也看得出挡住"，等他一句话。另：行的点击走 `Tapped`，与上一版同一条路，**这一轮没有真鼠标点过** |
+| 深色档取证 | 页眉开关立刻换两套令牌 | `TANKAI_THEME=dark` 只换了我们自己画的画笔，**XAML 主题资源没换**（两张 PNG 为证：板底仍白） | 修取证通道，否则"深色已验"不成立 | 修好后深色 PNG 的板底像素必须落在深色档 | S9 |
+
+## 二、阶段与顺序
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| S1 | 手势词汇（左键框选 / 右键平移 / 空格平移 / 静止右键菜单）+ 判定函数进 Core + 真值表测试 | ✅ 本轮完成（`check.cmd` 全过：164 项测试、构建 0 警告、界面自检 PASS） |
+| S2 | 点阵底 + 板底压暗（含层序：压暗在便签之前）+ 板底色 | ✅ 本轮完成（182 项测试、构建 0 错误；PNG 现读：板底 249,250,251＝网页同值，每格墨量 14.97 对 15.60，暗角角上 246 对模型 245.5） |
+| S3 | 选中外观（描边+24% 填充+内对比线）、手柄命中与悬停、框选线型、参考线色、缩放区间 5%–800%、边带 6px | ✅ 本轮完成（182+10 项测试、构建 0 警告、界面自检 PASS；描边色按像素量到＝49,130,237。三格留给真鼠标：框选、参考线、边缘拖缩放） |
+| S4 | 动效全套 + `UISettings.AnimationsEnabled` 总闸 | 未开始 |
+| S5 | 组＝几何包含容器（两层选中、拖组带整组、名字牌） | 未开始（虚线框已落） |
+| S6 | 连线渲染与端点把手 | 🟡 本轮：箭头已画出（自检 2 图元＋出图两枚头），端点把手未做 |
+| S7 | 29 条命令（菜单 + Ctrl/Alt 组合，不做单键） | 未开始 |
+| S8 | 到期色条与清单、标签清单与筛选 | 未开始 |
+| S9 | 深色强制档的取证通道 | 未开始 |
+
+## 三、验收口径（每一阶段都要交齐这四件）
+
+1. **数值**：这一阶段涉及的常量进 Core，测试断言它等于上表"网页实测"那一列——不许为了过门改数。
+2. **像素**：`outspread shot` 出一张 PNG，量实际像素（板底色、卡底色、描边色、阴影最暗点）对上表；量不到就写"未验"。
+3. **手感**：手势类改动必须有真鼠标一遍（他来做），我这边只报合成事件的读数并点名它没覆盖哪一格。
+4. **闸门**：`check.cmd` 全过，且它只动 `%TEMP%` 的副本（本轮改的：自检原先会挪他板子上的格子）。
+
+## 四、两边都出图的可复现取证法（本轮打通）
+
+内置浏览器的 `take_screenshot` 在这个环境下恒失败（视口 0×0／`visibilityState=hidden`），所以网页那一侧改用 **Edge 无头渲染**——同一个浏览器内核、不需要装任何东西、不碰他的浏览器配置：
+
+```
+"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --headless --disable-gpu --no-sandbox ^
+  --hide-scrollbars --user-data-dir="D:\Temp\outspread-check\edge-profile2" ^
+  --window-size=1500,940 --virtual-time-budget=4000 ^
+  --screenshot="D:\Temp\outspread-check\cmp\web.png" "file:///D:/MyProject/borad/design/feel.html"
+```
+
+要点三条：① `--headless=new` 在这台机上静默不出图，要用 `--headless`；② 每次换 profile 目录，复用会当单例直接退出；③ 想比另一档轮廓就复制一份 html、在 `<html>` 上加 `data-edge="paper"`（`cmp/web-paper.html`），不改产品文件。
+
+App 那一侧：`outspread shot --board <板> --out …`（界面必须开着）。像素用**无依赖的 PNG 解码器**读（`D:\Temp\outspread-check\png.mjs`，含 alpha 合成），因为"阴影有多黑"这种事看图说不算数。
+
+**shot 现在画的是整个 `BoardArea`**（本轮改的）。之前它只画 `ItemLayer`，于是板底色、点阵、暗角这三样在取证图上根本不存在——S2 第一次"做完了"就是被这个仪器判成"没点阵"，而我看图才看见点是画着的。取证通道看不见被测物时，"没做出来"和"量不到"是两回事。
+
+三条读图规矩（这一轮每条都咬过一次）：
+
+1. **shot 的框不等于视口**：`RenderTargetBitmap` 量的是内容包围盒，位图比视口宽（本轮实测 1581×734 对板子 1304×723.8），板子的 (0,0) 落在 PNG 的 **(108,10)**。所有格点坐标要加这个偏移，否则"点阵没画"是假的。日志里 `atmosphere:` 那一行给的就是这三个数。
+2. **纸色按窗口现取，别用全图众数**：整张图的众数常常是白卡片（255），拿它当纸色会把墨值整体抬高、把空白面板当成"最干净的板底"。`mass.mjs auto` 的判据是"众数恰为 `#f9fafb`"。
+3. **两侧都用同一块纸**：板底改成 249,250,251 之后，网页与 App 的空板底读数才可比（网页 15.60／App 14.97 单位墨每 64×64 格）。
+
+深色档取证（S9）仍是坏的：`TANKAI_THEME=dark` 只换我们自己画的画笔，XAML 主题资源没换。取证通道自己不可信时，"已验"就是假话。
+

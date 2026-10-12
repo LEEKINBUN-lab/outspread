@@ -1,0 +1,2529 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light" data-motion="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>铺陈 · 手感与视觉原型</title>
+<style>
+  /* ── tokens ─────────────────────────────────────────────────────────────
+     数值出处写在右侧配方表里，每一格一行。这里只放值。 */
+  :root {
+    --bg: hsl(210 20% 98%);
+    /* 点的颜色退回 tldraw 发布值（它就是 hsl(0,0%,43%)，r=1，alpha 按缩放 0→1）。
+       上一版"看不见"不是颜色错，是我把档位淡入区间写反了 ⇒ 100% 时只剩 4px 间距的一档。 */
+    --grid: hsl(0 0% 43%);
+    --surface: #ffffff;
+    --text: #1e1e1e;
+    --muted: #5a6068;
+    --line: hsl(0 0% 0% / .12);
+    --panel: #fbfcfd;   /* ＝右键菜单实测的 251,252,253：一块浮层只有一种面，深档沿用 #1b1e22 */
+    --accent: hsl(214 84% 56%);
+    --sel-fill: hsl(210 100% 56% / .24);
+    --marquee-fill: hsl(210 100% 56% / .12);
+    --snap: #ff6b6b;
+    --dur-fast: 83ms;
+    --dur-base: 167ms;
+    --dur-slow: 320ms;
+    --dur-enter: 250ms;
+    /* 状态层（悬停/按下）那一档：曲线用 Radix 公布的 cubic-bezier(0.16,1,0.3,1)（它 tooltip 的 scaleIn
+       用的就是这一条，apps/storybook/stories/tooltip.stories.module.css 现读），时长 120ms **是我定的**
+       ——微软 Bare Minimum 的 83 与 base 的 167 之间；Radix 自己给淡入淡出用的是 0.2s，那对弹出层合适、
+       对一枚常驻格子的悬停太慢。上一版直接借微软的 83ms，悬停像被电了一下＝"有动效但不灵动"的那一格。 */
+    --dur-hover: 120ms;
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-enter: cubic-bezier(0, 0, 0, 1);
+    --ease-gentle-exit: cubic-bezier(1, 0, 1, 1);
+    --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+    --radius: 0;
+    /* 默认档＝15/21/17（他判 16 偏大、14 偏小）。字号开关三档在下面，行距与内边距跟着走：
+       这三个数一旦各自漂移，格子就会「说不出哪里不平衡」。 */
+    --note-pad: 17px;
+    /* 行距用整像素，不用比值：分数行距在分数缩放下会抖（tldraw 内部也是把行高解析成 px 用的）。
+       15/21 = 1.4 —— IBM Carbon 的 body-compact 一档就是 16/22 并写明给"不超过四行的短段落"；
+       Butterick 的区间是 120%~145%；tldraw 便签 1.35。1.55 比所有已发布 UI 表都松。 */
+    --note-leading: 21px;
+    --handle-seen: 8px;
+    --handle-hit: 24px;
+    --font-note: 15px;
+    /* Segoe UI 不含汉字（微软自己标的脚本只有 Latn/Grek/Cyrl/…），汉字逐字回退；
+       微软雅黑只有 Light300/Regular400/Bold700 三档，而 "Microsoft YaHei UI" 是微软点名的
+       简体中文界面字体，行距比裸雅黑紧 ⇒ 汉字要显式点名，不能留给 fallback。 */
+    --font-ui: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+
+    /* 纸面：顶受光、底压暗。tldraw 实物是平色＋影子，没有渐变，所以只留一点点意思。 */
+    --paper-top: rgb(255 255 255 / .16);
+    --paper-bottom: rgb(0 0 0 / .04);
+    /* Material 3 状态层：hover .08 / pressed .12（dragged .16 收回了，见下面拖动那条）。
+       上一版的 elevation 三层（elev-1/2/3）随「一条线」档一起退了：轮廓现在全部由
+       applyEdge 写的影子承担，CSS 里那套层级在本档下永远被 inline 盖住＝死码。 */
+    --state-hover: rgb(0 0 0 / .08);
+    --state-pressed: rgb(0 0 0 / .12);
+    --sel-inner: rgb(255 255 255 / .85);
+    --handle-edge: rgb(0 0 0 / .22);
+    --vignette: rgb(0 0 0 / .055);
+    /* 连线与到期痕迹的色：线用 tldraw 公布的便签描边灰 rgb(144,144,144)；
+       到期两档用 Radix 公布的 11 步（ tomato11 #d13415 / amber11 #ab6400，src/light.ts 实物值）——
+       11 步是给"前景"用的那一段，压在浅色便签上过非文字 3:1。 */
+    --link: rgb(144 144 144);
+    --due-late: #d13415;
+    --due-today: #ab6400;
+  }
+  [data-theme="dark"] {
+    --bg: hsl(240 5% 6.5%);
+    --grid: hsl(0 0% 40%);
+    --surface: #23262b;
+    --text: #f5f6f7;
+    --muted: #b9bec5;
+    --line: hsl(0 0% 100% / .16);
+    --panel: #1b1e22;
+    --accent: hsl(214 90% 68%);
+    --sel-fill: hsl(210 100% 60% / .20);
+    --marquee-fill: hsl(210 100% 60% / .10);
+    --snap: #ff9090;
+    --paper-top: rgb(255 255 255 / .10);
+    --paper-bottom: rgb(0 0 0 / .22);
+    --sel-inner: rgb(0 0 0 / .55);
+    --handle-edge: rgb(0 0 0 / .5);
+    --vignette: rgb(0 0 0 / .35);
+    --link: rgb(150 157 168);
+    --due-late: #ff977d;      /* Radix dark tomato11 */
+    --due-today: #ffca16;     /* Radix dark amber11 */
+  }
+  /* tldraw 在深底板上给文字加一圈「板底色」的光晕，字才不会糊进背景。但这一条只能给**深底色的格子**：
+     贴纸区那档在深主题里用的是亮粉彩底＋深字，再套一圈近黑光晕＝你看到的「字体晕开」。
+     ⇒ 改成按格子自己的底色决定挂不挂（render 里 lum(底) ≤ 0.42 才加 .halo）。 */
+  [data-theme="dark"] .note.halo { text-shadow: 0 0 2px var(--bg), 0 0 4px var(--bg); }
+  [data-theme="dark"] .note::before { background: transparent; }
+  [data-theme="dark"] #board:not([data-panning="1"]) .note:hover:not(.dragging)::before { background: rgb(255 255 255 / .08); }
+  [data-theme="dark"] #board:not([data-panning="1"]) .note.pressed:not(.dragging)::before { background: rgb(255 255 255 / .12); }
+  [data-motion="off"] {
+    --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --dur-enter: 0ms; --dur-hover: 0ms;
+    --ease-enter: linear; --ease-gentle-exit: linear; --ease-inout: linear; --ease-out: linear;
+  }
+  /* 字号开关（他判 16 偏大、14 偏小 ⇒ 换 14/15/16，默认 15；18 删）。
+     一档只动一个变量：行距与内边距按同一比例跟着走，不让三者各自漂移。 */
+  [data-type="16"] { --font-note: 16px; --note-leading: 22px; --note-pad: 18px; }
+  [data-type="15"] { --font-note: 15px; --note-leading: 21px; --note-pad: 17px; }
+  [data-type="14"] { --font-note: 14px; --note-leading: 19px; --note-pad: 16px; }
+  /* 这里原本放了 `text-box: trim-both cap alphabetic`（剪掉首末行的半行距，让 padding 等于真间距）。
+     量完删掉：本机字体内容盒实测 上 17 ＋ 下 4 ＝ 21px，行距 21~22 ⇒ 半行距只有 **0.5px/边**，
+     补偿不值一条规则；而且这个内置浏览器 CSS.supports('text-box: trim-both cap') 现读＝false，规则是惰性的。
+     真正的大头是「方块半空」，见下面 fit() 那条。 */
+
+  /* 圆角只剩两档（你判的）：直角 与 自适应（Excalidraw 给便签的原式，见配方表）。
+     1px／4px 的数值仍留在表里做凭据，但不再给开关——开关每多一档，你要看的组合就多一倍。
+     选择框和手柄永远直角：tldraw 的选中轮廓用 path.rect(...)，框是仪器不是物体。
+     嵌套公式（苹果 WWDC25 356 / Radix 的 --inset-border-radius-calc）：内层＝外层−内边距；
+     微软的互补规则更狠——直边相交处不圆（SplitButton 两半、贴锚点的 flyout）。 */
+  /* 关动效要连进出场一起关掉，只把时长归零会留下第一帧的 opacity:0 */
+  [data-motion="off"] *,
+  [data-motion="off"] *::before,
+  [data-motion="off"] *::after { animation: none !important; transition: none !important; }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; display: grid; grid-template-rows: auto 1fr;
+    font: 400 14px/1.5 var(--font-ui);
+    background: var(--bg); color: var(--text);
+    overflow: hidden;
+  }
+
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+    padding: 10px 14px; border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  /* flex 项默认可以缩到 min-content，而中文的 min-content 就是一个字 ⇒ 六组开关一挤，
+     每个按钮竖着排字，整页塌成你截图那样。三行规则封掉这条路。 */
+  header h1 { font-size: 15px; font-weight: 600; margin: 0 8px 0 0; flex: none; white-space: nowrap; }
+  .switch { display: flex; align-items: center; gap: 6px; flex: none; white-space: nowrap; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .seg button {
+    font: inherit; padding: 4px 10px; border: 0; background: transparent; color: var(--muted);
+    cursor: pointer; white-space: nowrap;
+    transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out);
+  }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  /* 面板与页眉那一圈控件：状态之间走 120ms（与板上状态层同一档，不是一个新数）。
+     板上的选中框/手柄仍然瞬时——那是"直接操纵"，这些是"菜单"，两者不该共用一把尺。
+     点名：83ms 那一档只在微软的 Bare Minimum 里读到过（它专指极小范围的改动），Radix 给悬停面没有公布数——
+     120ms 是我在它 0.2s 与微软 83ms 之间定的。 */
+  .cmds button, .duelist button, .swatches button, #badge button {
+    transition: color var(--dur-hover) var(--ease-out), border-color var(--dur-hover) var(--ease-out),
+      background-color var(--dur-hover) var(--ease-out), box-shadow var(--dur-hover) var(--ease-out);
+  }
+  .hint { margin-left: auto; color: var(--muted); font-size: 12px; min-width: 0; }
+
+  main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 42%); min-height: 0; }
+
+  /* ── 画布 ─────────────────────────────────────────────────────────────── */
+  #board {
+    position: relative; overflow: hidden; touch-action: none; cursor: default; outline: none;
+    background: var(--bg);
+  }
+  /* 板底压暗：中心亮、四周暗一点，视线才有"场"，色块才有落处。
+     它必须是一层独立的 div，夹在点阵与连线之间——写成 #board::after 的话，伪元素是元素的
+     **最后一个**子节点，于是这层压暗罩在所有便签、连线与右下角读数条之上（＝你这一轮看到的
+     「板底压在便签上方」）。现在它只压板底与点阵，物体都在它上面。 */
+  #vignette {
+    position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(120% 90% at 50% 42%, transparent 45%, var(--vignette) 100%);
+  }
+  /* contain 里绝不能带 size：canvas 是被替换元素，size 包含会让它的固有尺寸按 0 计算，
+     于是 inset:0 也拉不开它——实测布局盒 0×0、位图 451×716，点阵和参考线从来没上过屏。 */
+  #grid, #guides { position: absolute; inset: 0; pointer-events: none; contain: layout paint; }
+  #items { position: absolute; inset: 0; }
+  /* 连线在便签底下（Obsidian 也是这个层序）：线是关系，不该压在字上 */
+  #links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #links .edge { color: var(--link); transition: color var(--dur-hover) var(--ease-out); }
+  #links .edge.on { color: var(--accent); }
+  #links line { stroke-width: 1.5; }
+  #links .edge .wire { stroke-width: 1.5; }
+  /* 端点把手在便签**上层**（#linkui）：曲线在底下，把手要按得到。
+     svg 整层不吃事件，只有那一枚把手吃——不然等于在卡上盖了一层隐形热区。 */
+  #linkui { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #linkui .ep { pointer-events: auto; cursor: grab; }
+  #linkui .ep:active { cursor: grabbing; }
+  #linkui .ep .hit { fill: transparent; }
+  #linkui .ep .dot { fill: var(--accent); stroke: var(--panel); stroke-width: 1.5; }
+  .note > .dueflag { position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: transparent; transition: background var(--dur-hover) var(--ease-out); }
+  /* 到期：贴在格子左边缘的一条 2px 色条（不给文字加底色、不占内边距，所以不会又造出一条色偏线） */
+  .note.due-late > .dueflag { background: var(--due-late); }
+  .note.due-today > .dueflag { background: var(--due-today); }
+  .duelist { display: flex; flex-direction: column; gap: 3px; padding: 0 14px 14px; }
+  .cmds button.on { border-color: var(--accent); color: var(--text); }
+  .duelist button {
+    font: inherit; font-size: 12px; display: flex; gap: 8px; align-items: baseline; text-align: left;
+    padding: 4px 7px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; border-radius: 0;
+  }
+  .duelist button:hover { border-color: var(--accent); }
+  .duelist button span { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .duelist button b { font-weight: 600; }
+  .duelist button.late b { color: var(--due-late); }
+  .duelist p { color: var(--muted); font-size: 12px; margin: 2px 0; }
+
+  .note {
+    position: absolute; background-color: var(--surface); color: var(--text);
+    /* 纸面：顶部受光、底部压暗，一行就够，不做渐变彩底 */
+    background-image: linear-gradient(180deg, var(--paper-top), transparent 42%, var(--paper-bottom));
+    padding: var(--note-pad); border-radius: var(--radius);
+    /* 字重：上一版写 500，实测中文字宽 400→64.06 / 500→64.72 / 700→65.5（16px）——
+       按 CSS 字体匹配算法，落在 400~500 之间时先向下找，雅黑只有 300/400/700 ⇒ 500 静默变 400。
+       要"真的粗一点"只能点名 700（那是实体 Bold，不是合成假粗）。正文取 400。 */
+    font: 400 var(--font-note)/var(--note-leading) var(--font-ui);
+    letter-spacing: 0; overflow: hidden;
+    /* pre-wrap 是"所见即所得"的那一半：正文里的 \n 在 normal 下会被折成空格，
+       而编辑器里 Chrome 会把换行当真换行 ⇒ 编辑时字被挤到下一行。 */
+    white-space: pre-wrap; overflow-wrap: break-word;
+    /* 最后一行不留孤字（Chrome 117+）。配方表里点名：WinUI 没有等价物，这一格到 App 里会掉。 */
+    text-wrap: pretty;
+    /* 便签文字垂直居中：tldraw 的 note 默认 align/verticalAlign 都是 middle，Excalidraw 的
+       sticky label 在整块内边距里居中（它源码注释：贴着内容顶对齐会明显偏高）。 */
+    display: flex; flex-direction: column;
+    /* 移动一格不该重排它的全部内容：把布局与绘制隔离在这一格里（图片 raster 才可能被复用） */
+    contain: layout paint;
+    /* 影子不在这里：轮廓三档（环＋影／纸影／环＋纸）由 applyEdge 逐格写 inline，
+       原来这套 Material elevation 层级 + hover/press/lift 规则随「一条线」档一起退了。 */
+    user-select: none; -webkit-user-select: none;
+  }
+  /* 状态层压在纸面上、文字下：M3 的 hover/focus/pressed/dragged 就是靠它，不靠发光 */
+  .note::before {
+    content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+    background: transparent; transition: background var(--dur-hover) var(--ease-out);
+  }
+  .note > * { position: relative; z-index: 1; }
+  /* 垂直居中、水平左对齐。对齐开关按你的判断删了，只留这一档（＝Excalidraw 给便签的那套） */
+  .note > .body {
+    flex: 1 1 auto; display: flex; flex-direction: column;
+    justify-content: center; text-align: left;
+  }
+  /* markdown 子集（App 侧同一套规则在 Core/Markdown.cs，尺度从这里量过去）。
+     块的高度是 em 比值不是绝对 px：便签的 font-size/line-height 是 JS 按 zoom 写在行内的，
+     而类选择器赢不了行内样式之外的一切——上一版这里写死 20.25px/28px，于是放大到 150% 时
+     正文变 22.5px、标题仍是 20.25px，标题比正文还小。1.4 就是 T.noteLeading / T.noteSize 的比值。 */
+  .note .md { margin: 0; }
+  .note .md.h1 { font-size: 1.35em; font-weight: 700; line-height: 1.4em; }
+  .note .md.h2 { font-size: 1.2em; font-weight: 700; line-height: 1.4em; }
+  .note .md.h3 { font-weight: 700; }
+  /* 700 不是审美选择，是字面表：这台机器的雅黑只有 Light/Regular/Bold（注册表 msyhl/msyh/msyhbd），
+     600 只能拿合成粗体去凑，中文笔画糊成一团。App 侧同一个决定在 MarkdownPaint.Line。 */
+  .note .md.hr { display: flex; align-items: center; margin: 0; min-height: 1.4em; }
+  .note .md.hr::after { content: ""; flex: 1 1 auto; border-top: 1px solid var(--line); }
+  .note .md.q { border-left: 2px solid var(--line); padding-left: 8px; color: var(--muted); }
+  .note .md li { list-style: none; }
+  .note code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 0.92em; line-height: 1; background: rgb(0 0 0 / .05); padding: 0 3px; }
+  .note a { color: inherit; text-decoration: underline; }
+  .note .md.todo-done { opacity: .55; text-decoration: line-through; }
+  .note[data-kind="image"] { padding: 0; display: grid; place-items: center; background-image: none; }
+  .note img { width: 100%; height: 100%; object-fit: contain; display: block; -webkit-user-drag: none; }
+  /* 图片默认是「可原生拖动」的：真鼠标一拖，浏览器就发起 drag 操作并把 pointermove 序列掐掉
+     （我们收到的是 pointercancel），于是格子几乎不动——这就是「图片干脆无法拖动」的真因。
+     三道一起堵：draggable=false（属性）、-webkit-user-drag:none（CSS）、dragstart 取消（事件）。 */
+  .note { -webkit-user-drag: none; }
+  #board:not([data-panning="1"]) .note:hover { cursor: grab; }
+  /* 悬停/按下只改状态层，不改影子：轮廓三档的影子是逐格 inline 写的，CSS 里再写一层也压不过它；
+     而 tldraw/Excalidraw 的实物本来就不在被悬停/被拖时改变物体自身，变的只有光标与选择件。
+     80ms 延迟是 tldraw 给的数（快速划过时不闪）。 */
+  #board:not([data-panning="1"]) .note:hover:not(.dragging)::before { background: var(--state-hover); transition-delay: 80ms; }
+  #board:not([data-panning="1"]) .note.pressed:not(.dragging)::before { background: var(--state-pressed); transition-delay: 0ms; }
+  .note.dragging { cursor: grabbing; transition: none; }
+  .note.dragging::before { transition: none; }
+  .note[contenteditable] { outline: none; cursor: text; user-select: text; }
+  /* 聚焦与查找：都是"降低干扰"的视图态，不改文档、不进撤回栈。
+     淡出用 opacity，不用 display:none——位置感要靠留在原位来维持。 */
+  .note.dim { opacity: .18; }
+  .note { transition: opacity var(--dur-base) var(--ease-enter); }
+  .note.locked { cursor: not-allowed; }
+  .note.locked::after {
+    content: "锁"; position: absolute; right: 3px; top: 3px; font-size: 11px; line-height: 1;
+    color: var(--muted); opacity: .7;
+  }
+  .grouphull {
+    position: absolute; pointer-events: none; border: 1px dashed var(--line);
+    border-radius: var(--radius); color: var(--muted);
+    transition: border-color var(--dur-base) var(--ease-enter);
+  }
+  .grouphull.hasSel { border-color: var(--accent); }
+  /* 组被当成一个东西选中时（第一次点）：框由虚线变实线——层次要能一眼看出来，不能靠猜 */
+  .grouphull.unit { border-style: solid; border-width: 2px; }
+  .grouphull .glabel {
+    position: absolute; left: 0; padding: 1px 6px; background: var(--panel);
+    border: 1px solid var(--line); white-space: nowrap; cursor: text; outline: none;
+  }
+  /* 能点的文字要给悬停痕迹（你定过的底线），但只有这一小牌可以点，框本身仍不藏热区 */
+  .grouphull .glabel:hover { color: var(--text); border-color: var(--accent); }
+  .grouphull .glabel[contenteditable="true"] { cursor: text; box-shadow: 0 0 0 1px var(--accent); }
+  /* 创建/删除走微软签名动效那两对：入场 Direct Entrance 250ms (0,0,0,1)、退场 Gentle Exit 167ms (1,0,1,1)，
+     各带一点位移。上一版只做了 Bare Minimum 83ms 纯不透明度，于是"动效开/关"这一档你根本看不出来——
+     位移走 translate 属性，不碰 transform：拖动时 transform 归 translate3d 用，两件事不许抢同一格。 */
+  .note.enter { animation: noteIn var(--dur-enter) var(--ease-enter) both; }
+  .note.leave { animation: noteOut var(--dur-base) var(--ease-gentle-exit) both; pointer-events: none; }
+  .note.nudging { transition: left var(--dur-fast) linear, top var(--dur-fast) linear, box-shadow var(--dur-base) var(--ease-enter); }
+
+  /* 轮廓三档的影子由 applyEdge 逐格写 inline，CSS 里没有 box-shadow 规则了 ⇒ 不需要再禁 transition；
+     唯一保留的过渡是上面那行状态层（hover 的 80ms 延迟）。 */
+
+  /* 选中框与手柄瞬时出现：tldraw 的 .tl-selection / .tl-handle 里没有任何 transition，
+     直接操纵的反馈慢一帧都会被读成"卡"，所以这里刻意不动。 */
+  .selbox { position: absolute; pointer-events: none; inset: 0; }
+  /* 描边带一条内对比线：深色便签上纯蓝描边会糊掉，这是 Figma 的做法 */
+  .selbox .ring {
+    position: absolute; inset: 0; border: 1px solid var(--accent); background: var(--sel-fill);
+    box-shadow: inset 0 0 0 1px var(--sel-inner);
+  }
+  .handle {
+    position: absolute; width: var(--handle-hit); height: var(--handle-hit);
+    margin: calc(var(--handle-hit) / -2); display: grid; place-items: center;
+    /* 关键：pointer-events 会继承，.selbox 是 none ⇒ 手柄必须显式要回 auto，
+       否则 8 枚手柄对真鼠标完全不存在（合成事件绕过命中测试，所以自测会假绿）。 */
+    pointer-events: auto;
+  }
+  .handle i {
+    display: block; width: var(--handle-seen); height: var(--handle-seen);
+    background: var(--panel); border: 1px solid var(--accent);
+    box-shadow: 0 0 0 1px var(--handle-edge);
+    /* 悬停长大一格：8→10 这个数是我自己定的（Figma 的手柄在悬停时也确实会变粗一点，但它没公布数值），
+       时长走微软的 Bare Minimum 83ms＋linear——局部小变化只配最短那一档。
+       选中框本身仍然瞬时（上一条注释），只有"已经在工作状态里的手柄"才动。 */
+    transition: width var(--dur-fast) linear, height var(--dur-fast) linear;
+  }
+  .handle:hover i { width: 10px; height: 10px; }
+  .handle[data-dir="n"], .handle[data-dir="s"] { cursor: ns-resize; }
+  .handle[data-dir="e"], .handle[data-dir="w"] { cursor: ew-resize; }
+  .handle[data-dir="nw"], .handle[data-dir="se"] { cursor: nwse-resize; }
+  .handle[data-dir="ne"], .handle[data-dir="sw"] { cursor: nesw-resize; }
+
+  @keyframes noteIn { from { opacity: 0; translate: 0 8px; } to { opacity: 1; translate: none; } }
+  @keyframes noteOut { from { opacity: 1; translate: none; } to { opacity: 0; translate: 0 6px; } }
+  @keyframes pulse { from { transform: scale(1.12); } to { transform: none; } }
+  .pulse { animation: pulse var(--dur-fast) var(--ease-enter); }
+
+  #marquee { position: absolute; display: none; border: 1px solid var(--accent); background: var(--marquee-fill); }
+
+  #badge {
+    position: absolute; right: 12px; bottom: 12px; display: flex; align-items: center; gap: 2px;
+    background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    font-variant-numeric: tabular-nums; font-size: 13px; padding: 2px;
+  }
+  /* 成员加大：内距 5/9 → 7/11（他判"太小"）。命中区从 26.22×28 长到约 31×34。 */
+  #badge button { font: inherit; border: 0; background: transparent; color: var(--muted); padding: 7px 11px; cursor: pointer; }
+  #badge button:hover { color: var(--text); background: var(--line); }
+  #badge .vsep { width: 1px; align-self: stretch; background: var(--line); margin: 2px 3px; }
+  #badge button.on { color: var(--text); background: var(--line); }
+  #badge button:disabled, #badge button:disabled:hover { color: var(--muted); background: none; opacity: .38; cursor: default; }
+  #pct { min-width: 52px; text-align: center; }
+  /* 漏斗是这一组里唯一不是"字"的成员，所以是一枚 12×12 的 SVG，fill=currentColor 跟着按钮的字色走
+     （路径＝Material Symbols 的 filter_alt，Apache-2.0；WinUI 侧用同一段 path 的 PathIcon，两边才是同一个形状）。 */
+  #badge .ic { width: 12px; height: 12px; display: block; fill: currentColor; }
+
+  /* ── 键位清单：居中、压暗、能读 ────────────────────────────────────────
+     原来是一张贴在右上角的清单（WinUI 侧第一版照搬了它），他判"不美观"。改成一枚模态：
+     板子整体压暗（scrim 46%，不是 80%——压到看不见板子就等于不是"边看边查"），
+     面板居中，两栏，键位列右对齐成一条竖线。字体：正文 13px、键位 12px tabular、
+     分组标题 11px 大写间距——标题小是因为它是路标，不是内容。 */
+  /* ── 设计语言：一块浮层只有一套数 ─────────────────────────────────────
+     基准是他点头的那枚右键菜单，而且数是从他给的截图上量的（240×219 那张）：
+     行距 32px、字形带 12–13px（＝14 号字）、面板底 rgb(251,252,253)、左内缩 32px。
+     对照他打回的两块：筛选面板行距 21–30 不等、字号 13、面板底 255；键位面板行距 24、字号 13。
+     ⇒ 同一类产品里三种节奏，这就是他说的"这里一个样子那里一个样，看着廉价"。
+     从现在起：浮层的底色、行高、字号、内缩、键帽，只有这一组变量能定义。 */
+  :root {
+    --sheet-row: 32px;      /* 一行多高，不分面板 */
+    --sheet-font: 14px;     /* 命令名 / 正文 */
+    --sheet-sub: 12px;      /* 键位、计数、分节标题、尾注 */
+    --sheet-pad-x: 12px;    /* 行的左右内缩 */
+    --sheet-pad-y: 16px;    /* 面板自己的内缩 */
+    --sheet-gap: 14px;      /* 名字列与键位列之间 */
+    --sheet-sec-top: 8px;   /* 分节标题上方的空 */
+    --sheet-sec-h: 24px;
+    --sheet-hover: rgb(0 0 0 / .045);
+  }
+  [data-theme="dark"] { --sheet-hover: rgb(255 255 255 / .07); }
+
+  .sheet-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+    gap: var(--sheet-gap); min-height: var(--sheet-row);
+    padding: 0 var(--sheet-pad-x); font-size: var(--sheet-font); color: var(--text);
+  }
+  .sheet-row > .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sheet-row > .sub { display: inline-flex; gap: 4px; justify-content: flex-end; color: var(--muted); font-size: var(--sheet-sub); white-space: nowrap; }
+  .sheet-row.on { background: var(--sheet-hover); }        /* 悬停＝这一行可以点，只此一档 */
+  .sheet-sec {
+    display: flex; align-items: center; min-height: var(--sheet-sec-h); margin-top: var(--sheet-sec-top);
+    padding: 0 var(--sheet-pad-x); font-size: var(--sheet-sub); font-weight: 600;
+    letter-spacing: .07em; color: var(--muted);
+  }
+  .sheet-sec:first-child { margin-top: 0; }
+  .sheet-note { padding: 2px var(--sheet-pad-x) 0; font-size: var(--sheet-sub); color: var(--muted); }
+  /* 键帽，不是一行小字：每个键一枚，中间靠间距说话。圆角 4 是"这是个物理键"的形状，
+     不是纸片的圆角——纸那条规矩管的是便签。 */
+  .sheet-kbd {
+    font: inherit; font-size: var(--sheet-sub); font-variant-numeric: tabular-nums; color: var(--text);
+    min-width: 22px; padding: 1px 6px; text-align: center;
+    border: 1px solid var(--line); border-bottom-width: 2px; background: var(--bg); border-radius: 4px;
+  }
+  [data-theme="dark"] .sheet-kbd { background: var(--surface); }
+
+  #scrim { position: absolute; inset: 0; background: rgb(0 0 0 / .46); opacity: 0; pointer-events: none; transition: opacity var(--dur-hover) var(--ease-out); }
+  #scrim.on { opacity: 1; }
+  #cheat {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    display: none; column-count: 2; column-gap: 34px;
+    background: var(--panel); border: 1px solid var(--line); box-shadow: 0 18px 44px rgb(0 0 0 / .28);
+    padding: var(--sheet-pad-y); border-radius: 8px; width: min(720px, calc(100% - 64px)); max-height: calc(100% - 72px); overflow: auto;
+  }
+  #cheat.on { display: block; }
+  #cheat .hd { font-size: var(--sheet-sub); color: var(--muted); margin: 0 0 12px; letter-spacing: .01em; break-after: avoid; }
+  /* 一节不许被栏拆开：拆开的结果就是他从前列看到一半、从后列看到另一半。
+     栏高由浏览器平衡 ⇒ 两栏的收尾几乎齐平，不再有一栏空半截。 */
+  #cheat .grp { break-inside: avoid; }
+  #cheat .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--sheet-gap); min-height: var(--sheet-row); padding: 0 var(--sheet-pad-x); font-size: var(--sheet-font); color: var(--text); }
+  #cheat .row span.lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--sheet-font); color: var(--text); }
+  #cheat .keys { display: inline-flex; gap: 4px; flex: 0 0 auto; }
+  #cheat .keys kbd {
+    font: inherit; font-size: var(--sheet-sub); font-variant-numeric: tabular-nums; color: var(--text);
+    min-width: 22px; padding: 1px 6px; text-align: center;
+    border: 1px solid var(--line); border-bottom-width: 2px; background: var(--bg); border-radius: 4px;
+  }
+
+  /* ── 牌子（日期/标签）四版，给他挑 ─────────────────────────────────────
+     共同底线：字不能小于卡片正文的一半可读档、命中区 ≥24、删除的 × 只在悬停时出现、
+     牌子永远在卡片左下角、不挡正文（正文的最后一行要为它让一行）。 */
+  #chips { display: flex; flex-direction: column; gap: 10px; padding: 0 14px 14px; }
+  #chips .demo { display: flex; align-items: center; gap: 8px; }
+  #chips .demo b { font-size: 11px; color: var(--muted); font-weight: 600; width: 74px; flex: 0 0 auto; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; line-height: 16px; cursor: pointer; }
+  .chip .x { opacity: 0; font-size: 12px; }
+  .chip:hover .x { opacity: .8; }
+  .chip-a { padding: 3px 7px; border: 1px solid rgb(0 0 0 / .16); background: rgb(0 0 0 / .035); color: rgb(30 30 30 / .86); }
+  .chip-b { padding: 3px 8px 3px 6px; border: 0; background: rgb(30 30 30 / .07); color: rgb(30 30 30 / .9); font-variant-numeric: tabular-nums; }
+  .chip-c { padding: 2px 6px; border: 1px solid rgb(0 0 0 / .22); background: var(--panel); color: var(--text); }
+  .chip-d { padding: 3px 7px; border: 0; border-left: 2px solid var(--due-late); background: rgb(0 0 0 / .045); color: rgb(30 30 30 / .9); }
+  .chip-d.tag { border-left-color: var(--accent); }
+  .chip:hover { background: rgb(0 0 0 / .09); }
+  #contrast { position: absolute; left: 12px; bottom: 12px; max-width: calc(100% - 150px); font-size: 12px; color: var(--muted); }
+
+  /* ── 配方表 ───────────────────────────────────────────────────────────── */
+  aside { border-left: 1px solid var(--line); background: var(--panel); overflow: auto; }
+  aside h2 { font-size: 13px; margin: 16px 14px 6px; color: var(--muted); font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+  td.v { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tag { display: inline-block; padding: 0 5px; border: 1px solid var(--line); font-size: 11px; white-space: nowrap; letter-spacing: .01em; }
+  .ok { color: #1a7f37; } .cost { color: #9a6700; } .no { color: #b3261e; } .un { color: var(--muted); }
+  [data-theme="dark"] .ok { color: #6bd75f; } [data-theme="dark"] .cost { color: #f0b429; } [data-theme="dark"] .no { color: #ff8a80; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  .swatches { display: flex; gap: 4px; padding: 0 14px 14px; }
+  #find { font: inherit; padding: 4px 8px; width: 132px; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 0; }
+  #find:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .cmds { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 14px 14px; }
+  .cmds button {
+    font: inherit; display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; border-radius: 0;
+  }
+  .cmds button:hover { border-color: var(--accent); }
+  .cmds kbd { font: inherit; font-size: 11px; color: var(--muted); border: 1px solid var(--line); padding: 0 4px; background: var(--bg); }
+  /* 色条是真控件：26px 见方（≥WCAG 2.5.8 的 24px），悬停给一圈内描边，不靠光标打发 */
+  .swatches button { width: 26px; height: 26px; padding: 0; border: 1px solid var(--line); cursor: pointer; }
+  .swatches button:hover { box-shadow: inset 0 0 0 2px var(--accent); }
+  .swatches button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>铺陈 · 手感原型</h1>
+  <span class="switch">档
+    <span class="seg" id="seg-theme">
+      <button data-v="light" aria-pressed="true">浅</button><button data-v="dark" aria-pressed="false">深</button>
+    </span>
+  </span>
+  <span class="switch">动效
+    <span class="seg" id="seg-motion">
+      <button data-v="on" aria-pressed="true">开</button><button data-v="off" aria-pressed="false">关</button>
+    </span>
+  </span>
+  <span class="switch">单键快捷
+    <span class="seg" id="seg-keys">
+      <button data-v="on" aria-pressed="true">开</button><button data-v="off" aria-pressed="false">关</button>
+    </span>
+  </span>
+  <span class="switch">便签大小
+    <span class="seg" id="seg-fit">
+      <button data-v="on" aria-pressed="true">随文字</button><button data-v="off" aria-pressed="false">固定</button>
+    </span>
+  </span>
+  <span class="switch">配色
+    <span class="seg" id="seg-pal">
+      <button data-v="paper" aria-pressed="true">淡纸</button><button data-v="sticker" aria-pressed="false">贴纸区</button>
+    </span>
+  </span>
+  <span class="switch">字号
+    <span class="seg" id="seg-type">
+      <button data-v="14" aria-pressed="false">14</button><button data-v="15" aria-pressed="true">15</button><button data-v="16" aria-pressed="false">16</button>
+    </span>
+  </span>
+  <span class="switch">圆角
+    <span class="seg" id="seg-rad">
+      <button data-v="0" aria-pressed="true">直角</button><button data-v="auto" aria-pressed="false">自适应</button>
+    </span>
+  </span>
+  <span class="switch">轮廓
+    <span class="seg" id="seg-edge">
+      <button data-v="ring" aria-pressed="true">环＋影</button><button data-v="paper" aria-pressed="false">纸影</button><button data-v="ringpaper" aria-pressed="false">环＋纸</button>
+    </span>
+  </span>
+  <span class="switch"><input id="find" type="search" aria-label="查找便签" placeholder="查找 /"></span>
+  <span class="hint">左键拖空白＝框选 · 右键拖或空格拖＝平移(带惯性) · 滚轮＝以指针缩放 · 双击＝改字 · 方向键＝微调 · Alt＋方向＝跳格 · Alt＋C＝连线 · Ctrl＋G＝成组 · 选中后右键拖线上那枚点＝换进出面 · Ctrl＋Z＝撤回 · 全部命令在右侧</span>
+</header>
+
+<main>
+  <div id="board" tabindex="0">
+    <canvas id="grid"></canvas>
+    <div id="vignette"></div>
+    <svg id="links" aria-hidden="true"></svg>
+    <div id="items"></div>
+    <canvas id="guides"></canvas>
+    <div id="marquee"></div>
+    <svg id="linkui" aria-hidden="true"></svg>
+    <div id="badge">
+      <button id="undoBtn" title="撤回 Ctrl+Z">↶</button><button id="redoBtn" title="重做 Ctrl+Shift+Z">↷</button>
+      <span class="vsep"></span>
+      <button id="zoomOut" title="缩小">−</button><span id="pct">100%</span><button id="zoomIn" title="放大">＋</button>
+    </div>
+    <div id="contrast"></div>
+    <div id="scrim"></div>
+    <div id="cheat" aria-hidden="true"></div>
+  </div>
+
+  <aside>
+    <h2>命令（按钮与快捷键是同一条实现，不是两套码）</h2>
+    <div class="cmds" id="cmds"></div>
+    <h2>标签（正文里写 #名字；点一个只看那一簇）</h2>
+    <div class="cmds" id="tags"></div>
+    <h2>到期（单独一行写 @d2026-10-12；点一行跳过去）</h2>
+    <h2>便签左下角的牌子（四版，挑一版）</h2>
+    <div id="chips">
+      <div class="demo"><b>A 描边胶囊</b><span class="chip chip-a">逾期 10-09<span class="x">×</span></span><span class="chip chip-a">#周会<span class="x">×</span></span></div>
+      <div class="demo"><b>B 实底软块</b><span class="chip chip-b">今天 10-11<span class="x">×</span></span><span class="chip chip-b">#周会<span class="x">×</span></span></div>
+      <div class="demo"><b>C 面板色描边</b><span class="chip chip-c">10-20<span class="x">×</span></span><span class="chip chip-c">#现场<span class="x">×</span></span></div>
+      <div class="demo"><b>D 左色条</b><span class="chip chip-d">逾期 10-09<span class="x">×</span></span><span class="chip chip-d tag">#周会<span class="x">×</span></span></div>
+    </div>
+
+    <div class="duelist" id="duelist"></div>
+    <h2>便签色板（Radix 量表：3 步底 / 7 步线 / 12 步墨；点一下改的是选中那几格）</h2>
+    <div class="swatches" id="swatches"></div>
+    <h2>文档往返（.canvas 就是 agent 使的那份文件）</h2>
+    <div class="cmds">
+      <button id="exportBtn">导出 .canvas</button>
+      <button id="importBtn">导入 .canvas</button>
+      <input type="file" id="importFile" accept=".canvas,application/json,text/plain" hidden>
+    </div>
+    <h2>配方表 · 每一格：抄谁 / 数值 / 能不能落到 WinUI 3</h2>
+    <table id="recipe"></table>
+  </aside>
+</main>
+
+<script>
+"use strict";
+
+/* ── 数值：全部来自右侧表格里标了出处的来源，未找到的不写 ───────────────── */
+const T = {
+  zoomMin: 0.05, zoomMax: 8, zoomSteps: [0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8],
+  wheelInstant: true, buttonMs: 320,
+  dragThreshold: 4, coarseDragThreshold: 6,
+  snapPx: 8, handleSeen: 8, handleHit: 24,
+  edgePx: 6,
+  /* 字号与内边距只声明一处：CSS 的 --font-note / --note-pad，这里现读，不抄第二份数字。
+     （上一轮我改这两行时把 notePad 整条删掉了 ⇒ grow() 拿到 NaN、自动长高静默失效——已补回。） */
+  noteFont: 0, notePad: 0, noteSize: 240,
+  liftMinZoom: 0.25,
+  friction: 0.09,
+  gridDotRadius: 1,
+  gridPeakAlpha: .85,
+  /* 世界步长沿用 tldraw 的四级；画不画由"屏幕间距"决定，不是缩放档位 */
+  gridSteps: [64, 16, 4, 1],
+};
+function applyTypeScale() {
+  const cs = getComputedStyle(document.documentElement);
+  T.noteFont = parseFloat(cs.getPropertyValue("--font-note")) || 16;
+  T.noteLeading = parseFloat(cs.getPropertyValue("--note-leading")) || 22;
+  T.notePad = parseFloat(cs.getPropertyValue("--note-pad")) || 18;
+}
+applyTypeScale();
+
+/* 便签色：Radix Colors 发布的分步量表（MIT，每色 12 步，值直接抄它 src/light.ts 与 src/dark.ts）。
+   它文档里那条规则就是"塑料感"的数值解：1~4 给大面积底，7~8 给描边，11~12 给文字；
+   step 9 是全表彩度最高的一步（官方原话：the step mixed with the least amount of white or black），
+   拿它当整张便签底＝一张贴纸扣在白纸上。我上一版的 #FFB8A8 / #D3BDFF 正落在 9 附近（C 0.10~0.15），
+   纸区是 C 0.02~0.05 配 L 0.93~0.97。墨色不用纯黑：hue-matched 的 12 步在 3 步底上是 9~10:1，
+   而纯黑在白纸上 20:1 那种"扎眼"本身就是塑料感的一半。 */
+const PAL = {
+  amber:  { light: ["#fff7c2", "#e9c162", "#4f3422"], dark: ["#302008", "#714f19", "#ffe7b3"] },
+  tomato: { light: ["#feebe7", "#f5a898", "#5c271f"], dark: ["#391714", "#853a2d", "#fbd3cb"] },
+  green:  { light: ["#e6f6eb", "#8eceaa", "#193b2d"], dark: ["#132d21", "#28684a", "#b1f1cb"] },
+  blue:   { light: ["#e6f4fe", "#8ec8f6", "#113264"], dark: ["#0d2847", "#205d9e", "#c2e6ff"] },
+  purple: { light: ["#f7edfe", "#d1afec", "#402060"], dark: ["#301c3b", "#664282", "#ecd9fa"] },
+  slate:  { light: ["#f0f0f3", "#cdced6", "#1c2024"], dark: ["#212225", "#43484e", "#edeef0"] },
+  paper:  { light: ["#ffffff", "#cecece", "#202020"], dark: ["#222222", "#484848", "#eeeeee"] },
+};
+const isDark = () => document.documentElement.dataset.theme === "dark";
+/* A/B 用：Figma 自己发布的 Sticky palette 表（彩度 C 0.09~0.15）。它存在这份文档里的意义是
+   同一厂商自己就分了工——"Section 通常用比便签浅一档的色"（同文档 Section background palette：
+   浅绿 #EBFFEE、浅蓝 #F5FBFF、浅黄 #FFFBF0）。大面积物体照它那张浅表走，就是"纸区"。 */
+const STICKER = { amber: "#FFE299", tomato: "#FFB8A8", green: "#B3EFBD", blue: "#A8DAFF", purple: "#D3BDFF", slate: "#E6E6E6", paper: "#FFFFFF" };
+/* 按颜色聚拢时组牌上写的字：文档里存的仍是英文预设名（agent 读 1~6／预设名），屏上给人看的是一字中文 */
+const PAL_CN = { amber: "黄", tomato: "红", green: "绿", blue: "蓝", purple: "紫", slate: "灰", paper: "白", none: "无色" };
+const palMode = () => document.documentElement.dataset.pal || "paper";
+/* 中纸档（Radix 第 5 步）你判"不如两端"，已砍。留下的凭据是这一发测量：第 3 步的便签与板底
+   亮度比只有 1.04:1（浅）/1.20:1（深）⇒ 剪影不成立、边缘只能靠那条线。
+   解法因此不在配色上，而在轮廓那一组开关里（环＋影／纸影／环＋纸都是"让影子承担一部分边缘"）。
+   对照：tldraw 自己的便签与板底也只有约 1.4:1，非文字 3:1 那扇门是给 UI 控件的，实物产品都在它以下。 */
+const fillOf = (k) => palMode() === "sticker" ? STICKER[k] : PAL[k][isDark() ? "dark" : "light"][0];
+function face(n) {
+  // 自定义 hex（.canvas 里直接写色的节点）：只按亮度推墨色，不去动它的彩度
+  if (!n.p || !PAL[n.p]) return { fill: n.c, line: shade(n.c), ink: ink(n.c) };
+  if (palMode() === "sticker") { const c = STICKER[n.p]; return { fill: c, line: shade(c), ink: ink(c) }; }
+  const t = isDark() ? "dark" : "light";
+  return { fill: fillOf(n.p), line: PAL[n.p][t][1], ink: PAL[n.p][t][2] };
+}
+
+const board = document.getElementById("board");
+const items = document.getElementById("items");
+const gridCv = document.getElementById("grid");
+const guideCv = document.getElementById("guides");
+const marquee = document.getElementById("marquee");
+const pct = document.getElementById("pct");
+
+const cam = { x: 60, y: 40, z: 1 };
+let notes = [
+  { id: "n1", kind: "text", x: 40,  y: 40,  w: 240, h: 240, p: "amber",  t: "左键拖空白＝框选\n右键拖／空格＋拖＝平移（松手带惯性）\n滚轮＝以指针为不动点缩放\n双击这格改字 #手感" },
+  { id: "n2", kind: "text", x: 320, y: 40,  w: 240, h: 240, p: "blue",   t: "选中：1px 描边 + 24% 填充 #手感\n手柄可见 8px、命中 24px\n（WinUI 里只有 4 枚缩放光标，斜角要镜像复用）" },
+  { id: "n3", kind: "text", x: 600, y: 40,  w: 240, h: 240, p: "green",  t: "拖这格靠近另一格的边或中线： #吸附\n吸附阈值 8 屏幕像素\n参考线 #ff6b6b，1px，瞬时出现瞬时消失" },
+  { id: "n4", kind: "text", x: 40,  y: 320, w: 240, h: 240, p: "purple", t: "拖动时才浮起（两层阴影）\n缩到 25% 以下阴影整块关掉\n—— 这是 tldraw 的 LOD 预算" },
+  { id: "n5", kind: "text", x: 320, y: 320, w: 240, h: 240, p: "paper",  t: "无边框的白格：\n浅档靠阴影、深档靠描边\n两档都要看得见（WCAG 文字 4.5:1）" },
+  { id: "n6", kind: "image", x: 600, y: 320, w: 240, h: 240, p: "slate", src: svgChart() },
+  { id: "n7", kind: "text", x: 880, y: 40, w: 240, h: 200, p: "tomato", t: "@d2026-10-10\n左边一条色条，右边进清单\n线是规范里的 edge（选中两格按 Alt+C）\n（属性行单独占一行，画的时候会被摘走）" },
+];
+const sel = new Set(["n1"]);
+/* 选中的层次（你这一条要求的落地）：groupFocus＝当前"inside"的那一组，unitMode＝停在组这一层还是进到单枚。
+   第一次点组里的格＝整组；同一个组里再点＝只点那一枚；Esc 退回组那一层。
+   不用 sel 的大小去猜层次——那会让"拖完只剩一格"这类状态把层次跳没。 */
+let groupFocus = null, unitMode = false;
+let guides = [];
+let editing = null;
+const unitGroup = () => (unitMode && groupFocus ? groups.find(g => g.id === groupFocus) : null);
+const clearSel = () => { sel.clear(); groupFocus = null; unitMode = false; };   // 每个"取消选中"的站点都走这里，层次一起归零
+/* 视图级开关：聚焦（只看选中的）与查找（按文字过滤）。都不改文档，所以不进撤回栈。 */
+const view = { focus: false, query: "", tag: "" };
+
+/* ── 撤回／重做（你说删了之后就看不回来了）──────────────────────────────
+   形状与 App 里那条一致：动手之前抓一份前态；撤销＝把当前态压进重做栈、恢复前态。
+   原型抓的是整块 notes 的浅拷贝，App 那边抓的是 patch —— 语义一致，代价不同。
+   按钮的 title 里带上"要撤回的是哪个动作"，这样按下去之前就知道会掉什么。 */
+let hist = [], redoSt = [], lastNudgeAt = 0;
+const snapshot = () => ({ notes: notes.map(n => ({ ...n })), groups: groups.map(g => ({ ...g })), edges: edges.map(e => ({ ...e })) });
+function trimHist() { if (hist.length > 120) hist.shift(); }
+function paintHistoryChrome() {
+  const u = document.getElementById("undoBtn"), r = document.getElementById("redoBtn");
+  if (!u || !r) return;
+  u.disabled = !hist.length; r.disabled = !redoSt.length;
+  u.title = hist.length ? "撤回「" + hist[hist.length - 1].label + "」 Ctrl+Z" : "没有可撤回的";
+  r.title = redoSt.length ? "重做「" + redoSt[redoSt.length - 1].label + "」 Ctrl+Shift+Z" : "没有可重做的";
+}
+function pushState(label, state) { hist.push({ label, state }); redoSt = []; trimHist(); paintHistoryChrome(); }
+function pushPre(label) {
+  if (label === "微调" && hist.length && hist[hist.length - 1].label === "微调" && performance.now() - lastNudgeAt < 900) {
+    lastNudgeAt = performance.now(); return;          // 一次连按算一笔，不然撤销要按十几下
+  }
+  if (label === "微调") lastNudgeAt = performance.now();
+  pushState(label, snapshot());
+}
+function restore(state) {
+  notes = state.notes.map(n => ({ ...n }));
+  groups = state.groups.map(g => ({ ...g }));     // 组框也是文档的一部分：成组/拆组要能撤回
+  edges = state.edges.map(e => ({ ...e }));       // 连线同上
+  const ids = new Set(notes.map(n => n.id));
+  for (const id of [...sel]) if (!ids.has(id)) sel.delete(id);
+  render(); paintHistoryChrome();
+}
+function undo() { if (editing) cancelEdit(); if (!hist.length) return; const s = hist.pop(); redoSt.push({ label: s.label, state: snapshot() }); restore(s.state); }
+function redo() { if (editing) cancelEdit(); if (!redoSt.length) return; const s = redoSt.pop(); hist.push({ label: s.label, state: snapshot() }); restore(s.state); }
+
+function svgChart() {
+  const s = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240"><rect width="240" height="240" fill="#203040"/><polyline points="24,200 84,120 144,160 216,48" fill="none" stroke="#f0f0f0" stroke-width="7"/></svg>';
+  return "data:image/svg+xml;utf8," + encodeURIComponent(s);
+}
+
+/* ── 坐标：与 WinUI 版同一套（屏幕空间排布，不是 transform 缩放）───────── */
+const toScreen = (wx, wy) => [wx * cam.z + cam.x, wy * cam.z + cam.y];
+const toWorld  = (sx, sy) => [(sx - cam.x) / cam.z, (sy - cam.y) / cam.z];
+
+/* 把 1 逻辑像素落到整物理像素上：WinUI 里就是 Math.Round(v*scale)/scale */
+const dpr = () => window.devicePixelRatio || 1;
+const crisp = (v) => { const s = dpr(); return Math.round(v * s) / s; };
+
+/* ── 点阵底：视口位图按缩放档重绘（WinUI 没有平铺刷，只能走这条路）────── */
+/* 相机没动就不重绘：拖动一格会逐帧调 render()，全视口重画既慢、又把"闪"喂给了选择框那一层 */
+let gridKey = "";
+function drawGrid() {
+  const key = [cam.x, cam.y, cam.z, board.clientWidth, board.clientHeight,
+    document.documentElement.dataset.theme].join("|");
+  if (key === gridKey) return;
+  gridKey = key;
+  const g = gridCv.getContext("2d");
+  const w = board.clientWidth, h = board.clientHeight, s = dpr();
+  if (gridCv.width !== w * s || gridCv.height !== h * s) { gridCv.width = w * s; gridCv.height = h * s; }
+  g.setTransform(s, 0, 0, s, 0, 0);
+  g.clearRect(0, 0, w, h);
+
+  g.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--grid").trim();
+  for (const step of T.gridSteps) {
+    const a = gridAlpha(step, cam.z);
+    if (a <= 0.02) continue;
+    const sp = step * cam.z;
+    g.globalAlpha = a * T.gridPeakAlpha;
+    /* 一枚 path 装下整档点，最后一次 fill：逐点 beginPath/fill 在 60Hz 下是白烧 */
+    g.beginPath();
+    for (let px = ((cam.x % sp) + sp) % sp; px < w; px += sp)
+      for (let py = ((cam.y % sp) + sp) % sp; py < h; py += sp) {
+        g.moveTo(px + T.gridDotRadius, py);
+        g.arc(px, py, T.gridDotRadius, 0, 6.2832);
+      }
+    g.fill();
+  }
+  g.globalAlpha = 1;
+}
+/* 判据在屏幕像素上：间距 24~72px 满亮，往下到 12px、往上到 96px 淡出为 0。
+   上一版把淡入淡出区间写成了缩放档位，结果 100% 时只剩 4px 间距的一档 ⇒ 看着像灰雾，不像点阵。 */
+function gridAlpha(step, z) {
+  const sp = step * z;
+  if (sp >= 24 && sp <= 72) return 1;
+  return sp < 24 ? Math.max(0, (sp - 12) / 12) : Math.max(0, (96 - sp) / 24);
+}
+
+/* ── 吸附参考线 ─────────────────────────────────────────────────────────── */
+function drawGuides() {
+  const g = guideCv.getContext("2d");
+  const w = board.clientWidth, h = board.clientHeight, s = dpr();
+  if (guideCv.width !== w * s || guideCv.height !== h * s) { guideCv.width = w * s; guideCv.height = h * s; }
+  g.setTransform(s, 0, 0, s, 0, 0);
+  g.clearRect(0, 0, w, h);
+  if (!guides.length) return;
+  g.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--snap").trim();
+  g.lineWidth = crisp(1);
+  g.beginPath();
+  for (const line of guides) {
+    const [sx, sy] = toScreen(line.x, line.y);
+    const [ex, ey] = toScreen(line.x + line.w, line.y + line.h);
+    g.moveTo(crisp(sx) + (s % 2 ? 0 : 0), Math.min(sy, ey)); g.lineTo(crisp(ex), Math.max(sy, ey));
+    if (line.w === 0) { g.moveTo(Math.min(sx, ex), crisp(sy)); g.lineTo(Math.max(sx, ex), crisp(ey)); }
+  }
+  g.stroke();
+}
+
+/* ── 排布 ───────────────────────────────────────────────────────────────── */
+/* ── 轮廓方案（边框那一格的重新设计）────────────────────────────────────
+   数值不是我编的：tldraw 的便签实物**没有描边**，边缘由 NoteShapeUtil.tsx:783-794 那三层承担
+   —— 按 id 播种的 lift（0.5~1.5）、x 偏移恒 0、只向下、两层都带**负 spread**（影子贴着剪影往里收，
+   所以直角物体的边缘不会显出圆弧），第三层是 48px 大偏移的 inset＝顶缘内侧一道极淡压影。
+   同一文件 364-396 行：zoom 低于 0.25 时整块影子关掉，降级成**只留一条下边线** 2px×scale。
+   第二档抄 Excalidraw 的便签：constants.ts 里 SHADOW_OFFSET=3 / SHADOW_OPACITY=.16（一层硬位移副本），
+   EDGE_SHADOW_WIDTH=0.5 / _OPACITY=.08。 */
+function makeRng(id) {
+  let s = 2166136261 >>> 0;
+  for (const ch of String(id)) { s ^= ch.charCodeAt(0); s = Math.imul(s, 16777619) >>> 0; }
+  return () => { s = (Math.imul(s, 1103515245) + 12345) >>> 0; return s / 4294967296; };
+}
+function paperShadow(id, z) {
+  const rnd = makeRng(id);
+  const lift = rnd() + 0.5;
+  const a = 5 * z, b = 4 * z, c = 6 * z, d = 7 * z;
+  return `0px ${Math.max(0, a - lift).toFixed(2)}px ${a.toFixed(2)}px -${a.toFixed(2)}px rgb(15 23 31 / .6), ` +
+    `0px ${(b + lift * d).toFixed(2)}px ${(c + lift * d).toFixed(2)}px -${(b + lift * c).toFixed(2)}px rgb(15 23 31 / ${(0.3 + lift * 0.1).toFixed(2)}), ` +
+    `0px ${(48 * z).toFixed(2)}px ${(10 * z).toFixed(2)}px -${(10 * z).toFixed(2)}px inset rgb(15 23 44 / ${(0.022 + rnd() * 0.005).toFixed(3)})`;
+}
+/* ── 排布 ───────────────────────────────────────────────────────────────── */
+
+/* 轮廓三档：描边／影子／降级各归各的。影子与描边只在算出来的字符串变了才写 style，
+   不逐帧写——逐帧重写 box-shadow 会让浏览器每帧重算模糊，跟逐帧改 src 是同一类错。 */
+/* 环：Radix Themes 公布的 --shadow-2 头两层（1px alpha 环 ＋ 0.5px 次环）。
+   用 alpha 不用色号是关键：浅底黑 10%、深底白 15%，同一套结构两档都看得见，
+   不会像同色系实线那样在深档糊成一片。alpha 取它发布的阶梯 .05/.1/.15/.2/.3/.4。 */
+const ringOnly = () => isDark()
+  ? `0 0 0 1px rgb(255 255 255 / .15), 0 0 0 0.5px rgb(255 255 255 / .05)`
+  : `0 0 0 1px rgb(0 0 0 / .1), 0 0 0 0.5px rgb(0 0 0 / .05)`;
+/* 影：同一条 --shadow-2 的后三层（Material 的 L1 形状）＋ Primer/Bootstrap 那条字模压印内高光 */
+const castLayers = () => isDark()
+  ? `0 1px 1px 0 rgb(0 0 0 / .3), 0 2px 1px -1px rgb(0 0 0 / .4), 0 1px 3px 0 rgb(0 0 0 / .3), inset 0 1px 0 rgb(255 255 255 / .15)`
+  : `0 1px 1px 0 rgb(0 0 0 / .05), 0 2px 1px -1px rgb(0 0 0 / .1), 0 1px 3px 0 rgb(0 0 0 / .1), inset 0 1px 0 rgb(255 255 255 / .15)`;
+/* 微软那句话是"环＋影"这一档的根据：影子与轮廓一起表达高度（Fluent layering 表：Card 8/1、Control 2/1） */
+function applyEdge(el, n) {
+  const edge = document.documentElement.dataset.edge || "ring";   // 你判的：环＋影最好看 ⇒ 默认
+  const rad = document.documentElement.dataset.rad;
+  // 自适应档用 Excalidraw 公布的实物公式：corner = min(min(w,h) × 0.04, 16)（世界像素，跟着格子一起缩放）
+  const radius = rad === "auto" ? (Math.min(Math.min(n.w, n.h) * 0.04, 16) * cam.z).toFixed(2) + "px" : "";
+  const lod = cam.z < T.liftMinZoom;                       // tldraw 的 LOD 阈值就在 0.25
+  const lodLine = `${(2 * cam.z).toFixed(2)}px solid ${isDark() ? "rgb(20,20,20)" : "rgb(144,144,144)"}`;
+  let border = "0", bottom = "", shadow = "";
+  if (edge === "paper") {
+    // tldraw 的降级是两件事：影子写 none ＋ 只补一条下边线 2px×scale（NoteShapeUtil.tsx:364-396）
+    if (lod) { bottom = lodLine; shadow = "none"; } else shadow = paperShadow(n.id, cam.z);
+  } else if (edge === "ringpaper") {
+    // 结合档：Radix 的 alpha 环（身份，永远在）＋ tldraw 的三层纸影（含按 id 播种的 lift 与顶缘 inset）
+    // 降级时留环、把三层影换成一条下边线——环不是阴影，缩放再小也画得起
+    if (lod) { bottom = lodLine; shadow = ringOnly(); }
+    else shadow = `${ringOnly()}, ${paperShadow(n.id, cam.z)}`;
+  } else {
+    shadow = `${ringOnly()}, ${castLayers()}`;
+  }
+  const key = edge + "|" + border + "|" + bottom + "|" + shadow + "|" + radius;
+  if (el._edgeKey === key) return;
+  el._edgeKey = key;
+  el.style.border = border;
+  el.style.borderBottom = bottom;                // 写在 border 之后才会生效
+  el.style.boxShadow = shadow;
+  el.style.borderRadius = radius;
+}
+
+function render() {
+  drawGrid();
+
+  for (const el of [...items.children]) if (el.dataset.id && !notes.find(n => n.id === el.dataset.id)) el.remove();
+
+  for (const n of notes) {
+    let el = items.querySelector(`[data-id="${n.id}"]`);
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "note"; el.dataset.id = n.id; el.dataset.kind = n.kind;
+      el.draggable = false;
+      el.innerHTML = n.kind === "image" ? `<img alt="" draggable="false">` : `<div class="body"></div><span class="dueflag" aria-hidden="true"></span>`;
+      items.appendChild(el);
+      el.classList.add("enter");
+      el.addEventListener("animationend", () => el.classList.remove("enter"), { once: true });
+      el.addEventListener("pointerdown", onNoteDown);
+      el.addEventListener("dblclick", () => beginEdit(n.id));
+    }
+    /* 移动中只改 transform，不逐帧改 left/top：tldraw 平移时也只重写 container.style.transform
+       （Shape.tsx:82-91），因为改位移属性要走布局，改 transform 走合成器。落点坐标仍记在模型里，
+       松手那一帧再写回 left/top。 */
+    const st = drag && drag.armed ? drag.start.find(s => s[0] === n.id) : null;
+    const [sx, sy] = st ? toScreen(st[1], st[2]) : toScreen(n.x, n.y);
+    el.style.left = sx + "px"; el.style.top = sy + "px";
+    const tf = st ? `translate3d(${((n.x - st[1]) * cam.z).toFixed(2)}px, ${((n.y - st[2]) * cam.z).toFixed(2)}px, 0)` : "";
+    if (el._tf !== tf) { el._tf = tf; el.style.transform = tf; }
+    el.style.width = (n.w * cam.z) + "px"; el.style.height = (n.h * cam.z) + "px";
+    el.style.fontSize = (T.noteFont * cam.z) + "px";
+    /* 行距是整像素（不是比值），所以缩放时必须自己乘一遍——否则放大到 2 倍字大了、行距没变，字就叠在一起 */
+    el.style.lineHeight = (T.noteLeading * cam.z) + "px";
+    el.style.padding = n.kind === "image" ? "0" : (T.notePad * cam.z) + "px";
+    const f = face(n);
+    el.style.backgroundColor = f.fill;
+    el.style.color = f.ink;
+    el.classList.toggle("halo", isDark() && lum(f.fill) <= 0.42);   // 光晕只给深底色格子（见 CSS 那条）
+    applyEdge(el, n);
+    el.classList.toggle("selected", sel.has(n.id));
+    el.classList.toggle("locked", !!n.lock);
+    const due = n.kind === "image" ? null : dueOf(n);
+    el.classList.toggle("due-late", !!due && due.diff < 0);
+    el.classList.toggle("due-today", !!due && due.diff === 0);
+    const q = view.query.trim().toLowerCase();
+    el.classList.toggle("dim", (q !== "" && !String(n.t || "").toLowerCase().includes(q))
+      || (view.tag !== "" && !tagsOf(n).includes(view.tag))
+      || (view.focus && !sel.has(n.id)));
+    /* 内容只在真的变了才写：逐帧 setAttribute("src") 会让图片每次重新解码＝"图片拖动不跟手"的头号嫌疑，
+       逐帧 textContent 同理（它还会打断文本的布局缓存）。 */
+    if (n.kind === "image") { if (el.firstChild.getAttribute("src") !== n.src) el.firstChild.setAttribute("src", n.src); }
+    else if (editing !== n.id && el.dataset.src !== n.t) {
+      // 只往 .body 里写：直接改 el.innerHTML 会把便签的骨架（.body、色条、手柄层）一起换掉。
+      const body = el.querySelector(":scope > .body") || el;
+
+      el.dataset.src = n.t;
+
+      // 缓存键是原文（属性行一改就重画），画出来的是摘掉属性行之后的正文——与 App 侧同一对关系。
+      const html = mdHtml(bodyOf(n));
+
+      if (html === null) { body.textContent = bodyOf(n); } else { body.innerHTML = html; }
+
+      /* 文字是从编辑框之外变的（CLI、热重载、跳格命令），fit 挂在编辑提交上就够不着这一路：
+         框高还是按旧文字定的，而 .note 是 overflow:hidden + .body 垂直居中 ⇒ 上下各裁一半，
+         看起来像"字被吃掉"。写完立刻按新文字重量一次，并把这一帧的高度就地补上
+         （上面第 810 行已经写过 height 了，不补就晚一帧）。 */
+      const h0 = n.h;
+      fit(n);
+      if (n.h !== h0) el.style.height = (n.h * cam.z) + "px";
+    }
+  }
+
+  paintLinks();
+  paintGroups();
+  paintSelection();
+  drawGuides();
+  paintDue();
+  paintTags();
+  const nextPct = Math.round(cam.z * 100) + "%";
+  if (nextPct !== pct.textContent && motionOn()) {
+    pct.classList.remove("pulse"); void pct.offsetWidth; pct.classList.add("pulse");
+  }
+  pct.textContent = nextPct;
+  readoutContrast();
+}
+
+function shade(hex) {
+  const [r, g, b] = rgb(hex);
+  return document.documentElement.dataset.theme === "dark"
+    ? `rgb(${Math.min(255, r + 40)},${Math.min(255, g + 40)},${Math.min(255, b + 40)})`
+    : `rgb(${r * .82 | 0},${g * .82 | 0},${b * .82 | 0})`;
+}
+const rgb = (hex) => [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+function ink(hex) { return lum(hex) > 0.42 ? "#1e1e1e" : "#f5f6f7"; }
+function lum(hex) {
+  const c = rgb(hex).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+function ratio(a, b) { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); }
+
+function paintSelection() {
+  let box = items.querySelector(".selbox");
+  const ids = [...sel].map(id => notes.find(n => n.id === id)).filter(Boolean);
+  if (!ids.length) { if (box) box.remove(); return; }
+  if (!box) {
+    box = document.createElement("div"); box.className = "selbox";
+    box.innerHTML = `<div class="ring"></div>` + ["nw","n","ne","e","se","s","sw","w"]
+      .map(d => `<div class="handle" data-dir="${d}"><i></i></div>`).join("");
+    box.querySelectorAll(".handle").forEach(h => h.addEventListener("pointerdown", onHandleDown));
+  }
+  /* 只需保证它盖在所有格子上层；逐帧 appendChild 是"摘下再挂"，实测每帧一次 ⇒ 选择框闪 */
+  if (items.lastElementChild !== box) items.appendChild(box);
+  // 移动中把选择框整个收起来（你的口径：拖动不该带上"被选中"那套样式，最多留一点虚化）；
+  // 编辑中也收起来——蓝字底下套一圈蓝框，读起来像这格在闪，而那一圈框对改字没有任何信息量。
+  // 缩放时不藏，因为框本身就是要盯着看的那个量。
+  box.style.display = (drag || editing) ? "none" : "block";
+  const b = bounds(ids);
+  const [sx, sy] = toScreen(b.x, b.y);
+  box.style.left = sx + "px"; box.style.top = sy + "px";
+  box.style.width = (b.w * cam.z) + "px"; box.style.height = (b.h * cam.z) + "px";
+  const pos = { nw:[0,0], n:[.5,0], ne:[1,0], e:[1,.5], se:[1,1], s:[.5,1], sw:[0,1], w:[0,.5] };
+  for (const h of box.querySelectorAll(".handle")) {
+    const [fx, fy] = pos[h.dataset.dir];
+    h.style.left = (fx * 100) + "%"; h.style.top = (fy * 100) + "%";
+  }
+}
+/* 组的轮廓：读的是组自己的矩形（世界坐标），不是现算成员包围盒——JSON Canvas 1.0 的 group 节点
+   就是「一个写进文档的矩形」，成员＝几何包含（规范原文没有成员列表）⇒ agent 读到的也是这个矩形。
+   它不参与命中（pointer-events:none）：点成员才算点组，别在框上藏热区。组名双击可改，字段是规范的 label。 */
+function paintGroups() {
+  const seen = new Set();
+  for (const g of groups) {
+    let el = items.querySelector(`[data-gid="${g.id}"]`);
+    if (!el) {
+      el = document.createElement("div"); el.className = "grouphull"; el.dataset.gid = g.id;
+      el.innerHTML = `<span class="glabel" title="双击改名"></span>`;
+      /* 闭包里只留 DOM 节点，组对象按 gid 现取：撤回／重做／导入都会把 groups 换成一批新对象，
+         抓着旧引用改名就写进了孤儿（实测过一次：改了名、历史里也确实记了一笔"组名"，屏上那格却回滚）。 */
+      el.firstChild.addEventListener("dblclick", (ev) => {
+        const hull = ev.currentTarget.parentElement;
+        ev.stopPropagation();
+        const lab = ev.currentTarget;
+        lab.contentEditable = "true"; lab.focus();
+        document.getSelection().selectAllChildren(lab);
+        const done = () => {
+          lab.contentEditable = "false";
+          const cur = groups.find(x => x.id === hull.dataset.gid);
+          if (!cur) { lab.removeEventListener("blur", done); return; }
+          const next = lab.textContent.trim();
+          if (next !== (cur.label || "")) { pushState("组名", snapshot()); cur.label = next || undefined; }
+          lab.removeEventListener("blur", done); paintGroups();
+        };
+        lab.addEventListener("blur", done);
+      });
+      items.insertBefore(el, items.firstChild);
+    }
+    const label = el.firstChild;
+    const txt = g.label || "组";
+    if (label.textContent !== txt && label.contentEditable !== "true") label.textContent = txt;
+    const [sx, sy] = toScreen(g.x, g.y);
+    el.style.left = sx + "px"; el.style.top = sy + "px";
+    el.style.width = (g.w * cam.z) + "px"; el.style.height = (g.h * cam.z) + "px";
+    el.classList.toggle("hasSel", g.w > 0 && membersOf(g).some(n => sel.has(n.id)));
+    el.classList.toggle("unit", unitMode && groupFocus === g.id);   // 停在「组」这一层时：框是选中物本身
+    label.style.fontSize = Math.max(10, 12 * cam.z) + "px";
+    label.style.top = (-Math.max(10, 14 * cam.z) - 4) + "px";
+    seen.add(g.id);
+  }
+  for (const el of items.querySelectorAll(".grouphull")) if (!seen.has(el.dataset.gid)) el.remove();
+}
+const bounds = (list) => {
+  const x1 = Math.min(...list.map(n => n.x)), y1 = Math.min(...list.map(n => n.y));
+  const x2 = Math.max(...list.map(n => n.x + n.w)), y2 = Math.max(...list.map(n => n.y + n.h));
+  return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+};
+
+const numsRgb = (s) => { const m = String(s).match(/[\d.]+/g); return m ? m.slice(0, 3).map(Number) : [0, 0, 0]; };
+const lumAny = (s) => String(s).trim().startsWith("#") ? lum(s.trim())
+  : (() => { const v = numsRgb(s).map(x => { x /= 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); }); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; })();
+function readoutContrast() {
+  /* 两把尺分开量：字/底（WCAG 1.4.3，4.5:1）与 便签/板底（1.4.11 那类非文字分离，3:1）。
+     上一版我只报了前者，于是"颜色砍到纸区之后边缘不成立"这一格完全没有读数。 */
+  const bgL = lumAny(getComputedStyle(board).backgroundColor);
+  let worst = 99, who = "", sep = 99, sepWho = "";
+  for (const n of notes) {
+    const f = face(n);
+    const L = lumAny(f.fill);
+    const s = (Math.max(L, bgL) + .05) / (Math.min(L, bgL) + .05);
+    if (s < sep) { sep = s; sepWho = n.p || "自定义"; }
+    if (n.kind !== "text") continue;
+    const r = ratio(f.fill, f.ink);
+    if (r < worst) { worst = r; who = n.p + " " + f.fill; }
+  }
+  const panel = getComputedStyle(document.documentElement).getPropertyValue("--text").trim();
+  const onPanel = ratioOfPanel(panel);
+  document.getElementById("contrast").textContent =
+    `字/底 最低 ${worst.toFixed(2)}:1（${who}）· 正文 ${onPanel.toFixed(2)}:1 · 门槛 4.5:1` +
+    `｜便签/板底 ${sep.toFixed(2)}:1（最弱 ${sepWho}）＝边缘只剩一条线的那个成因`;
+}
+/* 读实际生效的底色：透明要往上找真正画了颜色的那一层，否则 "rgba(0,0,0,0)" 会被
+   解析成 #000000，量出一个 1.26:1 的假红数（这一发真踩过）。 */
+function effectiveBackground(el) {
+  for (let node = el; node; node = node.parentElement) {
+    const c = getComputedStyle(node).backgroundColor;
+    const m = c.match(/rgba?\(([^)]+)\)/);
+    if (!m) continue;
+    const parts = m[1].split(",").map(v => parseFloat(v));
+    if (parts.length < 4 || parts[3] > 0.02) {
+      return "#" + parts.slice(0, 3).map(v => Math.round(v).toString(16).padStart(2, "0")).join("");
+    }
+  }
+  return "#ffffff";
+}
+function ratioOfPanel(color) {
+  const bg = effectiveBackground(board);
+  return ratio(bg === "#ffffff" && color === "#ffffff" ? "#fafafa" : bg, color);
+}
+
+/* ── 交互：平移 / 惯性 / 缩放 / 框选 / 拖动 / 手柄 ──────────────────────── */
+let pan = null, drag = null, resize = null, rubber = null, vel = { x: 0, y: 0 }, raf = 0;
+const screenPoint = (e) => { const b = board.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
+
+/* 自动化自检发出的合成事件没有真实 pointerId，捕获会抛 NotFoundError；
+   真手上路也不该因为一次捕获失败就把手势整个断掉。 */
+function capture(el, id) { try { el.setPointerCapture(id); } catch (err) { /* 捕获是可选的 */ } }
+
+board.addEventListener("dragstart", (e) => e.preventDefault());   // 原生拖放会掐掉 pointer 序列（图片那条）
+/* 手势词汇（本轮按 tldraw 公布的 rightClickPanning 重排，它原文：right-click + drag pans the camera
+   and a static right-click opens the context menu at the release position）：
+   · 左键拖空白＝框选（不再要按 Shift；Shift＋拖仍框选并且是「加选」）
+   · 右键拖＝平移 · 空格＋拖＝平移（Adobe 那条习惯留着）
+   · 左键拖格子＝移动 · 左键压边＝缩放 · 右键压端点把手＝换连线的进出面
+   静止的右键（没拖过 4px）不把 contextmenu 吞掉：原型没有自己的菜单，那一发要交回宿主；
+   App 里换成"拖过就吞、没拖就弹我们自己的菜单"。 */
+let spaceDown = false, rightDragUsedAt = 0;
+board.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 && e.button !== 2) return;
+  if (e.target.closest("#badge")) return;
+  commitEdit();
+  capture(board, e.pointerId);
+  board.focus();
+  const p = screenPoint(e);
+  const wantPan = e.button === 2 || spaceDown;
+  /* 左键压在选择框那条边的带上＝缩放，不许交给框选：实测差 2px 就变成 cam 动了 40px。
+     坐标空间要对齐：selScreenRect 给的是板内坐标，所以这里喂 p 而不是 e.clientX */
+  if (!wantPan && !e.shiftKey) { const dir = boardEdgeAt(p[0], p[1]); if (dir && startEdgeResize(dir, null, e)) return; }
+  if (wantPan) {
+    pan = { x0: p[0], y0: p[1], camX: cam.x, camY: cam.y, last: p, moved: 0, t: performance.now(), button: e.button };
+    vel = { x: 0, y: 0 }; cancelAnimationFrame(raf);
+    board.dataset.panning = "1"; board.style.cursor = "grabbing";
+  } else {
+    rubber = { x0: p[0], y0: p[1], shown: false };
+    Object.assign(marquee.style, { left: p[0] + "px", top: p[1] + "px", width: "0px", height: "0px" });
+  }
+});
+
+board.addEventListener("pointermove", (e) => {
+  const p = screenPoint(e);
+  if (!pan && !rubber && !drag && !resize) edgeCursor(e);
+
+  if (pan) {
+    const dx = p[0] - pan.x0, dy = p[1] - pan.y0;
+    pan.moved = Math.max(pan.moved, Math.hypot(dx, dy));
+    cam.x = pan.camX + dx; cam.y = pan.camY + dy;
+    const now = performance.now(), dt = Math.max(1, now - pan.t);
+    vel = { x: (p[0] - pan.last[0]) / dt * 16.7, y: (p[1] - pan.last[1]) / dt * 16.7 };
+    pan.last = p; pan.t = now;
+    render();
+    return;
+  }
+  if (rubber) {
+    if (!rubber.shown && Math.hypot(p[0] - rubber.x0, p[1] - rubber.y0) < T.dragThreshold) return;
+    rubber.shown = true;                       // 框只在真拖过阈值之后出现：单击不该闪一个 0×0 的点
+    const left = Math.min(rubber.x0, p[0]), top = Math.min(rubber.y0, p[1]);
+    marquee.style.display = "block";
+    Object.assign(marquee.style, {
+      left: left + "px", top: top + "px",
+      width: Math.abs(p[0] - rubber.x0) + "px", height: Math.abs(p[1] - rubber.y0) + "px",
+    });
+  }
+});
+
+board.addEventListener("pointerup", (e) => {
+  if (pan) {
+    const moved = pan.moved, wasRight = pan.button === 2;
+    pan = null; delete board.dataset.panning; board.style.cursor = "";
+    if (wasRight && moved > T.dragThreshold) rightDragUsedAt = performance.now();   // 这发右键已经被"平移"用掉了
+    if (moved > T.dragThreshold && motionOn()) glide();
+    else if (!e.shiftKey && (e.target === board || e.target.tagName === "CANVAS")) { clearSel(); render(); }
+  }
+  if (rubber) {
+    if (rubber.shown) {
+      const left = parseFloat(marquee.style.left), top = parseFloat(marquee.style.top);
+      const w = parseFloat(marquee.style.width), h = parseFloat(marquee.style.height);
+      const [wx1, wy1] = toWorld(left, top), [wx2, wy2] = toWorld(left + w, top + h);
+      if (!e.shiftKey) clearSel();
+      for (const n of notes) if (n.x + n.w >= wx1 && n.x <= wx2 && n.y + n.h >= wy1 && n.y <= wy2) sel.add(n.id);
+    } else if (!e.shiftKey) clearSel();        // 没拖过阈值的左键按下＝一次点击：清空选中
+    rubber = null; marquee.style.display = "none"; render();
+  }
+});
+board.addEventListener("contextmenu", (e) => { if (performance.now() - rightDragUsedAt < 250) e.preventDefault(); });
+
+/* 空格按住＝平移模式：只在没在写字、焦点不在按钮上时接管（Space 归控件自己按） */
+window.addEventListener("keydown", (e) => {
+  if (e.code !== "Space" || e.repeat) return;
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName))) return;
+  spaceDown = true; e.preventDefault();
+  if (!pan && !rubber && !drag && !resize) board.style.cursor = "grab";
+});
+window.addEventListener("keyup", (e) => {
+  if (e.code !== "Space") return;
+  spaceDown = false;
+  if (!pan) { delete board.dataset.panning; board.style.cursor = ""; }
+});
+
+board.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  commitEdit();
+  const p = screenPoint(e);
+  zoomAt(p[0], p[1], cam.z * Math.pow(1.12, -Math.sign(e.deltaY)), 0);
+}, { passive: false });
+
+function zoomAt(sx, sy, next, ms) {
+  next = Math.min(T.zoomMax, Math.max(T.zoomMin, next));
+  if (next === cam.z) return;
+  const apply = (z) => { const [wx, wy] = toWorld(sx, sy); cam.z = z; cam.x = sx - wx * z; cam.y = sy - wy * z; };
+  if (!ms || !motionOn()) { apply(next); render(); return; }
+  const from = cam.z, t0 = performance.now();
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / ms);
+    const e = k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+    apply(from + (next - from) * e); render();
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+document.getElementById("zoomIn").onclick = () => zoomAt(board.clientWidth / 2, board.clientHeight / 2, nextStep(cam.z, 1), T.buttonMs);
+document.getElementById("zoomOut").onclick = () => zoomAt(board.clientWidth / 2, board.clientHeight / 2, nextStep(cam.z, -1), T.buttonMs);
+function nextStep(z, dir) {
+  const s = T.zoomSteps;
+  return dir > 0 ? (s.find(v => v > z) ?? z) : (s.filter(v => v < z).pop() ?? z);
+}
+
+function glide() {
+  const tick = () => {
+    vel.x *= (1 - T.friction); vel.y *= (1 - T.friction);
+    if (Math.hypot(vel.x, vel.y) < 0.4) return;
+    cam.x += vel.x; cam.y += vel.y; render();
+    raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+}
+
+/* 吸附：边与中线，阈值按屏幕像素换算成世界单位（抄 tldraw / Excalidraw 的 8/zoom）*/
+function snapBox(box, others, threshold) {
+  const srcX = [box.x, box.x + box.w / 2, box.x + box.w];
+  const srcY = [box.y, box.y + box.h / 2, box.y + box.h];
+  const tgtX = others.flatMap(o => [o.x, o.x + o.w / 2, o.x + o.w]);
+  const tgtY = others.flatMap(o => [o.y, o.y + o.h / 2, o.y + o.h]);
+  const best = (srcs, tgts) => {
+    let delta = 0, dist = threshold + 1, hits = [];
+    for (const s of srcs) for (const t of tgts) {
+      const d = t - s;
+      if (Math.abs(d) > threshold) continue;
+      if (Math.abs(d) < dist - 1e-9) { dist = Math.abs(d); delta = d; hits = [t]; }
+      else if (Math.abs(Math.abs(d) - dist) <= 1e-9 && !hits.includes(t)) hits.push(t);
+    }
+    return { delta, hits };
+  };
+  const bx = best(srcX, tgtX), by = best(srcY, tgtY);
+  const guides = [
+    ...bx.hits.map(x => ({ x, y: box.y + by.delta, w: 0, h: box.h })),
+    ...by.hits.map(y => ({ x: box.x + bx.delta, y, w: box.w, h: 0 })),
+  ];
+  return { x: box.x + bx.delta, y: box.y + by.delta, guides };
+}
+
+function onNoteDown(e) { noteDown(e, e.currentTarget); }
+/* node 参数化：手柄那一层也可以把一发按下转交给「移动」，见 onHandleDown 里的深度判据 */
+function noteDown(e, node) {
+  if (e.button !== 0 || e.target.isContentEditable) return;
+  if (spaceDown) return;   // 空格按住＝平移模式：这一发交回板子，不许抢成移动
+  e.stopPropagation();
+  let id = node.dataset.id;
+  commitEdit();
+  board.focus();
+  const hit = notes.find(n => n.id === id);
+  const g = hit ? groupOf(hit) : null;
+
+  if (e.ctrlKey || e.metaKey && !e.altKey) {           // 加选／减选走「单枚」这一层
+    if (sel.has(id)) sel.delete(id); else sel.add(id);
+    groupFocus = g ? g.id : null; unitMode = false;
+    render(); return;
+  }
+  /* 层次（你的第 1 条）：第一次点组内的格＝整组选中；同一个组里再点第二下＝只选那一枚。
+     已经进到组里之后再点别的成员＝继续单枚（不许在"整组／单枚"之间来回弹）。 */
+  if (e.altKey) {                                      // Alt＋拖＝原地复制并拖副本（Figma/tldraw 的既有语义）
+    const before = new Set(notes.map(n => n.id));
+    cmdDuplicate(0);
+    const fresh = notes.find(n => !before.has(n.id) && Math.abs(n.x - hit.x) < 1 && Math.abs(n.y - hit.y) < 1);
+    if (fresh) { id = fresh.id; node = items.querySelector(`[data-id="${fresh.id}"]`) || node; }
+    groupFocus = null; unitMode = false;
+  } else if (g && unitMode && groupFocus === g.id) {
+    sel.clear(); sel.add(id); unitMode = false;
+  } else if (g && groupFocus !== g.id) {
+    sel.clear(); for (const m of membersOf(g)) sel.add(m.id); groupFocus = g.id; unitMode = true;
+  } else if (!sel.has(id)) {
+    sel.clear(); sel.add(id);
+    if (!g) { groupFocus = null; unitMode = false; }
+  }
+  const locked = notes.find(n => n.id === id)?.lock;
+  if (locked) { render(); return; }                    // 锁定的格子：只选中，不拖不缩
+  // 用"按下前"的选中态判边：刚被选中的那一格，这一发仍然只移动，不许一按下就把边变成缩放
+  const edge = e.altKey ? "" : edgeDirAt(node, e);
+
+  const sp = screenPoint(e);
+  const [wx, wy] = toWorld(sp[0], sp[1]);
+  const primary = notes.find(n => n.id === id);
+
+  if (edge && startEdgeResize(edge, node, e)) return;
+
+  const attached = new Set();
+  for (const sid of sel) { const g = groupOf(notes.find(v => v.id === sid)); if (g) attached.add(g.id); }
+
+  drag = {
+    ids: [...sel], node,
+    start: [...sel].map(sid => { const n = notes.find(v => v.id === sid); return [sid, n.x, n.y]; }),
+    // 组框跟着成员走：拖的是组里的格子，框必须一起动，否则一拖就"出组"（成员＝几何包含的直接后果）
+    groupSnap: groups.map(g => ({ g, x: g.x, y: g.y, on: attached.has(g.id) })),
+    grab: [wx - primary.x, wy - primary.y],
+    p0: [primary.x, primary.y],
+    screen0: [e.clientX, e.clientY],
+    pre: snapshot(),
+    armed: false,
+  };
+
+  node.classList.add("pressed");
+  capture(node, e.pointerId);
+  node.addEventListener("pointermove", onDragMove);
+  node.addEventListener("pointerup", onDragUp);
+  node.addEventListener("pointercancel", onDragUp);
+  render();
+}
+
+function onDragMove(e) {
+  if (!drag) return;
+  if (!drag.armed) {
+    if (Math.hypot(e.clientX - drag.screen0[0], e.clientY - drag.screen0[1]) < T.dragThreshold) return;
+    drag.armed = true;
+    drag.node.classList.add("dragging");
+  }
+  const [wx, wy] = toWorld(...screenPoint(e));
+  let dx = wx - drag.grab[0] - drag.p0[0];
+  let dy = wy - drag.grab[1] - drag.p0[1];
+
+  const primary = notes.find(n => n.id === drag.ids[0]);
+  if (primary) {
+    const moved = { x: drag.p0[0] + dx, y: drag.p0[1] + dy, w: primary.w, h: primary.h };
+    const others = notes.filter(n => !drag.ids.includes(n.id)).map(n => ({ x: n.x, y: n.y, w: n.w, h: n.h }));
+    const snapped = snapBox(moved, others, T.snapPx / cam.z);
+    dx += snapped.x - moved.x; dy += snapped.y - moved.y;
+    guides = snapped.guides;
+  }
+
+  for (const [id, ox, oy] of drag.start) {
+    const n = notes.find(v => v.id === id);
+    if (n) { n.x = ox + dx; n.y = oy + dy; }
+  }
+  for (const s of drag.groupSnap) if (s.on) { s.g.x = s.x + dx; s.g.y = s.y + dy; }
+  render();
+}
+
+function onDragUp() {
+  if (!drag) return;
+  const moved = drag.armed;
+  if (moved) pushState("移动", drag.pre);
+  drag.node.classList.remove("dragging", "pressed");
+  drag.node.removeEventListener("pointermove", onDragMove);
+  drag.node.removeEventListener("pointerup", onDragUp);
+  drag.node.removeEventListener("pointercancel", onDragUp);
+  drag = null; guides = [];
+  if (moved) clearSel();          // 你的第 3 条：拖完不要再挂着选中态（点一下才算选中）
+  render();
+}
+
+/* ── 边上直接缩放（Figma 的做法：只对"已经选中"的那格生效）───────────────
+   没选中时那条边仍然用来移动 ⇒ 不会把"我想拖走它"变成"我把这格拉窄了"。
+   6 屏幕像素是我自己定的数：要贴着那 1px 描边，又不能让整格半壁江山都变成热区。
+   WinUI 里只有 4 枚缩放光标（ns/ew/nwse/nesw + SizeAll），斜角得镜像复用，这里同一套名字。 */
+const RESIZE_CURSOR = {
+  n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize",
+  nw: "nwse-resize", se: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize",
+};
+function edgeDirRect(r, x, y, band) {
+  const near = [];
+  // 允许"边外 band 像素"也算命中：肉眼瞄的是那条 1px 线，落点常在它外面 1~3px，
+  // 那一发如果交给板子，就变成平移 —— 这正是"还是无法拖边缘调大小"的实测成因。
+  const dn = y - r.top, ds = r.bottom - y, dw = x - r.left, de = r.right - x;
+  if (dn >= -band && dn <= band) near.push("n");
+  if (ds >= -band && ds <= band) near.push("s");
+  if (dw >= -band && dw <= band) near.push("w");
+  if (de >= -band && de <= band) near.push("e");
+  if (near.length > 2) return "";
+  return "nsew".split("").filter(k => near.includes(k)).join("");
+}
+function selScreenRect() {
+  const list = [...sel].map(id => notes.find(n => n.id === id)).filter(Boolean);
+  if (!list.length) return null;
+  const b = bounds(list);
+  const [sx, sy] = toScreen(b.x, b.y);
+  return { left: sx, top: sy, right: sx + b.w * cam.z, bottom: sy + b.h * cam.z };
+}
+const boardEdgeAt = (x, y) => { const r = selScreenRect(); return r ? edgeDirRect(r, x, y, T.edgePx) : ""; };
+function edgeDirAt(node, e) {
+  const id = node.dataset.id;
+  if (!sel.has(id)) return "";
+  return edgeDirRect(node.getBoundingClientRect(), e.clientX, e.clientY, T.edgePx);
+}
+let hoveredForCursor = null;
+function edgeCursor(e) {
+  const node = e.target.closest ? e.target.closest(".note") : null;
+  // 手柄/格子自己用客户区坐标（它们的 rect 也是客户区），选中框那层是板内坐标 ⇒ 分开喂
+  const lp = screenPoint(e);
+  const dir = node ? edgeDirAt(node, e) : boardEdgeAt(lp[0], lp[1]);
+  const c = RESIZE_CURSOR[dir] || "";
+  const host = node || board;
+  if (hoveredForCursor && hoveredForCursor !== host) { hoveredForCursor.style.cursor = ""; hoveredForCursor = null; }
+  if (host.style.cursor !== c) host.style.cursor = c;
+  if (c) hoveredForCursor = host;
+}
+/* 边上那一下的起手：node 为空表示按在板子的空白处（选择框边界上），手势挂给 board */
+function startEdgeResize(dir, node, e) {
+  const list = [...sel].map(id => notes.find(n => n.id === id)).filter(Boolean);
+  if (!list.length) return false;
+  resize = { dir, box: bounds(list), start: list.map(n => [n.id, n.x, n.y, n.w, n.h]), pre: snapshot() };
+  const host = node || board;
+  if (node) node.classList.add("pressed");
+  capture(host, e.pointerId);
+  host.addEventListener("pointermove", onHandleMove);
+  host.addEventListener("pointerup", onEdgeUp);
+  host.addEventListener("pointercancel", onEdgeUp);
+  render();
+  return true;
+}
+
+function onHandleDown(e) {
+  if (e.button !== 0) return;
+  e.stopPropagation();
+  const dir = e.currentTarget.dataset.dir;
+  const ids = [...sel];
+  const list = ids.map(id => notes.find(n => n.id === id)).filter(Boolean);
+  if (!list.length) return;
+  /* 手柄是 24px 见方、跨在边框上（内 12 外 12）。你按在右缘里面那 12px 时本意是「搬走它」，
+     却被手柄抢成缩放 ⇒ 对边不动、本体只挪一点点（＝你报的「图片拖出去好远」）。
+     判据：按下点在选中框内部超过 4px，就交还给移动；外面那 12px 仍然归缩放。 */
+  const rr = selScreenRect(), bb = board.getBoundingClientRect();
+  const px = e.clientX - bb.left, py = e.clientY - bb.top;
+  const depth = Math.min(px - rr.left, rr.right - px, py - rr.top, rr.bottom - py);
+  if (depth > 4) {
+    const hit = list.map(n => items.querySelector(`[data-id="${n.id}"]`)).find(el => {
+      const q = el.getBoundingClientRect();
+      return e.clientX >= q.left && e.clientX <= q.right && e.clientY >= q.top && e.clientY <= q.bottom;
+    }) || items.querySelector(`[data-id="${list[0].id}"]`);
+    noteDown(e, hit);
+    return;
+  }
+  resize = {
+    dir, node: e.currentTarget,
+    box: bounds(list),
+    start: list.map(n => [n.id, n.x, n.y, n.w, n.h]),
+    pre: snapshot(),
+  };
+  capture(e.currentTarget, e.pointerId);
+  e.currentTarget.addEventListener("pointermove", onHandleMove);
+  e.currentTarget.addEventListener("pointerup", onHandleUp);
+}
+
+function onHandleMove(e) {
+  if (!resize) return;
+  const [wx, wy] = toWorld(...screenPoint(e));
+  let { x, y, w, h } = resize.box, d = resize.dir;
+  if (d.includes("w")) { const nx = Math.min(wx, x + w - 20); w -= (nx - x); x = nx; }
+  if (d.includes("e")) { w = Math.max(20, wx - x); }
+  if (d.includes("n")) { const ny = Math.min(wy, y + h - 20); h -= (ny - y); y = ny; }
+  if (d.includes("s")) { h = Math.max(20, wy - y); }
+
+  const sx = resize.box.w ? w / resize.box.w : 1;
+  const sy = resize.box.h ? h / resize.box.h : 1;
+  for (const [id, ox, oy, ow, oh] of resize.start) {
+    const n = notes.find(v => v.id === id);
+    if (!n) continue;
+    n.x = x + (ox - resize.box.x) * sx; n.y = y + (oy - resize.box.y) * sy;
+    n.w = Math.max(20, ow * sx); n.h = Math.max(20, oh * sy);
+  }
+  render();
+}
+
+function onHandleUp(e) {
+  e.currentTarget.removeEventListener("pointermove", onHandleMove);
+  e.currentTarget.removeEventListener("pointerup", onHandleUp);
+  if (resize && JSON.stringify(resize.pre) !== JSON.stringify(snapshot())) pushState("缩放", resize.pre);
+  resize = null; render();
+}
+
+/* 边上那一下的收尾：监听挂在格子上，摘也要摘在格子上 */
+function onEdgeUp(e) {
+  const node = e.currentTarget;
+  node.removeEventListener("pointermove", onHandleMove);
+  node.removeEventListener("pointerup", onEdgeUp);
+  node.removeEventListener("pointercancel", onEdgeUp);
+  node.classList.remove("pressed");
+  if (resize && JSON.stringify(resize.pre) !== JSON.stringify(snapshot())) pushState("缩放", resize.pre);
+  resize = null; render();
+}
+
+/* ── 就地编辑（屏幕空间覆盖层，和 WinUI 那条同一个理由）────────────────── */
+let editPre = null;
+function beginEdit(id) {
+  const n = notes.find(v => v.id === id);
+  if (!n || n.kind !== "text") return;
+  commitEdit();
+  editing = id;
+  {
+    // 编辑看原文：渲染态提交会把 ** 与 - 全丢掉（textContent 里没有标记）。
+    const b = items.querySelector(`[data-id="${id}"] .body`);
+    const n0 = notes.find((v) => v.id === id);
+
+    if (b && n0) {
+      b.dataset.src = "";
+      b.textContent = n0.t;
+    }
+  }
+  editPre = snapshot();
+  render();   // 你的第 2 条：编辑中不该挂着那一圈蓝框——必须在进编辑这一帧就收掉，等第一次打字才消失就是闪
+  const el = items.querySelector(`[data-id="${id}"] .body`);
+  el.contentEditable = "plaintext-only";
+  el.focus();
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const sel0 = window.getSelection();
+  sel0.removeAllRanges(); sel0.addRange(range); sel0.collapseToEnd();
+  el.addEventListener("blur", commitEdit);
+  // 边打字边定高（tldraw 的便签就是这么跟着长的），不然要等提交才收缩
+  el.addEventListener("input", () => { fit(n); render(); });
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commitEdit(); }
+  });
+}
+function cancelEdit() {
+  if (!editing) return;
+  const el = items.querySelector(`[data-id="${editing}"] .body`);
+  if (el) { el.removeEventListener("blur", commitEdit); el.contentEditable = "false"; el.textContent = notes.find(n => n.id === editing).t; }
+  editing = null; render();
+}
+function commitEdit() {
+  if (!editing) return;
+  const id = editing, n = notes.find(v => v.id === id);
+  const el = items.querySelector(`[data-id="${id}"] .body`);
+  editing = null;
+  if (n && el) {
+    const was = n.t;
+    n.t = el.textContent.replace(/\r\n?/g, "\n");
+    el.removeEventListener("blur", commitEdit); el.contentEditable = "false";
+    fit(n);
+    // 只在字真的变了才记一笔：fit() 会动 h，拿整块快照比会造出「没改字也要撤回」的空动作
+    if (editPre && was !== n.t) pushState("改字", editPre);
+    editPre = null;
+  }
+  render();
+}
+/* markdown 子集：认得的就渲成块，一个都不认得就返回 null（调用方走原来的纯文本路径，
+   这样普通便签的渲染一行代码都没变）。规则与 App 侧 Core/Markdown.cs 一一对应。 */
+function mdInline(s) {
+  return esc(s)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    .replace(/`(.+?)`/g, "<code>$1</code>")
+    .replace(/\[([^\]]*)\]\(([^)]*)\)/g, '<a href="$2">$1</a>');
+}
+
+/* 整块判据：有一行带 markup 就算 markdown，否则返回 null 走原来的纯文本路径 ⇒ 普通便签的渲染
+   一行代码都没变。不能要求"每一行都是 markup"：标题＋正文是最常见的一格，被逐行判据否掉就等于
+   这一格永远不渲。App 侧同一条在 Core/Markdown.cs 的 LooksLikeMarkdown。 */
+function mdLooks(text) {
+  for (const raw of String(text == null ? "" : text).split("\n")) {
+    const line = raw.trim();
+    if (/^#{1,3}\s/.test(line) || /^[-*+]\s/.test(line) || /^>/.test(line)) return true;
+    if (/^\d{1,2}[.)]\s/.test(line) || /^(?:-{3,}|\*{3,}|_{3,})$/.test(line)) return true;
+    if (line.includes("**") || line.includes("`") || line.includes("](")) return true;
+    if (line.includes("*") && /\*\*.+?\*\*|\*.+?\*/.test(line)) return true;
+  }
+  return false;
+}
+
+function mdHtml(text) {
+  if (!mdLooks(text)) return null;
+  const lines = String(text == null ? "" : text).split("\n");
+  const out = [];
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    let m;
+
+    if (!line) { out.push(`<p class="md">&nbsp;</p>`); continue; }
+    if ((m = /^(#{1,3})\s+(.*)$/.exec(line))) {
+      const n = m[1].length;
+      out.push(`<p class="md h${n}">${mdInline(m[2])}</p>`); continue;
+    }
+    if ((m = /^[-*+]\s+\[([ xX])\]\s*(.*)$/.exec(line))) {
+      const done = m[1] !== " ";
+      out.push(`<p class="md li${done ? " todo-done" : ""}">${done ? "☑" : "☐"} ${mdInline(m[2])}</p>`); continue;
+    }
+    if ((m = /^[-*+]\s+(.*)$/.exec(line))) { out.push(`<p class="md li">• ${mdInline(m[1])}</p>`); continue; }
+    if ((m = /^(\d{1,2})[.)]\s+(.*)$/.exec(line))) { out.push(`<p class="md li">${m[1]}. ${mdInline(m[2])}</p>`); continue; }
+    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(line)) { out.push(`<p class="md hr"></p>`); continue; }
+    if ((m = /^>\s?(.*)$/.exec(line))) { out.push(`<p class="md q">${mdInline(m[1])}</p>`); continue; }
+    out.push(`<p class="md">${mdInline(line)}</p>`);
+  }
+
+  return out.join("");
+}
+
+/* 便签按内容定高（tldraw 的 note 就是动态尺寸）。原来只撑高、从不缩回 ⇒
+   文字只占框高 40~50%，一小块字漂在半空色块正中——这就是「说不出哪里不舒服」的最大一项。
+   量的是行矩形的并集，不是 scrollHeight：.body 被 flex 拉满了，scrollHeight 等于框高，量不出内容。 */
+/* 便签大小随文字（页眉那一档可以关掉）：关掉之后编辑只改文字不改框高，缩放交给手柄。
+   这是你这一轮要的第 4 条——默认开，因为「方块半空」是上一轮量出来的最大问题（填充率 39.7%~50.1%）。 */
+function fit(n) {
+  if (document.documentElement.dataset.fit === "off") return;
+  const el = items.querySelector(`[data-id="${n.id}"] .body`);
+  const min = Math.max(64, Math.ceil(T.notePad * 2 + T.noteLeading));
+  if (!el) { n.h = min; return; }
+  const r = document.createRange(); r.selectNodeContents(el);
+  const rects = [...r.getClientRects()];
+  if (!rects.length) { n.h = min; return; }
+  const top = Math.min(...rects.map(q => q.top)), bottom = Math.max(...rects.map(q => q.bottom));
+  n.h = Math.max(min, Math.ceil((bottom - top) / cam.z + T.notePad * 2));
+}
+
+/* ── 布局命令层（每条独立，可单独删）────────────────────────────────────
+   几何：所有命令都只改模型的 x/y/w/h，然后交给 tweenTo() 走一段减速曲线——
+   这就是 WinUI 里 RepositionThemeTransition 的等价物（程序性重排必须让人看见"从哪到哪"，
+   否则一次按键把画面改了，人会失去位置感）。 */
+let animToken = 0;
+/* cubic-bezier(x1,y1,x2,y2) 的求值器（Newton 迭代 5 次，收敛不到就夹住）：
+   CSS 里能直接写 cubic-bezier，JS 里手搓补间就没有——而我这两条补间都要用「公布过的曲线」，
+   不想拿 Math.pow(1-p,3) 那种"看着像减速"的近似糊过去（那是上一版的写法，曲线形状对不上任何一家）。 */
+function bezier(x1, y1, x2, y2) {
+  /* 伯恩斯坦展开（P0=0、P3=1）：c=3p1，b=3(p2−p1)−c，a=1−c−b ⇒ a 那一项是 1+3p1−3p2。
+     我第一版把它写成 1−3p2+2p1，于是 x(1)≠1、整条曲线非单调（现采样才露出来：0.5 那一档给出 0.62，
+     而 0.75 反而回落到 0.46）。系数错不会抛异常，只会给一条"看着在动"的错曲线。 */
+  const A = (a, b) => 1 + 3 * a - 3 * b, B = (a, b) => 3 * b - 6 * a, C = (a) => 3 * a;
+  const calc = (t, a, b) => ((A(a, b) * t + B(a, b)) * t + C(a)) * t;
+  const slope = (t, a, b) => 3 * A(a, b) * t * t + 2 * B(a, b) * t + C(a);
+  return (x) => {
+    if (x <= 0) return 0; if (x >= 1) return 1;
+    let t = x;
+    for (let i = 0; i < 8; i++) {
+      const d = slope(t, x1, x2);
+      if (Math.abs(d) < 1e-6) break;
+      t = Math.min(1, Math.max(0, t - (calc(t, x1, x2) - x) / d));   // 夹回 [0,1]：平坡处牛顿一步能甩出定义域
+    }
+    return calc(t, y1, y2);
+  };
+}
+const EASE_LAYOUT = bezier(0.05, 0.7, 0.1, 1);   // Material 3 的 emphasized-decelerate：起步快、收尾慢、不回弹
+const EASE_CAMERA = bezier(0.65, 0, 0.35, 1);    // tldraw 给按钮/菜单那一档：320ms easeInOutCubic
+function tweenTo(targets, ms, done) {
+  ms = ms || 250;
+  const from = new Map(notes.map(n => [n.id, [n.x, n.y, n.w, n.h]]));
+  // targets 是 [[id,x,y,w,h],…]；Map 的条目只认 [键,值] 两元，直接喂五元数组会把 y/w/h 悄悄丢掉
+  const to = new Map(targets.map(([id, x, y, w, h]) => [id, { x, y, w, h }]));
+  if (!motionOn()) {
+    for (const [id, t] of to) { const n = notes.find(v => v.id === id); if (n) { n.x = t.x; n.y = t.y; n.w = t.w; n.h = t.h; } }
+    render(); if (done) done(); return;
+  }
+  const token = ++animToken, t0 = performance.now();
+  const step = (now) => {
+    if (token !== animToken) return;                 // 新命令进来就作废上一段，别叠动画
+    const p = Math.min(1, (now - t0) / ms), k = EASE_LAYOUT(p);
+    for (const [id, t] of to) {
+      const n = notes.find(v => v.id === id), f = from.get(id);
+      if (!n || !f) continue;
+      n.x = f[0] + (t.x - f[0]) * k; n.y = f[1] + (t.y - f[1]) * k;
+      n.w = f[2] + (t.w - f[2]) * k; n.h = f[3] + (t.h - f[3]) * k;
+    }
+    render();
+    if (p < 1) requestAnimationFrame(step); else if (done) done();
+  };
+  requestAnimationFrame(step);
+}
+function tweenCamera(b, ms) {
+  ms = ms || 250;
+  const pad = 60;
+  const z = Math.max(T.zoomMin, Math.min(T.zoomMax, Math.min((board.clientWidth - pad * 2) / b.w, (board.clientHeight - pad * 2) / b.h)));
+  const goal = { z, x: board.clientWidth / 2 - (b.x + b.w / 2) * z, y: board.clientHeight / 2 - (b.y + b.h / 2) * z };
+  if (!motionOn()) { Object.assign(cam, goal); render(); return; }
+  const token = ++animToken, f = { ...cam }, t0 = performance.now();
+  const step = (now) => {
+    if (token !== animToken) return;
+    const p = Math.min(1, (now - t0) / ms), k = EASE_CAMERA(p);
+    cam.z = f.z + (goal.z - f.z) * k; cam.x = f.x + (goal.x - f.x) * k; cam.y = f.y + (goal.y - f.y) * k;
+    render();
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+const selNotes = () => [...sel].map(id => notes.find(n => n.id === id)).filter(Boolean);
+/* 按钮点下去就要有结果（你第 3 条的口诀）：选中不够枚数时，命令对象退化成"全体"。
+   键盘那一面调的是同一个函数，所以两面行为一致——不是给按钮单独写一套逻辑。 */
+const cmdTargets = (min) => { const s = selNotes(); return s.length >= min ? s : notes; };
+const byOrder = (list) => [...list].sort((a, b) => notes.indexOf(a) - notes.indexOf(b));
+/* 布局命令都走同一条路：算目标 → tweenTo(250ms, Material 的 emphasized-decelerate) →
+   落定后把组的框重新贴合成员。250ms 是 M3 的 medium1，emphasized-decelerate 是 (0.05,0.7,0.1,1)：
+   起步快、收尾慢、不回弹——这就是"灵动但不夸张"的那条线。 */
+const LAYOUT_MS = 250;
+function applyTargets(list, targets) {
+  const snap = snapshotGroups();
+  tweenTo(list.map((n, i) => [n.id, ...targets[i]]), LAYOUT_MS, () => refitGroups(snap));
+}
+/* 对齐：容器＝选中包围盒（tldraw 的 alignShapes 用的就是 commonBounds），键位抄 tldraw：
+   Alt+A 左 / Alt+H 水平居中 / Alt+D 右 / Alt+W 上 / Alt+V 垂直居中 / Alt+S 下 */
+function cmdAlign(kind) {
+  const list = byOrder(cmdTargets(2)); if (list.length < 2) return;
+  pushPre("对齐");
+  const b = bounds(list);
+  const targets = list.map(n => {
+    let { x, y } = n;
+    if (kind === "left") x = b.x;
+    else if (kind === "right") x = b.x + b.w - n.w;
+    else if (kind === "hcenter") x = b.x + (b.w - n.w) / 2;
+    else if (kind === "top") y = b.y;
+    else if (kind === "bottom") y = b.y + b.h - n.h;
+    else if (kind === "vcenter") y = b.y + (b.h - n.h) / 2;
+    return [x, y, n.w, n.h];
+  });
+  applyTargets(list, targets);
+}
+/* 均匀排开：两家语义不同，都记在表里——Excalidraw 的 space:"between" 是 (n−1) 个间隔、**首尾钉住**；
+   tldraw 的 distributeShapes 是 (n+1)、连两端留等宽空隙。这里取 Excalidraw 那种（更符合"排开"的直觉），
+   键位用 tldraw 的 Alt+Shift+H / Alt+Shift+V。它要求 ≥3 个（两枚时"间隔相等"无意义）。 */
+function cmdDistribute(axis) {
+  const list = byOrder(cmdTargets(3)); if (list.length < 3) return;
+  pushPre("均匀排开");
+  const key = axis === "x" ? "x" : "y", size = axis === "x" ? "w" : "h";
+  const b = bounds(list);
+  const span = b[axis === "x" ? "w" : "h"];
+  const sum = list.reduce((s, n) => s + n[size], 0);
+  /* 间隔不许为负。Excalidraw/tldraw 的数学都是"在当前包围盒里分间隔"，我照抄过一次就踩坑：
+     刚按完"左对齐"的四格，包围盒只有一格宽 ⇒ 实测间隔 −216 ⇒ "均匀排开"把四格压成一格。
+     所以给一个下限 24（与堆叠、聚拢同一个数），包围盒不够就把它**撑开**，起点仍钉在原包围盒的左/上边
+     ——往右/往下展开，"这一排还在原地"。这一半是我的判断，不是先客。 */
+  const MIN_GAP = 24;
+  const use = Math.max(span, sum + MIN_GAP * (list.length - 1));
+  const step = (use - sum) / (list.length - 1);
+  let cur = b[key];                     // 起点钉在原包围盒的左/上边，只往右/往下撑（"这一排还在原地"）
+  applyTargets(list, list.map(n => { const t = { ...n }; t[key] = cur; cur += n[size] + step; return [t.x, t.y, t.w, t.h]; }));
+}
+/* 堆叠：左上角阶梯，每格露出 24 世界像素的边 ⇒ 互相不完全遮挡。
+   点名：这个"一沓"的固定偏移在四家产品里都没找到公开数（tldraw 的 stackShapes 是排成行，不是堆），
+   24 是我按"能看见上一格的边"定的判断值。 */
+function cmdStack() {
+  const list = byOrder(cmdTargets(2)); if (list.length < 2) return;
+  pushPre("堆叠");
+  const b = bounds(list), off = 24;
+  applyTargets(list, list.map((n, i) => [b.x + i * off, b.y + i * off, n.w, n.h]));
+}
+/* 聚拢：按颜色或按 #标签 分簇，每簇一行，簇内左→右；顺序按该簇第一次出现的位置（＝z 序）。
+   落定后**按簇重建组框**（≥2 张才给框）：这样"聚拢"的结果是可命名的容器而不是一堆碰巧靠近的格子，
+   代价是原来手工分组的框会被解散——它能撤回（快照里含 groups），这一条在配方表里点名。
+   两支现在都从**属性行**里取（@d… / @t…），正文里的 # 一律是散文——所以那枚互相踩的坑连形状都不存在了。 */
+function cmdCluster(kind) {
+  const keysOf = kind === "color"
+    ? (n) => n.p || n.c || "none"
+    : (n) => tagsOf(n)[0] || "#无标签";
+  const clusters = new Map();
+  for (const n of byOrder(notes)) { const k = keysOf(n); if (!clusters.has(k)) clusters.set(k, []); clusters.get(k).push(n); }
+  pushPre(kind === "color" ? "按颜色聚拢" : "按标签聚拢");
+  const gap = 24, rowGap = 48; let y = 40;
+  const targets = [], rows = [];
+  for (const [key, list] of clusters) {
+    const h = Math.max(...list.map(n => n.h));
+    let x = 40;
+    for (const n of list) { targets.push([n.id, x, y, n.w, n.h]); x += n.w + gap; }
+    rows.push({ key, list });
+    y += h + rowGap;
+  }
+  tweenTo(targets, LAYOUT_MS, () => {
+    clearSel();
+    groups = rows.filter(r => r.list.length >= 2).map(r => {
+      const b = bounds(r.list);
+      return { id: uid("g"), label: kind === "color" ? (PAL_CN[r.key] || r.key) : r.key,
+        x: b.x - GROUP_PAD, y: b.y - GROUP_PAD, w: b.w + GROUP_PAD * 2, h: b.h + GROUP_PAD * 2 };
+    });
+    render();
+  });
+}
+/* 组：JSON Canvas 1.0 的 group 节点**没有成员列表**——规范原文是"Group type nodes are used as a
+   visual container for nodes within it"，成员＝几何包含。所以我不往便签上偷塞私有字段（那会污染文档、
+   agent 也读不懂），而是存一个矩形，成员现算。附带好处正是 tldraw 的行为：把成员拖出框，它就自然离组。
+   label 也是规范的可选字段 ⇒ 组名能直接进文件。 */
+const GROUP_PAD = 10;                      // 世界像素：框比成员包围盒外扩一条边（Obsidian 也是外扩）
+let groups = [];                           // [{id,label,x,y,w,h}] —— 规范里 group 节点的全部字段
+const uid = (p) => p + Math.random().toString(36).slice(2, 8);   // 文档里的 id 只要唯一，不表意
+const centerOf = (n) => [n.x + n.w / 2, n.y + n.h / 2];
+function membersOf(g) {
+  return notes.filter(n => { const [cx, cy] = centerOf(n); return cx >= g.x && cx <= g.x + g.w && cy >= g.y && cy <= g.y + g.h; });
+}
+function groupOf(n) {
+  const [cx, cy] = centerOf(n);
+  for (let i = groups.length - 1; i >= 0; i--) {
+    const g = groups[i];
+    if (cx >= g.x && cx <= g.x + g.w && cy >= g.y && cy <= g.y + g.h) return g;
+  }
+  return null;
+}
+const snapshotGroups = () => groups.map(g => ({ g, ids: membersOf(g).map(n => n.id) }));
+function refitGroups(snap) {
+  for (const { g, ids } of snap) {
+    const list = ids.map(id => notes.find(n => n.id === id)).filter(Boolean);
+    if (!list.length) continue;
+    const b = bounds(list);
+    g.x = b.x - GROUP_PAD; g.y = b.y - GROUP_PAD; g.w = b.w + GROUP_PAD * 2; g.h = b.h + GROUP_PAD * 2;
+  }
+}
+function cmdGroup() {
+  const list = selNotes(); if (list.length < 2) return;
+  pushPre("成组");
+  const b = bounds(list);
+  const made = { id: uid("g"), label: "", x: b.x - GROUP_PAD, y: b.y - GROUP_PAD, w: b.w + GROUP_PAD * 2, h: b.h + GROUP_PAD * 2 };
+  groups.push(made);
+  groupFocus = made.id; unitMode = true;   // 刚成组＝停在组这一层（下一点击才进单枚）
+  render();
+}
+function cmdUngroup() {
+  const hit = new Set();
+  for (const n of selNotes()) { const g = groupOf(n); if (g) hit.add(g.id); }
+  if (!hit.size) return;
+  pushPre("拆组");
+  groups = groups.filter(g => !hit.has(g.id));
+  if (hit.has(groupFocus)) clearSel();
+  render();
+}
+/* 复制：Ctrl+D 或 Alt＋拖 */
+function cmdDuplicate(offset) {
+  const list = selNotes(); if (!list.length) return;
+  const off = offset === undefined ? 24 : offset;
+  pushPre("复制");
+  const copies = list.map(n => ({ ...n, id: uid("n"), x: n.x + off, y: n.y + off }));
+  notes.push(...copies); clearSel(); for (const c of copies) sel.add(c.id); render();
+}
+/* 层序：数组顺序就是 JSON Canvas 的 z-order ⇒ 这两条直接落到文档 */
+function cmdOrder(front) {
+  const list = selNotes(); if (!list.length) return;
+  pushPre(front ? "移到最前" : "移到最后");
+  const rest = notes.filter(n => !list.includes(n));
+  notes = front ? [...rest, ...list] : [...list, ...rest];
+  render();
+}
+function cmdLock() {
+  const list = selNotes(); if (!list.length) return;
+  const on = !list.every(n => n.lock);
+  pushPre(on ? "锁定" : "解锁");
+  for (const n of list) n.lock = on || undefined;
+  render();
+}
+const selBounds = () => bounds(selNotes().length ? selNotes() : notes);
+function cmdActualSize() {
+  const cx = (board.clientWidth / 2 - cam.x) / cam.z, cy = (board.clientHeight / 2 - cam.y) / cam.z;
+  cam.z = 1; cam.x = board.clientWidth / 2 - cx; cam.y = board.clientHeight / 2 - cy; render();
+}
+function cmdZoomTo(all) {
+  const list = all ? notes : selNotes();
+  if (!list.length) return;
+  const b = bounds(list);
+  tweenCamera({ x: b.x, y: b.y, w: Math.max(1, b.w), h: Math.max(1, b.h) }, 320);
+}
+/* 骨架：把"一块白板"变成"有栏目的板子"。三套互不相干，都只造节点，不碰别的机制。
+   列名用 group 的 label 字段（Obsidian 的组标题就是这么渲染的），不占一张便签。
+   尺寸（列宽 240／列间 32／卡高 118／卡间 24）＝我的判断值：四家产品都没有公布过骨架尺寸（配方表按 NOT FOUND 记）。
+   落点＝当前视口中心（不是世界原点）：人正在看哪儿，骨架就长在哪儿，不用跳相机。 */
+const SKEL = { w: 240, gap: 32, cardH: 118, cardGap: 24, rows: 2 };
+const SKEL_COLS = { day: ["今天", "本周", "以后"], retro: ["事实", "情绪", "卡点", "下一步"], kanban: ["未开始", "进行中", "已完成"] };
+function cmdSkeleton(kind) {
+  const cols = SKEL_COLS[kind]; if (!cols) return;
+  pushPre("插入骨架");
+  const totalW = cols.length * SKEL.w + (cols.length - 1) * SKEL.gap;
+  const totalH = SKEL.rows * SKEL.cardH + (SKEL.rows - 1) * SKEL.cardGap;
+  const [cx, cy] = toWorld(board.clientWidth / 2, board.clientHeight / 2);
+  const ox = Math.round(cx - totalW / 2), oy = Math.round(cy - totalH / 2);
+  const made = [];
+  cols.forEach((title, i) => {
+    const x = ox + i * (SKEL.w + SKEL.gap);
+    const cards = Array.from({ length: SKEL.rows }, (unused, j) => ({
+      id: uid("n"), kind: "text", x, y: oy + j * (SKEL.cardH + SKEL.cardGap), w: SKEL.w, h: SKEL.cardH, p: "paper", t: "" }));
+    notes.push(...cards);
+    groups.push({ id: uid("g"), label: title, x: x - GROUP_PAD, y: oy - GROUP_PAD,
+      w: SKEL.w + GROUP_PAD * 2, h: totalH + GROUP_PAD * 2 });
+    made.push(...cards);
+  });
+  if (kind === "retro") edges.push({ id: uid("e"), a: made[4].id, b: made[5].id });   // 演示：一条关系线长什么样
+  clearSel(); for (const m of made) sel.add(m.id);
+  render();
+}
+
+/* ── 连线（JSON Canvas 1.0 的 edge 节点）─────────────────────────────────
+   规范字段是 id / fromNode / toNode ＋ 可选 fromSide/toSide/fromEnd/toEnd/label/color。
+   原型存 {id,a,b,fs,ts}，导出映射成 fromNode/toNode/fromSide/toSide ⇒ Obsidian 打开就是合法的边。
+   线是自由曲线（三次贝塞尔），端点固定在矩形四边的中点上——你判「直线很突兀」，而「端点能换边」
+   正是规范里 fromSide/toSide 存在的理由。控制臂长＝0.45 倍端点距离、夹在 28~180 屏幕像素之间（判断值：
+   三家都用贝塞尔，但没有一家公布过控制臂；这个区间是我按「短距离别打圈、长距离别变直」定的）。
+   Alt+C 仍是来回键：这几对已有线就删，没有就补。 */
+let edges = [{ id: "e1", a: "n1", b: "n7" }];   // 演示：一条边（n1 是操作说明，n7 是到期约定）
+const nodeById = (id) => notes.find(n => n.id === id);
+const SIDE_VEC = { n: [0, -1], e: [1, 0], s: [0, 1], w: [-1, 0] };
+const f1 = (v) => v.toFixed(1);
+/* 该从哪一面进出：按归一化后的主轴判——扁长的格子更容易走上下两面，这是对的 */
+function sideOf(n, wx, wy) {
+  const dx = wx - (n.x + n.w / 2), dy = wy - (n.y + n.h / 2);
+  const nx = Math.abs(dx) / (n.w / 2 || 1), ny = Math.abs(dy) / (n.h / 2 || 1);
+  return nx >= ny ? (dx < 0 ? "w" : "e") : (dy < 0 ? "n" : "s");
+}
+const sidePoint = (n, side) => { const v = SIDE_VEC[side]; return [n.x + n.w / 2 + v[0] * n.w / 2, n.y + n.h / 2 + v[1] * n.h / 2]; };
+const autoSides = (a, b) => [sideOf(a, b.x + b.w / 2, b.y + b.h / 2), sideOf(b, a.x + a.w / 2, a.y + a.h / 2)];
+function cmdConnect() {
+  const list = byOrder(selNotes()); if (list.length < 2) return;   // 只有连线不退化成全体：把全体串成一条链是事故，不是效果
+  const pairs = []; for (let j = 0; j + 1 < list.length; j++) pairs.push([list[j].id, list[j + 1].id]);
+  const allOn = pairs.every(([a, b]) => edges.some(e => e.a === a && e.b === b));
+  pushPre(allOn ? "删连线" : "连线");
+  edges = allOn
+    ? edges.filter(e => !pairs.some(([a, b]) => e.a === a && e.b === b))
+    : edges.concat(pairs.filter(([a, b]) => !edges.some(e => e.a === a && e.b === b))
+      .map(([a, b]) => { const [fa, tb] = autoSides(nodeById(a), nodeById(b)); return { id: uid("e"), a, b, fs: fa, ts: tb }; }));
+  render();
+}
+/* 端点与进出面：没写过 fs/ts 就用「面对面」那一档（新建时已写进去，这一路给导入与手改兜底） */
+function edgeEnds(e) {
+  const a = nodeById(e.a), b = nodeById(e.b);
+  const [fa, tb] = autoSides(a, b);
+  const sa = SIDE_VEC[e.fs] ? e.fs : fa, sb = SIDE_VEC[e.ts] ? e.ts : tb;
+  return [sidePoint(a, sa), sa, sidePoint(b, sb), sb];
+}
+function paintLinks() {
+  const svg = document.getElementById("links");
+  const seen = new Set();
+  for (const e of edges) {
+    const a = nodeById(e.a), b = nodeById(e.b);
+    let g = svg.querySelector(`[data-eid="${e.id}"]`);
+    if (!a || !b) { if (g) g.remove(); continue; }
+    if (!g) {
+      g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      g.setAttribute("class", "edge"); g.dataset.eid = e.id;
+      g.innerHTML = `<path class="wire" stroke="currentColor" fill="none"></path><path class="head" fill="currentColor"></path>`;
+      svg.appendChild(g);
+    }
+    const [p1, sa, p2, sb] = edgeEnds(e);
+    const [x1, y1] = toScreen(p1[0], p1[1]), [x2, y2] = toScreen(p2[0], p2[1]);
+    const v1 = SIDE_VEC[sa], v2 = SIDE_VEC[sb];
+    const k = Math.max(28, Math.min(180, Math.hypot(x2 - x1, y2 - y1) * 0.45));
+    const c1x = x1 + v1[0] * k, c1y = y1 + v1[1] * k, c2x = x2 + v2[0] * k, c2y = y2 + v2[1] * k;
+    const wire = g.querySelector(".wire"), head = g.querySelector(".head");
+    wire.setAttribute("d", `M${f1(x1)},${f1(y1)}C${f1(c1x)},${f1(c1y)} ${f1(c2x)},${f1(c2y)} ${f1(x2)},${f1(y2)}`);
+    /* 箭头沿曲线末端的切线（c2→p2），不是两点的连线方向——不然弯过来的线头上会翘 */
+    const tx = x2 - c2x, ty = y2 - c2y, len = Math.hypot(tx, ty) || 1;
+    const ux = tx / len, uy = ty / len, ah = 9, aw = 4.5;
+    head.setAttribute("d", `M${f1(x2)},${f1(y2)}L${f1(x2 - ux * ah - uy * aw)},${f1(y2 - uy * ah + ux * aw)}L${f1(x2 - ux * ah + uy * aw)},${f1(y2 - uy * ah - ux * aw)}Z`);
+    g.classList.toggle("on", sel.has(e.a) || sel.has(e.b));
+    seen.add(e.id);
+  }
+  for (const g of [...svg.children]) if (g.dataset && !seen.has(g.dataset.eid)) g.remove();
+  paintLinkHandles();
+}
+/* 端点把手：只有那一端的格子被选中时才出现（先选中，再改它的进出面）。
+   隐形命中圈 r=13 ⇒ 26px 见方，过 WCAG 2.5.8 那扇 24px 的门；可见点 r=4.5。 */
+function paintLinkHandles() {
+  const svg = document.getElementById("linkui");
+  const seen = new Set();
+  for (const e of edges) {
+    const [p1, p2] = [edgeEnds(e)[0], edgeEnds(e)[2]];
+    for (const [end, p] of [["a", p1], ["b", p2]]) {
+      if (!sel.has(e[end])) continue;
+      const key = e.id + "|" + end;
+      seen.add(key);
+      let g = svg.querySelector(`[data-ep="${key}"]`);
+      if (!g) {
+        g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        g.setAttribute("class", "ep"); g.dataset.ep = key;
+        /* 命中圈 r=13 ⇒ 26px 见方，过 WCAG 2.5.8 那扇 24px 的门。上一版它是 22px 且左键就能拖，
+           于是把"从边中间拖进来缩放"那块吃掉了（你为那条边报过两次）；现在端点只吃右键，两者不再抢同一块。 */
+        g.innerHTML = `<circle class="hit" r="13"></circle><circle class="dot" r="4.5"></circle>`;
+        g.addEventListener("pointerdown", onEpDown);
+        svg.appendChild(g);
+      }
+      const [sx, sy] = toScreen(p[0], p[1]);
+      for (const c of g.children) { c.setAttribute("cx", f1(sx)); c.setAttribute("cy", f1(sy)); }
+    }
+  }
+  for (const g of [...svg.children]) if (g.dataset && !seen.has(g.dataset.ep)) g.remove();
+}
+let endDrag = null;
+/* 闭包里只留 data-ep 这把钥匙，边对象按 id 现取（上一轮「改名写进孤儿」那条教训，这里同形） */
+function onEpDown(ev) {
+  if (ev.button !== 2) return;   // 左键那一发让给那条边（压边＝缩放），端点用右键拖——热区冲突因此消除
+  const [id, end] = ev.currentTarget.dataset.ep.split("|");
+  if (!edges.find(x => x.id === id)) return;
+  ev.stopPropagation();
+  endDrag = { id, end, pre: snapshot() };
+  const g = ev.currentTarget;
+  try { g.setPointerCapture(ev.pointerId); } catch (err) { }
+  g.addEventListener("pointermove", onEpMove);
+  g.addEventListener("pointerup", onEpUp);
+  g.addEventListener("pointercancel", onEpUp);
+}
+function onEpMove(ev) {
+  if (!endDrag) return;
+  const e = edges.find(x => x.id === endDrag.id);
+  const n = e && nodeById(e[endDrag.end]);
+  if (!e || !n) { endDrag = null; return; }
+  const [wx, wy] = toWorld(...screenPoint(ev));
+  const key = endDrag.end === "a" ? "fs" : "ts", side = sideOf(n, wx, wy);
+  if (e[key] !== side) { e[key] = side; render(); }   // 拖的时候就跟着换面，所见即所得
+}
+function onEpUp(ev) {
+  if (!endDrag) return;
+  const g = ev.currentTarget;
+  g.removeEventListener("pointermove", onEpMove);
+  g.removeEventListener("pointerup", onEpUp);
+  g.removeEventListener("pointercancel", onEpUp);
+  if (JSON.stringify(endDrag.pre) !== JSON.stringify(snapshot())) pushState("端点", endDrag.pre);
+  rightDragUsedAt = performance.now();   // 这发右键是"拖端点"用掉的，别再弹宿主菜单
+  endDrag = null; render();
+}
+
+/* ── 标记：@d2019-3-3 / @t周会，单独占一行才算 ──────────────────────────
+   与 App 侧 Core/Tags.cs 同一条规则（那边先落地，这一版是回填——原型不能落后于实物）：
+   ① 一行里只有 token 时才是属性行，会被从正文里摘走；写在句子中间的原样留着，
+      否则讲这套写法的那一格会把自己的例子吃掉。
+   ② # 让给 markdown：行首 # 是标题，所以 #周会 / #due:… 一律不再是标记，也不许被摘走。
+   ③ @due(…) 这种旧长式整行退回正文。照短式它会是 "@d" + "ue(…)" ⇒ 报"日期读不出"，
+      而那个人写的明明是个合法日期——不能把装置的判断说成用户的错误。
+   标签的**显示名**仍带 #（牌子上的字，不是语法）。 */
+const OLD_SPELLING = (key, value) => key === "d" ? /^ue[(（]/.test(value) : /^ag[(（]/.test(value);
+
+/* 整行只有 token 就返回它们的原文，否则 null（＝这行是散文）。 */
+function propertyTokens(line) {
+  if (!line) return null;
+  let rest = line, out = [];
+  while (rest.length) {
+    const m = /^(@([dt]))(\S*)/i.exec(rest);
+    if (!m || OLD_SPELLING(m[2].toLowerCase(), m[3])) return null;
+    out.push(m[0]);
+    rest = rest.slice(m[0].length).replace(/^\s+/, "");
+  }
+  return out;
+}
+
+function propsOf(text) {
+  const kept = [], props = [];
+  for (const line of String(text || "").split("\n")) {
+    const tokens = propertyTokens(line.trim());
+    if (tokens === null) { kept.push(line); continue; }
+    props.push(...tokens);
+  }
+  // 属性行被摘走后留下的空行，不是作者的分段。
+  if (props.length) {
+    while (kept.length && !kept[0].trim()) kept.shift();
+    while (kept.length && !kept[kept.length - 1].trim()) kept.pop();
+  }
+  return { props, body: kept.join("\n") };
+}
+
+const bodyOf = (n) => propsOf(n.t).body;
+
+/* 日期要过日历，不能只过形状：new Date(2026,1,30) 会自己滚成 3/2，
+   和 App 侧 TryDate 的回读校验是同一件事。 */
+function parseDue(value) {
+  const m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(value);
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  const at = new Date(y, mo - 1, d);
+  if (at.getFullYear() !== y || at.getMonth() !== mo - 1 || at.getDate() !== d) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return { day: `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`, diff: Math.round((at - today) / 86400000) };
+}
+
+const tagsOf = (n) => [...new Set(propsOf(n.t).props
+  .filter(t => /^@t/i.test(t) && t.length > 2)
+  .map(t => t.slice(2))
+  .map(name => name.startsWith("#") ? name : "#" + name))];
+
+function dueOf(n) {
+  let malformed = null;
+  for (const token of propsOf(n.t).props) {
+    if (!/^@d/i.test(token)) continue;
+    const parsed = parseDue(token.slice(2));
+    if (parsed) return malformed ? { ...parsed, malformed } : parsed;
+    malformed ??= token;      // 第一个说得通的日期赢；第二个不是第二个截止日
+  }
+  return malformed ? { day: malformed, diff: 0, malformed } : null;
+}
+
+function paintDue() {
+  const rows = notes.map(n => ({ n, d: dueOf(n) })).filter(r => r.d)
+    .sort((a, b) => a.d.diff - b.d.diff);
+  const html = rows.length
+    ? rows.slice(0, 12).map(r => {
+      const tag = r.d.malformed ? "日期读不出" : r.d.diff < 0 ? "逾期" : r.d.diff === 0 ? "今天" : r.d.diff + " 天后";
+      return `<button data-nid="${r.n.id}" class="${r.d.malformed || r.d.diff <= 0 ? "late" : ""}"><span>${esc(r.d.day)}</span><b>${tag}</b>${esc(bodyOf(r.n).trim().slice(0, 18) || "（空）")}</button>`;
+    }).join("")
+    : `<p class="none">没有带日期的便签。写一个试试：双击格子，单独一行写 @d2026-10-12</p>`;
+  const box = document.getElementById("duelist");
+  if (box.dataset.html !== html) { box.dataset.html = html; box.innerHTML = html; }
+}
+/* ── 键位清单（按住 Tab）──────────────────────────────────────────────
+   内容不另写一份：从右侧那排命令按钮读出来 ⇒ 清单上不可能出现一条按不到的命令，
+   命令表改了清单自己跟着变。标题只写"键位"，不写"（松手就收起）"那种自我说明。 */
+/* 分节以 App 侧 BoardCommands 的 Section 字段为权威（那边一条命令一个节名）；
+   这一页里多出来的实验命令没有对应节，归到"其他"，不去伪造归属。 */
+const SECTION_OF = {
+  "左对齐": "排布", "水平居中": "排布", "右对齐": "排布", "上对齐": "排布", "垂直居中": "排布", "下对齐": "排布",
+  "横向均分": "排布", "纵向均分": "排布", "堆叠": "排布",
+  "按颜色聚拢": "聚拢", "按标签聚拢": "聚拢",
+  "成组": "组织", "拆组": "组织", "复制": "组织", "连线／断线": "组织",
+  "全部选中": "板子", "取消选中": "板子", "删掉选中": "板子", "回到 100%": "板子", "新建一格": "板子",
+  "撤回": "板子", "重做": "板子", "粘贴剪贴板": "板子",
+};
+
+function paintCheat() {
+  const box = document.getElementById("cheat");
+
+  if (box.dataset.built) return;
+
+  box.dataset.built = "1";
+
+  const cell = (b) => {
+    const kbd = b.querySelector("kbd");
+    const label = b.textContent.replace(kbd ? kbd.textContent : "", "").trim();
+    // 一个组合键拆成一排键帽：Alt+A → [Alt][A]。"双击空白"这种没有 + 的就整枚成帽。
+    const caps = kbd
+      ? `<span class="keys">${kbd.textContent.split("+").map((k) => `<kbd>${esc(k.trim())}</kbd>`).join("")}</span>`
+      : `<span class="keys"><kbd>${esc(b.dataset.hint || "—")}</kbd></span>`;
+
+    return `<div class="row"><span class="lbl">${esc(label)}</span>${caps}</div>`;
+  };
+
+  const groups = [];
+  for (const b of [...document.querySelectorAll(".cmds button")]) {
+    const label = (b.textContent.replace(b.querySelector("kbd")?.textContent || "", "").trim());
+    const sec = SECTION_OF[label] || "其他";
+    let g = groups.find(x => x.sec === sec);
+    if (!g) groups.push(g = { sec, rows: [] });
+    g.rows.push(b);
+  }
+
+  box.innerHTML = `<p class="hd">键位</p>` + groups.map(g =>
+    `<div class="grp"><h3 class="sheet-sec">${esc(g.sec)}</h3>${g.rows.map(cell).join("")}</div>`).join("");
+}
+
+function showCheat(on) {
+  paintCheat();
+  document.getElementById("scrim").classList.toggle("on", on);
+  document.getElementById("cheat").classList.toggle("on", on);
+}
+
+addEventListener("keydown", (e) => {
+  if (e.key !== "Tab" || e.target.matches("input, textarea, [contenteditable]")) return;
+  e.preventDefault();
+  showCheat(true);
+});
+addEventListener("keyup", (e) => { if (e.key === "Tab") showCheat(false); });
+
+/* 右侧那一排标签＝全板的标签清单与计数；点一下只看那一簇（再点一次、或点「全部」退出）。
+   它不改文档，所以不进撤回栈——与查找、聚焦同一类视图态。 */
+function paintTags() {
+  const counts = new Map();
+  for (const n of notes) for (const t of tagsOf(n)) counts.set(t, (counts.get(t) || 0) + 1);
+  const list = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const html = list.length
+    ? list.map(([t, c]) => `<button data-tag="${esc(t)}" class="${view.tag === t ? "on" : ""}">${esc(t)}<kbd>${c}</kbd></button>`).join("")
+      + (view.tag ? `<button data-tag="">全部</button>` : "")
+    : `<p class="none">还没有标签。双击一格，在正文里写 #名字 就有了</p>`;
+  const box = document.getElementById("tags");
+  if (box.dataset.html !== html) { box.dataset.html = html; box.innerHTML = html; }
+}
+document.getElementById("tags").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  view.tag = b.dataset.tag === view.tag ? "" : b.dataset.tag;
+  render();
+});
+const esc = (s) => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+document.getElementById("duelist").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  const n = nodeById(b.dataset.nid); if (!n) return;
+  clearSel(); sel.add(n.id); view.focus = false; render(); ensureVisible(n);
+});
+
+/* ── 跳到相邻格（Alt＋方向）──────────────────────────────────────────────
+   为什么不用 Tab：板子一旦吃掉 Tab，键盘用户就到不了右侧面板了（焦点陷阱），
+   而右侧那一排按钮是 WCAG 2.1.4 要求的替代输入面，不能被挡。
+   键位没有可抄的公开先例（我自己给的 Alt＋方向，方向键的裸键仍然是"微调"）；
+   选谁＝三件一起看：必须真在那个方向上（投影>0）、偏离那条射线越少越好、前进量越小越好。 */
+function cmdStepDir(dx, dy) {
+  if (!notes.length) return;
+  const from = sel.size ? nodeById([...sel].pop()) : null;
+  let best = null, bestKey = Infinity;
+  if (!from) {
+    const [vx, vy] = toWorld(board.clientWidth / 2, board.clientHeight / 2);
+    for (const n of notes) { const [cx, cy] = centerOf(n); const d = Math.hypot(cx - vx, cy - vy); if (d < bestKey) { bestKey = d; best = n; } }
+  } else {
+    const [bx, by] = centerOf(from);
+    for (const n of notes) {
+      if (n === from) continue;
+      const [cx, cy] = centerOf(n), vx = cx - bx, vy = cy - by;
+      const along = vx * dx + vy * dy;
+      if (along <= 0) continue;
+      const key = along + Math.abs(vx * dy - vy * dx) * 2;    // 2＝偏航的罚权（判断值）
+      if (key < bestKey) { bestKey = key; best = n; }
+    }
+  }
+  if (!best) return;
+  clearSel(); sel.add(best.id); render(); ensureVisible(best);
+}
+function ensureVisible(n) {
+  const [sx, sy] = toScreen(n.x, n.y), w = n.w * cam.z, h = n.h * cam.z, pad = 40;
+  let dx = 0, dy = 0;
+  if (sx < pad) dx = sx - pad; else if (sx + w > board.clientWidth - pad) dx = sx + w - (board.clientWidth - pad);
+  if (sy < pad) dy = sy - pad; else if (sy + h > board.clientHeight - pad) dy = sy + h - (board.clientHeight - pad);
+  if (dx || dy) { cam.x -= dx; cam.y -= dy; render(); }
+}
+
+/* ── 文档往返：导出 / 导入 JSON Canvas 1.0 ────────────────────────────────
+   这一发证明"这块板子的全部状态都写得进那份 .canvas"——手感之外，agent 使的就是这个文件。
+   规范：nodes[] 与 edges[] 两个顶层数组；group 是节点类型之一（label 可选）；color 允许 "1"~"6"
+   或 #RRGGBB。我们只在能对上预设名时写 1~6，**不把主题相关的 hex 写进盘**（切主题不该改文档）。
+   点名未覆盖：file 节点规范要的是相对路径 file 字段，原型里的图是 data:URL ⇒ 导出保留文字与几何，
+   图片那一格写的是占位路径，App 里必须由真实文件系统来满足。 */
+const CANVAS_COLOR = { tomato: "1", amber: "2", green: "4", blue: "5", purple: "6" };   // 3(黄)与 amber 同义，留给 paper 以外用
+const CANVAS_BACK = { "1": "tomato", "2": "amber", "3": "amber", "4": "green", "5": "blue", "6": "purple" };
+function toCanvasDoc() {
+  const nodes = [];
+  for (const g of groups) nodes.push({ id: g.id, type: "group", x: Math.round(g.x), y: Math.round(g.y),
+    width: Math.round(g.w), height: Math.round(g.h), ...(g.label ? { label: g.label } : {}) });
+  for (const n of notes) {
+    const base = { id: n.id, type: n.kind === "image" ? "file" : "text", x: Math.round(n.x), y: Math.round(n.y),
+      width: Math.round(n.w), height: Math.round(n.h) };
+    if (n.kind === "image") nodes.push({ ...base, file: "assets/" + n.id + ".png" });
+    else nodes.push({ ...base, text: n.t || "", ...(n.p && CANVAS_COLOR[n.p] ? { color: CANVAS_COLOR[n.p] } : n.c ? { color: n.c } : {}) });
+  }
+  return { nodes, edges: edges.map(e => ({ id: e.id, fromNode: e.a, toNode: e.b,
+    ...(SIDE_VEC[e.fs] ? { fromSide: e.fs } : {}), ...(SIDE_VEC[e.ts] ? { toSide: e.ts } : {}) })) };
+}
+function cmdExport() {
+  const blob = new Blob([JSON.stringify(toCanvasDoc(), null, 2)], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "outspread-feel.canvas";
+  a.click(); URL.revokeObjectURL(a.href);
+}
+function cmdImport(file) {
+  const rd = new FileReader();
+  rd.onload = () => {
+    let doc; try { doc = JSON.parse(rd.result); } catch { return; }
+    if (!doc || !Array.isArray(doc.nodes)) return;
+    pushPre("导入 .canvas");
+    notes = doc.nodes.filter(nd => nd.type !== "group").map(nd => ({
+      id: String(nd.id), kind: nd.type === "file" ? "image" : "text",
+      x: +nd.x || 0, y: +nd.y || 0, w: +nd.width || 240, h: +nd.height || 240,
+      p: CANVAS_BACK[String(nd.color)] || undefined, c: /^#/.test(String(nd.color || "")) ? nd.color : undefined,
+      t: nd.text || (nd.type === "file" ? "" : ""), src: nd.type === "file" ? svgChart() : undefined,
+    }));
+    groups = doc.nodes.filter(nd => nd.type === "group").map(nd => ({
+      id: String(nd.id), label: nd.label || "", x: +nd.x || 0, y: +nd.y || 0, w: +nd.width || 200, h: +nd.height || 200 }));
+    edges = (Array.isArray(doc.edges) ? doc.edges : []).map(ed => ({ id: String(ed.id || uid("e")), a: ed.fromNode, b: ed.toNode,
+      fs: SIDE_VEC[ed.fromSide] ? ed.fromSide : undefined, ts: SIDE_VEC[ed.toSide] ? ed.toSide : undefined }));
+    clearSel(); render();
+  };
+  rd.readAsText(file);
+}
+
+/* ── 键盘 ─────────────────────────────────────────────────────────────────
+   键位来源：对齐＝Figma 的 Alt+A/H/D/W/V/S；均分＝Figma 的 Alt+Shift+H/V；
+   缩放＝Figma 的 Shift+1 看全部 / Shift+2 看选中 / Shift+0 与 Ctrl+0 回到 100%；
+   成组＝Ctrl+G、拆组＝Ctrl+Shift+G（三家一致）；复制＝Ctrl+D；层序＝Ctrl+]/[；
+   锁定＝Ctrl+L（tldraw），也认 Shift+L；查找＝Ctrl+F（浏览器惯例）与裸 "/"。
+   我自己加的只有：堆叠、聚拢、连线、骨架、跳格——这几条没有可抄的公开键位，理由在配方表里点名。
+   数字用 e.code 判：Shift+1 在美式键盘上 e.key 是 "!"，按 e.key 判就得两枚都列，中文键盘更乱。 */
+/* ── 键盘 ─────────────────────────────────────────────────────────────────
+   你这一轮的账：「快捷键按了没反应」。真因不是键位，是焦点——上一版把监听挂在板子上，
+   页面刚打开、还没点过板子的时候，键盘事件根本到不了我们这里（板子有 tabindex=0 但没人给它焦点）。
+   ⇒ 现在挂在 window 上；并且正在写字（contenteditable／输入框）时一概放行，
+     焦点在按钮上时 Enter／Space 交给按钮自己按（那是 WCAG 2.1.1 的门，不许抢）。
+   ⇒ 第二条：Alt+Shift 这一族在中文 Windows 上会被输入法抢去切键盘布局，所以主键位改成 **Alt＋单字母**；
+     tldraw 原味的 Alt+Shift+H/V 仍然认，留作别名。
+   ⇒ 第三条：右侧按钮点下去一定要有结果——选中不足时命令对象退化成全体（见 cmdTargets），
+     键位与按钮走的是同一个函数，两面的行为一致。
+   键位来源（本轮从 tldraw 源码现读的 kbd 字符串）：alt+A/H/D/W/V/S 六枚对齐、alt+shift+h/v 均分、
+   ctrl+g 成组、ctrl+shift+g 拆组、ctrl+d 复制、shift+l 锁定、shift+0/1/2 缩放、裸 [ 与 ] 层序
+   （它用裸键，我收进 Ctrl 下——裸键面越小越合规，而且中文键盘上 [ ] 还得配 Shift）。
+   堆叠／聚拢／连线／骨架／跳格没有可抄的公开键位，键位是我给的；这五族一律有按钮。
+   点名风险：Alt+D、Ctrl+L 这类组合浏览器自己也要用，被宿主吃掉的那一枚只能靠按钮。 */
+const keysOn = () => document.documentElement.dataset.keys !== "off";
+/* 裸字符键（WCAG 2.1.4 管的那一类）只剩这两枚，且能被页眉「单键快捷＝关」整体关掉 */
+const BARE = {
+  ".": () => { view.focus = !view.focus; render(); },
+  "/": () => { const b = document.getElementById("find"); b.focus(); b.select(); },
+};
+window.addEventListener("keydown", (e) => {
+  if (editing) return;
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;   // 正在写字：键盘归写字
+  if (t && t.closest && t.closest("button") && (e.key === "Enter" || e.key === " ")) return;  // 按钮自己按
+  const k = /^Digit[0-9]$/.test(e.code) ? e.code : (e.key.length === 1 ? e.key.toLowerCase() : e.key);
+  const mod = e.ctrlKey || e.metaKey, alt = e.altKey, sh = e.shiftKey;
+  const stepPx = sh ? 10 : 1;
+  if (!mod && !alt && BARE[k]) { if (!keysOn()) return; e.preventDefault(); BARE[k](); return; }
+  const nudge = (dx, dy) => {
+    pushPre("微调");
+    const attached = new Set();
+    for (const id of sel) { const g = groupOf(notes.find(v => v.id === id)); if (g) attached.add(g.id); }
+    for (const id of sel) {
+      const n = notes.find(v => v.id === id);
+      if (!n) continue;
+      n.x += dx / cam.z; n.y += dy / cam.z;
+      const el = items.querySelector(`[data-id="${id}"]`);
+      if (el && motionOn()) {
+        el.classList.add("nudging");
+        clearTimeout(el._nudge); el._nudge = setTimeout(() => el.classList.remove("nudging"), 140);
+      }
+    }
+    for (const g of groups) if (attached.has(g.id)) { g.x += dx / cam.z; g.y += dy / cam.z; }
+    render();
+  };
+  switch (k) {
+    case "ArrowLeft": if (alt) cmdStepDir(-1, 0); else nudge(-stepPx, 0); break;
+    case "ArrowRight": if (alt) cmdStepDir(1, 0); else nudge(stepPx, 0); break;
+    case "ArrowUp": if (alt) cmdStepDir(0, -1); else nudge(0, -stepPx); break;
+    case "ArrowDown": if (alt) cmdStepDir(0, 1); else nudge(0, stepPx); break;
+    case "Delete": case "Backspace": {
+      const doomed = unitGroup() ? membersOf(unitGroup()).map(n => n.id) : [...sel];
+      if (!doomed.length) return;
+      pushPre("删除");
+      for (const id of doomed) items.querySelector(`[data-id="${id}"]`)?.classList.add("leave");
+      setTimeout(() => {
+        notes = notes.filter(n => !doomed.includes(n.id));
+        edges = edges.filter(ed => !doomed.includes(ed.a) && !doomed.includes(ed.b));   // 端点没了的边不留
+        groups = groups.filter(g => membersOf(g).length);   // 成员被删空的组框不留在板上（它是容器，不是便签）
+        clearSel(); render();
+      }, motionOn() ? 170 : 0);
+      break;
+    }
+    case "z": if (!mod) return; if (sh) redo(); else undo(); break;
+    case "Escape":
+      /* Esc 是往上退一层，不是一把清空：单枚 → 整组 → 无（Figma/Obsidian 的分组都是这个方向） */
+      if (!unitMode && groupFocus) {
+        const g = groups.find(x => x.id === groupFocus);
+        clearSel();
+        if (g) { for (const m of membersOf(g)) sel.add(m.id); groupFocus = g.id; unitMode = true; }
+      } else clearSel();
+      view.focus = false; view.tag = ""; render(); break;
+    case "Enter": {
+      const n = { id: uid("n"), kind: "text", x: 0, y: 0, w: T.noteSize, h: T.noteSize, p: "amber", t: "" };
+      const [wx, wy] = toWorld(board.clientWidth / 2, board.clientHeight / 2);
+      n.x = wx - n.w / 2; n.y = wy - n.h / 2;
+      pushPre("新建");
+      notes.push(n); clearSel(); sel.add(n.id); render(); fit(n); render(); beginEdit(n.id); break;
+    }
+    /* ── 组合键命令（修饰键不匹配就原样交回浏览器，不做兜底）────────────── */
+    case "a": if (!alt || sh) return; cmdAlign("left"); break;
+    case "h": if (!alt) return; if (sh) cmdDistribute("x"); else cmdAlign("hcenter"); break;
+    case "d": if (mod && !alt) cmdDuplicate(); else if (alt && !sh) cmdAlign("right"); else return; break;
+    case "w": if (!alt || sh) return; cmdAlign("top"); break;
+    case "v": if (!alt) return; if (sh) cmdDistribute("y"); else cmdAlign("vcenter"); break;
+    case "s": if (!alt || sh) return; cmdAlign("bottom"); break;
+    case "j": if (!alt) return; cmdDistribute("x"); break;
+    case "k": if (!alt) return; cmdDistribute("y"); break;
+    case "l": if (alt && !sh) cmdStack(); else if (mod || (sh && !alt)) cmdLock(); else return; break;
+    case "c": if (!alt) return; cmdConnect(); break;
+    case "y": if (mod && !sh) { redo(); break; } if (alt && !sh) cmdCluster("color"); else return; break;
+    case "t": if (!alt || sh) return; cmdCluster("tag"); break;
+    case "g": if (!mod) return; if (sh) cmdUngroup(); else cmdGroup(); break;
+    case "p": if (!alt) return; cmdSkeleton("day"); break;
+    case "r": if (!alt) return; cmdSkeleton("retro"); break;
+    case "b": if (!alt) return; cmdSkeleton("kanban"); break;
+    case "f": if (!mod) return; BARE["/"](); break;
+    case ".": if (!mod) return; view.focus = !view.focus; render(); break;
+    case "]": if (!mod) return; cmdOrder(true); break;
+    case "[": if (!mod) return; cmdOrder(false); break;
+    case "Digit1": if (!sh || mod) return; cmdZoomTo(true); break;
+    case "Digit2": if (!sh || mod) return; cmdZoomTo(false); break;
+    case "Digit0": if (!(sh || mod)) return; cmdActualSize(); break;
+    default: return;
+  }
+  e.preventDefault();
+});
+
+/* ── 开关 ───────────────────────────────────────────────────────────────── */
+const motionOn = () => document.documentElement.dataset.motion === "on"
+  && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+for (const [seg, attr] of [["seg-theme", "theme"], ["seg-motion", "motion"], ["seg-keys", "keys"], ["seg-fit", "fit"], ["seg-pal", "pal"], ["seg-type", "type"], ["seg-rad", "rad"], ["seg-edge", "edge"]]) {
+  document.getElementById(seg).addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    document.documentElement.dataset[attr] = b.dataset.v;
+    for (const x of b.parentElement.children) x.setAttribute("aria-pressed", String(x === b));
+    if (attr === "motion" && b.dataset.v === "off") { cancelAnimationFrame(raf); }
+    if (attr === "theme" || attr === "pal") paintSwatches();
+    if (attr === "type") applyTypeScale();
+    if (attr === "fit" && b.dataset.v === "on") for (const n of notes) if (n.kind === "text") fit(n);   // 开关拨回来：按当前文字重新定高一次
+    render();
+  });
+}
+window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener?.("change", () => {
+  document.documentElement.dataset.motion = motionOn() ? "on" : "off";
+  for (const x of document.getElementById("seg-motion").children)
+    x.setAttribute("aria-pressed", String((x.dataset.v === "on") === (document.documentElement.dataset.motion === "on")));
+  render();
+});
+window.addEventListener("resize", render);
+document.getElementById("swatches").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (!sel.size) return;
+  pushPre("配色");
+  for (const id of sel) { const n = notes.find(v => v.id === id); if (n) { n.p = b.dataset.p; n.c = undefined; } }
+  paintSwatches(); render();
+});
+/* 色条按当前主题取 PAL 的第 3 步；切换浅/深时重画一次（不在 render 里画，那是逐帧的） */
+function paintSwatches() {
+  const t = isDark() ? "dark" : "light";
+  const tip = (k) => palMode() === "sticker"
+    ? `${k} · 底 ${STICKER[k]}（Figma 发布的 Sticky 实物色，C 0.09~0.15＝塑料档）`
+    : `${k} · 底 ${PAL[k][t][0]} · 线 ${PAL[k][t][1]} · 墨 ${PAL[k][t][2]}（Radix 3/7/12）`;
+  document.getElementById("swatches").innerHTML = Object.keys(PAL)
+    .map(k => `<button data-p="${k}" aria-label="${k}" title="${tip(k)}" style="background:${fillOf(k)}"></button>`)
+    .join("");
+}
+paintSwatches();
+document.getElementById("undoBtn").addEventListener("click", undo);
+document.getElementById("redoBtn").addEventListener("click", redo);
+paintHistoryChrome();
+document.getElementById("exportBtn").addEventListener("click", cmdExport);
+const importFile = document.getElementById("importFile");
+document.getElementById("importBtn").addEventListener("click", () => importFile.click());
+importFile.addEventListener("change", () => { const f = importFile.files[0]; importFile.value = ""; if (f) cmdImport(f); });
+
+/* 命令清单＝按钮＝键位表：一份声明三处用（按钮文案、快捷键提示、键盘分支调的都是同一个函数）。
+   单字母快捷键按 WCAG 2.5.7 必须有替代输入面 ⇒ 这一排按钮就是那个替代面，不是装饰。 */
+const CMDS = [
+  ["左对齐", "Alt+A", () => cmdAlign("left")],
+  ["水平居中", "Alt+H", () => cmdAlign("hcenter")],
+  ["右对齐", "Alt+D", () => cmdAlign("right")],
+  ["上对齐", "Alt+W", () => cmdAlign("top")],
+  ["垂直居中", "Alt+V", () => cmdAlign("vcenter")],
+  ["下对齐", "Alt+S", () => cmdAlign("bottom")],
+  ["横向均分", "Alt+J", () => cmdDistribute("x")],
+  ["纵向均分", "Alt+K", () => cmdDistribute("y")],
+  ["堆叠", "Alt+L", cmdStack],
+  ["按颜色聚拢", "Alt+Y", () => cmdCluster("color")],
+  ["按标签聚拢", "Alt+T", () => cmdCluster("tag")],
+  ["连线／断线", "Alt+C", cmdConnect],
+  ["成组", "Ctrl+G", cmdGroup],
+  ["拆组", "Ctrl+Shift+G", cmdUngroup],
+  ["复制", "Ctrl+D", () => cmdDuplicate()],
+  ["移到最前", "Ctrl+]", () => cmdOrder(true)],
+  ["移到最后", "Ctrl+[", () => cmdOrder(false)],
+  ["锁定", "Ctrl+L", cmdLock],
+  ["看到全部", "Shift+1", () => cmdZoomTo(true)],
+  ["看到选中", "Shift+2", () => cmdZoomTo(false)],
+  ["回到 100%", "Shift+0", cmdActualSize],
+  ["聚焦（只看选中）", ".", () => BARE["."]()],
+  ["查找", "Ctrl+F", () => BARE["/"]()],
+  ["跳到邻格", "Alt+方向键", () => cmdStepDir(1, 0)],
+  ["日程骨架", "Alt+P", () => cmdSkeleton("day")],
+  ["复盘骨架", "Alt+R", () => cmdSkeleton("retro")],
+  ["看板骨架", "Alt+B", () => cmdSkeleton("kanban")],
+  ["撤回", "Ctrl+Z", undo],
+  ["重做", "Ctrl+Shift+Z", redo],
+];
+document.getElementById("cmds").innerHTML = CMDS.map(([label, key], i) =>
+  `<button data-cmd="${i}">${label}<kbd>${key}</kbd></button>`).join("");
+document.getElementById("cmds").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  board.focus(); CMDS[+b.dataset.cmd][2]();
+});
+function jumpToMatch() {
+  const q = view.query.trim().toLowerCase(); if (!q) return;
+  const hit = notes.find(n => String(n.t || "").toLowerCase().includes(q));
+  if (hit) tweenCamera({ x: hit.x, y: hit.y, w: hit.w, h: hit.h }, 320);
+}
+const findBox = document.getElementById("find");
+findBox.addEventListener("input", () => { view.query = findBox.value; render(); });
+findBox.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); jumpToMatch(); }
+  if (e.key === "Escape") { findBox.value = ""; view.query = ""; findBox.blur(); render(); }
+  e.stopPropagation();                       // 在输入框里打的字不许当快捷键
+});
+
+/* ── 配方表（每格：抄谁 / 数值 / WinUI 判语 / 来源）────────────────────── */
+const R = [
+  ["点阵底", "tldraw DefaultGrid", "r=1px；世界步长 64/16/4/1，但可见性判据落在「屏幕间距」上：24~72px 满亮，往下到 12px、往上到 96px 淡出为 0。上一版把淡入区间按缩放写 ⇒ 实测 100% 时只剩 4px 间距那一档，采样区 25% 面积被墨＝看着是灰雾不是点阵；现在 1.56%", "cost", "WinUI 没有平铺刷（TileMode/OpacityMask 在 winmd 里 0 命中）⇒ 只能像这页一样：一枚视口位图按缩放档重绘。另加两条：相机没动不重绘、一档一个 path 一次 fill（实测逐帧全视口重绘单发 6~12ms）", "https://github.com/tldraw/tldraw/blob/main/packages/editor/src/lib/components/default-components/DefaultGrid.tsx"],
+  ["板底/网格色", "tldraw editor.css", "底 hsl(210,20%,98%) / 深 hsl(240,5%,6.5%)；点 hsl(0,0%,43%) / 40%", "ok", "可用：两档主题刷", "https://github.com/tldraw/tldraw/blob/main/packages/editor/editor.css"],
+  ["1px 线恒定", "tldraw / Excalidraw", "线宽 = 1/zoom；Excalidraw 还量化到整设备像素", "ok", "可用：StrokeThickness=1/zoom，再 Math.Round(v*scale)/scale", "https://github.com/excalidraw/excalidraw/blob/master/packages/excalidraw/renderer/staticScene.ts"],
+  ["选中外观", "tldraw editor.css", "描边 hsl(214,84%,56%) 1px ＋ 填充 24% alpha", "ok", "可用：Rectangle 描边 + SolidColorBrush 带 alpha", "https://github.com/tldraw/tldraw/blob/main/packages/editor/editor.css"],
+  ["拖动之后不留选中", "你的口径（与 tldraw/Figma 相反，写明）", "上一轮按你说的把移动中的选择框收掉了，但松手那一帧它又弹回来 ⇒ 现在改成：**真的移动过（累计位移 > 4px）就在 pointerup 时清掉选中**，实测拖完 `sel.size=0`、选择框节点从 DOM 摘掉；而**原地按下再松开（没移动）仍然选中**，实测 `sel.size=1`、框 display=block。代价点名：tldraw 和 Figma 拖完是保持选中的，我们这条按你的判断改，副作用是拖完想从边上缩放要先点一下", "ok", "可用：App 那边是同一个位置（拖拽收尾处），只是清的是 selection 集合，不动文档 ⇒ 不会因此多写一次盘", ""],
+  ["撤回／重做", "我方（与 App 里 History 同一语义）", "右下角两枚按钮 ＋ Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y；按钮的 title 里带上「要撤回的是哪个动作」，按下去之前知道会掉什么。记的动作：新建、删除、移动、缩放、改字、配色、微调。**微调连按算一笔**（900ms 内不重复入栈），否则撤销要按十几下。栈上限 120 笔。实测：40 → 117 → 撤 → 40 → 重做 → 117 → 再撤 → 40，两栈长度互斥", "ok", "App 里已经有了，而且比这更省：History 存的是 patch 不是整块快照（`DocDiff.Between` ＋ `Inverse`），撤销＝把反向 patch 走同一把互斥锁落盘。原型用整块 notes 拷贝是因为它没有文档层", ""],
+  ["文字光晕只给深底色格子", "tldraw 的做法 ＋ 你这一轮的反馈", "深主题下我给文字加了一圈板底色的光晕（tldraw 在深底板上就是这么干的），但**贴纸区那档在深主题里用的是亮粉彩底＋深字**，再套一圈近黑光晕＝你说的「字体晕开」。改成按每格自己的底色决定挂不挂：`lum(底) ≤ 0.42` 才加。实测深主题下 贴纸区 `halo=false`、淡纸 `halo=true`、浅主题两档都 `false`", "ok", "可用：同一判据在 WinUI 里就是给 TextBlock 换 Effect 不可得（没有 text-shadow），等价做法是底下垫一层同字同位的模糊副本，或者干脆只在深色底板上开这一档 ⇒ 建议落 App 时用后者", ""],
+  ["手柄", "tldraw / Excalidraw", "可见 8px（Excalidraw 10px），命中半径 12px；本页按 WCAG 取 24px 命中", "ok", "**本轮抓到的真缺陷**：`.selbox` 写了 pointer-events:none，而这个属性会继承，手柄没显式要回 auto ⇒ 8 枚手柄对真鼠标完全不存在，你按下去什么也不是。合成事件绕过命中测试，所以我上一轮的自测是假绿。已修（实测 handlePE 现在＝auto）。WinUI 的同一把刀：`Background={x:Null}` 不参与命中测试，那枚 24px 隐形热区必须给 `Transparent` 填充，不能留空", "https://github.com/tldraw/tldraw/blob/main/packages/editor/src/lib/options.ts"],
+  ["吸附阈值", "tldraw / Excalidraw", "8 屏幕像素 ⇒ 世界 8/zoom", "ok", "可用：我们已是 8/zoom（SnapDrag）", "https://github.com/excalidraw/excalidraw/blob/master/packages/excalidraw/snapping.ts"],
+  ["吸附线外观", "Excalidraw renderSnaps", "#ff6b6b / 深档 #ff9090，1px，瞬时出现消失", "ok", "可用：覆盖层画线，别加淡入", "https://github.com/excalidraw/excalidraw/blob/master/packages/excalidraw/renderer/renderSnaps.ts"],
+  ["拖动阈值", "tldraw / Excalidraw", "4px（触屏 6px；Excalidraw 用 10px）", "ok", "可用：按下累计位移过 4px 才起拖", "https://github.com/tldraw/tldraw/blob/main/packages/editor/src/lib/options.ts"],
+  ["拖动浮起", "tldraw NoteShapeUtil / Excalidraw", "两层阴影（offset3/.16 ＋ 6/.08）；zoom<0.25 整块关掉", "cost", "有代价：ThemeShadow 在 Win10 需要 Receivers，且每帧重排会重画阴影图 ⇒ 只给正在拖的那一枚用 Composition DropShadow，或预渲染接触阴影", "https://github.com/tldraw/tldraw/blob/main/packages/tldraw/src/lib/shapes/note/NoteShapeUtil.tsx"],
+  ["缩放区间", "tldraw / Excalidraw", "5%–800%（tldraw）；Excalidraw 0.1–30", "ok", "可用：我们现在是 10%–400%，放宽即可", "https://github.com/tldraw/tldraw/blob/main/packages/editor/src/lib/constants.ts"],
+  ["滚轮 vs 按钮", "tldraw", "滚轮瞬时逐帧；按钮/菜单走 320ms easeInOutCubic", "ok", "可用：Composition 的 cubic/spring 创建器我已在投影里 grep 实证", "https://github.com/tldraw/tldraw/blob/main/packages/editor/src/lib/constants.ts"],
+  ["缩放读数", "tldraw ZoomMenu / Excalidraw", "常驻百分比，点击可复位", "ok", "可用：右下角一枚 TextBlock", "https://github.com/excalidraw/excalidraw/blob/master/packages/excalidraw/viewport.ts"],
+  ["平移惯性", "tldraw", "cameraSlideFriction 0.09 / 60Hz tick", "cost", "有代价：InteractionTracker 不投影 ⇒ 自己用 CompositionTarget.Rendering 做指数衰减（本页就是这个写法）", "https://github.com/tldraw/tldraw/blob/main/packages/editor/src/lib/constants.ts"],
+  ["悬停反馈", "tldraw / Excalidraw 源码", "只换光标，不发光 —— 好的画布产品不给悬停加亮度", "ok", "可用：InputSystemCursor.Create；结论是这格我们不该做重", "https://github.com/tldraw/tldraw/blob/main/packages/editor/editor.css"],
+  ["光标种类", "tldraw", "8 向 resize ＋ move/grab/text，自定义 SVG 带热点", "cost", "有代价：WinUI 的 InputSystemCursorShape 只有 4 枚尺寸光标 ⇒ 两个斜角镜像复用", "https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.input.inputsystemcursorshape"],
+  ["便签色板（＝你说的「塑料感」那一格）", "Radix Colors 量表规则（官方文档原文）＋ Figma 自己的分工", "Radix 规定：1~4 给大面积底、6~8 给描边、11~12 给文字，而 step 9 是「全表彩度最高、掺白/黑最少」的一步 ⇒ 拿 9 当整张便签底就是贴纸扣在白纸上。本表按 3/7/12 取值：纸黄 底 #fff7c2 / 线 #e9c162 / 墨 #4f3422，深档同规则 #302008 / #714f19 / #ffe7b3。我上一版的 #FFB8A8、#D3BDFF 实测 C 0.09~0.15＝贴纸区，纸区是 C 0.02~0.05 配 L 0.93~0.97。同一厂商的佐证：Figma 文档把便签和区段分成两张表，Section（大面积）用浅一档的 #EBFFEE / #F5FBFF / #FFFBF0。墨色不用纯黑：hue-matched 的 12 步在 3 步底上是 9~10:1，而纯黑 20:1 那种扎眼本身就是塑料感的一半——Figma 那张表的默认字色也是 Charcoal #1E1E1E 而非 #000", "ok", "可用：JSON Canvas 的 color 允许 6 个预设 ⇒ App 里把 6 档写成预设名，浅深两套 hex 长在 NotePalette 里，文档只存预设名不存 hex ⇒ 切主题不会把颜色写进盘、agent 读到的还是 1~6。第二来源：github.com/radix-ui/colors 的 src/light.ts 与 src/dark.ts；Figma 那份表在 figma/mcp-server-guide 的 skills/figma-use-figjam/references/figjam-colors.md", "https://www.radix-ui.com/colors/docs/palette-composition/understanding-the-scale"],
+  ["字体（你说最难看的那一格，实测有硬原因）", "Microsoft 字体页 + CSS 字体匹配算法 + W3C clreq", "Segoe UI 不含汉字：微软自己标的脚本只有 Latn/Grek/Cyrl/Armn/Geor/Geok/Arab/Hebr/Lisu ⇒ 每个汉字逐字回退。微软雅黑只有 Light300/Regular400/Bold700 三档，而匹配算法在目标字重落在 400~500 时先向下找 ⇒ 我写的 500 静默变成 400，实测 18px 下「中国abc」字宽 400＝64.06 / 500＝64.72 / 700＝65.5，等于没生效。改：字体栈点名 Microsoft YaHei UI（微软指定的简中界面字体），正文 400 实体档，行距 1.55（clreq 原文：段落通常需要基字尺寸 1.5 倍以上的行距，我原来的 1.4 不达标），字距 0（汉字不加负字距；clreq 只允许汉字与西文之间 ≤1/4 汉字宽的间距）。字号本身没错：Excalidraw 默认 20、tldraw 便签约 16~22，我们的 18 在区间内", "ok", "可用：FontFamily 写「Segoe UI, Microsoft YaHei UI」；TextBlock 的 FontWeight 只给 400 或 700 两档实体，别写 SemiBold 指望它出中黑——雅黑没有那一档，写了就是合成假粗", "https://learn.microsoft.com/en-us/typography/font-list/segoe-ui"],
+  ["图片为什么拖不动：原生拖放把 pointer 序列掐了", "HTML 规范既有行为 ＋ 这一轮的实物", "<img> 默认就是可拖的（draggable 的初始值对图片是 true）：真鼠标一按一拖，浏览器发起的是**原生 drag 操作**，我们的 pointermove 序列被掐断、收到 pointercancel ⇒ 格子几乎不动（上一轮的「拖出去好远只挪一点点」和这一轮的「干脆无法拖动」是同一条）。三道一起堵：属性 `draggable=\"false\"`、CSS `-webkit-user-drag:none`、板子上 `dragstart` 取消。实测：img 的 draggable 属性＝false、元素 .draggable＝false、派发的可取消 dragstart 被 `defaultPrevented=true` 接住；图片按中心拖 60 屏幕像素 ⇒ 世界 dx＝60", "ok", "可用，而且 WinUI 没这个坑（它没有 HTML 那套原生图片拖放），但**等价教训要带走**：任何「按下后由我们接管手势」的元素，都要显式声明它不参与宿主的默认拖放", ""],
+  ["字号开关（14/15/16，默认 15）＋ 行距与内边距跟着走", "你判「16 偏大、14 偏小」⇒ 中间补一档，18 删掉", "汉字字面率接近整个 em 框，拉丁小写只有约一半 ⇒ 同一个 px 数下中文看着更大，所以旗舰的 20/22 不能直接搬（我搬过一次，你连着两轮说大）。一档只动一个变量：行距与内边距按同一比例配（14→19/16、15→21/17、16→22/18），三者一旦各自漂移，格子就「说不出哪里不平衡」。实测默认＝**15px / 21px 行距 / 17px 内边距**，切 14、16 两档 JS 侧都现读到同一对数", "ok", "可用：WinUI 侧就是把 FontSize 与 Padding 成对写在同一个资源字典键下（或都从 NoteStyle 派生），别在两个控件里各写一遍", ""],
+  ["行距：1.55 → 整像素 22（＝1.375）", "IBM Carbon ＋ Butterick ＋ 半行距实测", "所有已发布的 UI 表里没有一个给 16px 短文本配 1.55：Carbon 的 body-compact-02 就是 **16px/22px**，且它写明那一档用于「不超过四行的短段落」；Butterick 的区间是 120%~145%；Apple 17/22＝1.29、13/18＝1.38；tldraw 便签 1.35；M3 与 Tailwind 的 16/24＝1.5 是**非 compact** 那一档。Smashing 与 USWDS 都写了「行长决定行距：measure 越长行距越大」，我们每行只有 12 个字，把正文级的 1.5 搬过来就是散。**半行距这一项我量了才决定不做**：本机字体内容盒实测上 17 ＋ 下 4 ＝ 21px，22 的行距每边只多 0.5px ⇒ 不值得为它上 `text-box` 补偿（而且这个内置浏览器 `CSS.supports('text-box: trim-both cap')` 现读＝false）。另点名：WCAG 1.4.12 那句「行距至少 1.5」是**用户放大间距时不许丢内容**的地板，不是审美目标，别拿它当 1.55 的理由", "ok", "可用：WinUI 侧 `LineHeight` 收的是 px 不是比值 ⇒ 正好同形（22 世界单位 × scale）。比例行高在 WinUI 里没有，别指望 1.375 这种写法", "https://carbondesignsystem.com/elements/typography/type-sets/"],
+  ["便签按内容定高（本轮最大的一格）", "tldraw 的动态尺寸 ＋ 我自己量的填充率", "量出来才是主因：六个演示格文字只占框高 **39.7%~50.1%**，四周空气 41~55px，加上 18px 内边距＝字到边 59~73px，而字高只有 16px ⇒ 一小块字漂在半空色块正中。改成按内容定高（量行矩形并集，不量 scrollHeight——`.body` 被 flex 拉满了量不出内容），下限 64，**边打字边长**，实测填充率升到 **70.7%~75.2%**、上下间隙都＝18（正好等于内边距）。副作用点名：手动把格子拉小之后如果再编辑文字，fit 会按内容重新定高（编辑即认内容优先）", "ok", "可用：App 那边等价做法是文字变化时按 `TextBlock` 的测量高度重算 `height` 再写进 `.canvas`（规范里 width/height 就是节点的字段，agent 读到的仍是数字），下限同样给一个常量", "https://github.com/tldraw/tldraw/blob/main/packages/tldraw/src/lib/shapes/note/NoteShapeUtil.tsx"],
+  ["字号与行长（这一档是本轮改的）", "tldraw / Excalidraw 源码常量", "tldraw 便签 M 档实测 = `theme.fontSize 16 × LABEL_FONT_SIZES.m 1.375` = **22px**，行高 1.35，`LABEL_PADDING = 16`，align/verticalAlign 都是 middle；Excalidraw `DEFAULT_FONT_SIZE = 20`、便签 `PADDING = 16`、`STICKY_NOTE_MIN_FONT_SIZE 16 / FALLBACK 28`、行高 1.25。我们原来 18px 比两家都小 ⇒ 改成 **20px**（Excalidraw 的默认值，也是两家的下中位）。行长这一格我先把话说清：240 宽的格子扣掉 32 内边距 = 208px，20px 汉字一行只装得下约 10 个——Bringhurst 那句「45~75 字符、66 最理想」（web.dev 原文引用）是给段落正文的，**便签装的是短语，不适用**；两家旗舰的便签行长跟我们一样短，所以这不是缺陷，别照着段落排版去改宽格子", "ok", "可用：`FontSize = 20`（世界单位，×scale 落屏幕），行高走 TextBlock.LineHeight；`LABEL_PADDING 16` 与我们现在的 `--note-pad` 同值，不用改", "https://github.com/tldraw/tldraw/blob/main/packages/tldraw/src/lib/shapes/note/NoteShapeUtil.tsx"],
+  ["便签文字对齐（本轮最大的那一格）", "tldraw / Excalidraw 源码", "两家都把便签文字**垂直居中**：tldraw 的默认 `align: middle, verticalAlign: middle`（RichTextLabel 用 flexbox 实现：middle→center、end→flex-end）；Excalidraw 的 `computeBoundTextPosition` 把便签标签在整块内边距里居中，源码注释写着「贴着内容顶对齐会明显偏高」。我们原来是左上顶格 ⇒ 这就是「说不出哪里不对」最可能的那一格。现在只留居中这一档（你判：左上与全居中都不如它，开关已删，不留没用的档）", "ok", "可用：WinUI 里就是 `VerticalAlignment=Center` ＋ `TextAlignment`，不需要新机制", "https://github.com/excalidraw/excalidraw/blob/master/packages/element/src/textElement.ts"],
+  ["中文标点比例字距：死路（本轮现验，别再试）", "fontTools 读这台机器的 C:\\Windows\\Fonts", "调研直接在这台机器上验了字体表：**微软雅黑 GSUB 只有 ccmp/vert、GPOS 只有 mark，没有 palt、没有 halt、也没有 tnum**；DengXian 只有 vert；Segoe UI 有 tnum/case/cpsp/frac/sups/onum 和 kern/mkmk，但**同样没有 palt/halt**。⇒ `font-feature-settings: 「palt」`（中文标点挤窄）和 `text-spacing-trim` 这条路在 stock Windows 的两种主力字体上都是空转，WinUI 也没有 feature-settings 入口。数字对齐也别指望雅黑（无 tnum），要表格数字得让那串走 Segoe UI", "no", "不可得，而且是**装在哪都不行**那一类：不是 WinUI 缺 API，是字体里没有这张表。要真做只能换字体（思源黑体/Noto CJK 带 palt，本机未装、未验）", "https://developer.mozilla.org/en-US/docs/Web/CSS/text-spacing-trim"],
+  ["字距随字号（苹果那张表）与光学尺寸", "Apple HIG / WWDC20 10175 的 tracking 表", "苹果的 SF Pro Text tracking（1/1000 em）：6pt +41、9 +19、11 +6、12 0、13 −6、15 −16、17 −24、19 −26 ⇒ **小字号给正字距、大字号给负字距，12pt 附近是零点**。我们正文是汉字（clreq：汉字不加负字距）⇒ 正文 `letter-spacing: 0` 保持；这条规则真正用得上的是**11px 的标签**，已给 `+.01em`。光学尺寸：SF Pro 在 19/20pt 之间从 Text 切到 Display（WWDC20 说可变字体下 17~28pt 是连续过渡）⇒ 我们把便签提到 20px 后，在 **Win11 上**该用 Segoe UI Variable Display；你这台是 Win10，Segoe UI 没有光学分档，所以这条在 App 里是「Win11 才有的一格」，不写成承诺", "ok", "可用：WinUI 有 `FontSpacing`（单位 px，不是 em），11px 标签的 +.01em ≈ `FontSpacing=0.11`；正文保持 0。Win11 上把 ≥20px 的文本 FontFamily 换成 `Segoe UI Variable Display`，Win10 上不换", "https://developer.apple.com/videos/play/wwdc2020/10175/"],
+  ["孤字控制：只在浏览器里有", "MDN / browser-compat-data", "`text-wrap: pretty`（Chrome 117+、Safari 26，Firefox 没有）＝最后一行不留孤字；`balance` 是另一档（Chrome 114/FF 121/Safari 17.5）。便签这种短行最容易出「最后一行一个字」，已开 `pretty`。**点名：WinUI 没有任何等价物**（没有 widow/orphan 控制），所以这一格到 App 里会掉——要么接受，要么自己在换行层做，那是另一件事", "no", "不可得：WinUI 的 TextBlock 没有 text-wrap 开关。原型里开它只是为了让你能判断「这一格值不值得为它在 App 里做手工换行」", "https://developer.mozilla.org/en-US/docs/Web/CSS/text-wrap"],
+  ["便签尺寸/内边距", "tldraw / Excalidraw / FigJam", "tldraw 200×200；Excalidraw 250×250、padding 16；FigJam 240×240", "ok", "可用：我们现在是 260 宽、padding 10×zoom", "https://github.com/excalidraw/excalidraw/blob/master/packages/common/src/constants.ts"],
+  ["文字溢出", "Excalidraw", "先缩字号（步进 2px、下限 16px）再长高", "un", "未证：与我们把字号存在 sidecar 的模型冲突，先只做长高，缩字这格不抄", "https://github.com/excalidraw/excalidraw/blob/master/packages/common/src/constants.ts"],
+  ["动效时长/曲线", "Microsoft 官方", "Direct Entrance (0,0,0,1) 167/250/333ms；Gentle Exit (1,0,1,1) 167ms；Bare Minimum 线性 83ms。**创建走 250ms Direct Entrance ＋ 8px 抬起，删除走 167ms Gentle Exit ＋ 6px 沉下**——上一版我只做 Bare Minimum 的 83ms 纯不透明度，结果你反馈「动效开关看不出区别」：那一档确实约等于没区别。位移用 CSS 的 `translate` 属性而不是 `transform`，因为拖动时 transform 归 translate3d 用，两件事不许抢同一格", "ok", "可用：数值直接抄微软这张表，别自己拍毫秒；`translate` 在 WinUI 里就是 TranslateTransform（或 CompositeTransform 的 TranslateX/Y），拖动用另一枚，天然不冲突", "https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/motion"],
+  ["拖动中禁过渡", "tldraw", "dragging 态显式 transition: none", "ok", "可用：直接操作逐帧跟手，加了过渡就是手感灾难", "https://github.com/tldraw/tldraw/blob/main/packages/tldraw/src/lib/ui.css"],
+  ["关动效", "tldraw UserPreferences / Windows UISettings", "跟随系统，可手动覆盖；DEFAULT_ANIMATION_OPTIONS.duration = 0", "ok", "可用：UISettings.AnimationsEnabled（19041 起有变更事件）——但平台不代劳，要自己把时长归零", "https://learn.microsoft.com/en-us/uwp/api/windows.ui.viewmanagement.uisettings"],
+  ["对比度下限", "WCAG 1.4.3 / 1.4.11", "文字 4.5:1，非文字（描边/选中）3:1", "ok", "可用：我们 Core 里已有 NotePalette.Contrast，缺的是把 3:1 那条也钉给选中描边", "https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html"],
+  ["目标尺寸", "WCAG 2.5.8 / Apple / Material", "≥24 CSS px（Apple 44pt、Material 48dp）", "ok", "可用：手柄可见 8、命中 24", "https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum.html"],
+  ["毛玻璃工具条", "CSS backdrop-filter", "——", "no", "不可得：WinUI 无 backdrop-filter/高斯模糊，in-app acrylic 在电池模式/关透明效果/低端机静默退化 ⇒ 这格不进承诺，用不透明面板＋1px 描边", "https://learn.microsoft.com/en-us/windows/apps/develop/ui/in-app-acrylic"],
+  ["多层阴影/混合模式/mask", "CSS box-shadow×n、mix-blend-mode、mask-image", "——", "no", "不可得：XAML 元素无混合模式、无 OpacityMask ⇒ 原型里也没用", "https://learn.microsoft.com/en-us/windows/apps/develop/ui/shadows"],
+
+  ["边框／轮廓（你说「一条线」不满意，这是重做的那款）", "Radix Themes --shadow-2 ＋ Fluent layering 表 ＋ tldraw/Excalidraw 便签实物", "三档（你判：「一条线」与「硬影」都退了，同档的 Material elevation 层级也随之删掉——影子由逐格 inline 写，CSS 里那套永远压不过它＝死码）：① 环＋影＝Radix 公布的 --shadow-2 原结构 `0 0 0 1px α, 0 0 0 0.5px α, 0 1px 1px 0 α, 0 2px 1px -1px α, 0 1px 3px 0 α` 叠 Primer/Bootstrap 那条 `inset 0 1px 0 rgb(255 255 255/.15)` 压印，α 走它发布的阶梯 .05/.1/.15/.2/.3/.4，浅底用黑、深底用白 ⇒ 同一套结构两档都成立，不会像同色系实线那样在深档糊成一片；② 纸影＝tldraw 实物：**便签根本没有描边**，三层影子承担边缘（x 偏移恒 0、只向下、两层都带负 spread、第三层是 48px 大偏移的 inset＝顶缘一道极淡压影），lift 按 id 播种在 0.5~1.5 ⇒ 每张纸的影子略有不同，一排便签不再像复制粘贴；缩到 0.25 以下影子写 none、只补一条 2px×scale 的**下边线**；③ 环＋纸＝结合档（你要的那一档）：Radix 的 alpha 环（身份，永远在）＋ tldraw 的三层纸影（含按 id 播种的 lift 与顶缘 inset）；LOD 降级时留环、把三层影换成一条下边线——环不是阴影，缩放再小也画得起。退掉的硬影那档把数留档：Excalidraw `offset 3 / rgba(0,0,0,.16)` 硬位移副本 ＋ `0.5px / .08` 边缘影。实测层数：环＋影 6 层、纸影 3 层、环＋纸 5 层，降级后环 2 层＋1px 下边线。微软的原话正是 ① 的根据：影子与轮廓一起表达高度（表：Card 8/1、Control 2/1、Window 128/1）", "ok", "可用，而且比 Material 那套更好落：环那一层是**零模糊的纯 spread** ⇒ 在 WinUI 里就是一枚 1px 描边，不需要 Shadow；只有两层模糊要 `CompositionNineGridBrush` 精灵图。tldraw 那条 alpha 环的思路对我们尤其关键：一个值在两档主题都成立，省掉「深档糊掉」这类返工。**未证**：深底上 tldraw 那层近黑 rgba(15,23,31) 影子的可见性——它自己的 SVG 导出在 darkMode 里直接跳过这层影子", "https://github.com/radix-ui/themes/blob/main/packages/radix-ui-themes/src/components/card.css"],
+  ["便签要不要微倾／卷角", "四家全查：NOT FOUND ⇒ 不做", "我原想给每张便签一个随机小角度（纸片感），查下来没有任何一家给便签随机倾斜：tldraw 的 createNoteShape 只写 x、y、scale，rotation 默认 0，它的 random() 只用在影子上；Excalidraw 的 angle 全由用户设，元素创建路径里没有 Math.random()；Miro 的 StickyNote 类型根本没有 rotation 字段（Text 才有）；Figma 帮助页「Sticky notes in FigJam」甚至写便签不能旋转（那一句是 WebFetch 转述，原文措辞未证）。Excalidraw 确有『卷角』，但那是 roughness=2 那一档的整套手绘几何（一个随机抬起的角，reach＝min(size×0.18, 40)、lift＝min(size×0.02, 5)），不属于我们这版。⇒ 本轮我只做了「按 id 播种的影子 lift」这一件随机性，因为它正是 tldraw 自己用的那一件", "un", "微倾在 WinUI 侧还有第二道闸：JSON Canvas 规范里没有 rotation 字段，角度要存只能进 sidecar ⇒ 与「文档能被 agent 直接读写」这条定档冲突。两条都写在这里，免得下一轮有人当新想法做", "https://github.com/tldraw/tldraw/blob/main/packages/tldraw/src/lib/shapes/note/toolStates/Pointing.ts"],
+  ["便签与板底的分离（这一格解释了「边缘只能靠一条线」）", "WCAG 1.4.11 ＋ 我自己这一轮量出来的数", "把彩度砍进纸区之后，便签与板底的**亮度比只剩 1.04:1（浅档，最弱那枚）/1.20:1（深档）** ⇒ 剪影不成立，那条 1px 线成了唯一在承担边缘的东西，所以你读到的就是「用一条线做」。现在配色开关多一档：淡纸＝Radix 第 3 步（你上轮说好看的那套）、**中纸＝第 5 步（它给 active/selected 背景的那层，实测分离升到 1.17:1 浅 / 1.46:1 深）**、贴纸区＝第 9 步附近（上一版；它在深档给 11.31:1，恰恰因为它根本没有深色套，等于把浅色那叠直接扣在黑底上——这不是好，是漏）。左下角的读数现在打两把尺：字/底（4.5:1 那道门）与 便签/板底（非文字那道门），切档时数字跟着动。对照着说：tldraw 自己的便签与板底也只有约 1.4:1 —— 非文字 3:1 那扇门是给 UI 控件的，实物画板产品都在它以下，所以这一格只能「拉开」不能「拉满」，拉到 3:1 就退回贴纸区", "ok", "可用：等价做法是在 NotePalette 里存两套深度（第 3 与第 5 步）＋ sidecar 记一档选择；或者按这条读数把默认改成第 5 步。板底色不参与：它是 tldraw 的发布值 hsl(210,20%,98%)，别为了拉分离去动它", "https://www.w3.org/WAI/WCAG21/Understanding/non-text-contrast.html"],
+  ["纸面渐变", "我方定（tldraw 实物是平色＋2px 边＋影子，未找到用渐变的证据）", "顶 16% 白 → 42% 处透明 → 底 4% 黑。上一版是 55%/5.5%，配色降到纸区（C 0.05）之后那层白会把颜色洗没，所以一起削掉。这层没有出处，你要嫌多可以直接砍成 0", "ok", "可用：LinearGradientBrush 三停靠，不需平铺", "https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.media.lineargradientbrush"],
+  ["圆角（上一版三档你判「都很一般」，这版加了一档按尺寸走的）", "tldraw 实物 / Windows 11 geometry / 苹果 WWDC25 356 / Excalidraw 实物公式", "四档：直角＝0；1px＝tldraw 便签容器的 border-radius（它的选中轮廓仍是直角——框是仪器不是物体）；4px＝Windows 11 ControlCornerRadius（OverlayCornerRadius 8，ToolTip 因为小反而回到 4）；**自适应＝Excalidraw 给便签用的原式 `min(min(w,h)×0.04, 16)`，世界像素、随缩放一起长**（240×240 落 9.6px，是他们真发的值，不是我拍的常数）。支持「少圆」的那条硬规则来自微软自己：直边相交处不圆——SplitButton 两半、贴着锚点的 flyout 那一侧都是 0。嵌套公式（苹果 WWDC25 session 356 ＋ ConcentricRectangle）：内层圆角＝外层−内边距，差一档就是一条色偏线；Radix 的实现就是 `calc(inset-border-radius − inset-border-width)`", "ok", "可用也能守得住：WinUI 的 CornerRadius 是四枚纯标量、**没有 continuous/squircle**（我全仓搜过，文档也只给 4/8/0）⇒ 1~4px 上圆形和超椭圆的差别肉眼没有，反而大圆角在 WinUI 里必输。自适应档的等价写法：`Math.Min(Math.Min(w, h) * 0.04, 16) * scale`，每格一个 CornerRadius 值，不需要新机制", "https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/geometry"],
+  ["边上直接拖＝缩放", "Figma 的既有行为（带宽数我方定）", "**上一版我漏了一半，你这轮说「还是无法」是对的**：我只在格子的*内侧* 6px 判边，而肉眼瞄的是那条 1px 可见线，落点常常在它外面 1~3px ⇒ 那一发被板子接走成了平移（实测：dw=0、cam 动了 40px）。现在带子改成**边内或边外 6 屏幕像素都算**，并且在板子的 pointerdown 里也判一次（按在选择框那条边上＝缩放，不是平移）。规则不变：按下前没选中的那格仍然只移动（实测 dx=40、dw=0），选中那格才缩放（实测 dw=+37 边内 3px 起手 / 边外 2px 起手 dw=+42 / z=0.25 拖 20 屏幕像素＝世界 +72，少的 8 正是起手那 2px）。带宽 6px 无出处，是我按那条 1px 线的可见性定的", "ok", "可用：等价判据是「点到选中包围盒四条边的距离 ≤ 6/zoom 世界像素」，命中数学我们已经有（同一套 ScreenToWorld）；WinUI 里对应 PointerPressed 前先算 Rect 边界距离，别依赖 IsHitTestVisible 的那层", ""],
+  ["移动中的视觉", "你这一轮的口径（M3 的 dragged 层已收回）", "拖动时**收起选择框与手柄**（实测 selbox display 从 block→none→block），状态层不再铺 .16（M3 那条 dragged 是给可拖列表项/芯片的，不是给画布物体的），只剩高度抬到 L3 ＋ grabbing 光标，也就是你说的「最多虚化一下」。另外两条真成本一起修了：内容不再逐帧重写（实测拖动 20 帧里 img 的 src 被写 **0** 次），格子加 `contain: layout paint`，点阵在相机没动时不重绘 ⇒ 单帧从 6~12ms 降到 0.52（文字）/0.65（图片）ms。移动中还改成了**只写 transform**：tldraw 平移时也只重写 container.style.transform（Shape.tsx:82-91），因为改位移属性要走布局、改 transform 走合成器。实测拖动中 left/top 停在按下时的值、transform＝translate3d(20px,12px)，松手后写回 left 并清空 transform，多选两格同步", "ok", "可用，而且这条在 WinUI 更值钱：逐帧往视觉树里 Add/Remove 节点或重设 BitmapImage 的 Source 都会重新光栅化，等价做法是拖动只改 Canvas.SetLeft/Top ＋ 把 Source 赋值挪到「URL 变了」那一支；shadow 层用 CompositionNineGridBrush 的精灵图，不需要每帧重建", ""],
+  ["选择框不逐帧重挂", "我方缺陷（本轮实测抓到）", "给 items.appendChild 上桩：拖动一次手势里选择框被「摘下再挂回」12 次（每次 pointermove 一次）⇒ 你看到的闪就是它。现在只在它不是末位节点时才重挂，实测 12→0。顺手补第二条：拖动态的 ::before 状态层原本还挂着 83ms 淡入，改成 transition:none", "ok", "可用，而且要照着做：WinUI 里等价动作是 Canvas.SetLeft/Top 改坐标，**绝不要在每帧重新 Add/Remove 视觉树节点**——那在 composition 层就是重建可视物，闪得更明显", ""],
+  ["内缘：上高光 / 下暗线", "Fluent 卡片 1px 边框惯例", "inset 0 1px 0 白 62%；inset 0 -1px 0 黑 7%（深档 16% / 34%）", "ok", "可用：一枚 1px Rectangle 或 BorderThickness，别用 blur", "https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/materials"],
+  ["三层阴影（带负 spread）", "Material 2 elevation 官方表", "L1 静置 `0 2px 1px -1px / 0 1px 1px 0 / 0 1px 3px 0`，alpha .20/.14/.12；L2 悬停 `0 3px 1px -2px / 0 2px 2px 0 / 0 1px 5px 0`；L3 浮起 `0 3px 3px -2px / 0 3px 4px 0 / 0 1px 8px 0`", "ok", "可用：一枚元素只能挂一个 Shadow ⇒ 预渲染一张九宫格阴影精灵，`CompositionNineGridBrush` 我已在投影里 grep 实证存在（CreateNineGridBrush 也在）", "https://github.com/material-components/material-components-web/blob/v13.0.0/packages/mdc-elevation/_elevation-theme.scss"],
+  ["负 spread 为什么重要", "tldraw 便签阴影源码", "接触层 spread 为负（`-{a}px`），第三层是 inset 内底部阴影 2.2–2.7%", "ok", "可用：负 spread 正是直角物体不显出圆角阴影的原因；WinUI 侧由九宫格精灵的四边内缩天然表达", "https://github.com/tldraw/tldraw/blob/main/packages/tldraw/src/lib/shapes/note/NoteShapeUtil.tsx"],
+  ["状态层（hover/pressed/dragged）", "Material 3 官方 token", "hover .08 / focus .12 / pressed .12 / dragged .16（深档反相为白）", "ok", "可用：一枚覆盖层 Rectangle 改 Opacity，不动底色 ⇒ 不破坏用户选的便签色", "https://github.com/material-components/material-web/blob/main/tokens/versions/v0_192/_md-sys-state.scss"],
+  ["按下反馈＝高度塌陷", "Fluent elevation 表（方向）＋ Material L1/L2/L3（数值）", "微软原表：rest 2 → hover 2 → **pressed 1**，也就是 hover 不抬升、只有 pressed 塌一层；Material 的卡片是 hover 抬一层。两家在这件事上不一致，本页取 Material 的三层做静置/悬停/拖动（L1/L2/L3），取 Fluent 的方向做按下＝塌回 L1。上一版我塌到「零层影子」，读起来是卡片在消失，已收回。另一条实测：pressed 那行原本权重 (0,2,0) 压不过 hover 那行的 (1,4,0)，**真鼠标下按下去根本没有反馈**；补了 #board 前缀才生效", "ok", "可用：改 elevation 层数 ＋ 现成的 `PointerDownThemeAnimation`。WinUI 里等价坑是同一类——VisualState 的 PointerDown 组如果和 Hover 组同为 CommonState 而没排在后，鼠标按下时读到的是 Hover 的 Setter", "https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/layering"],
+  ["悬停延迟", "tldraw ui.css", "background-color 过渡 150ms 带 **80ms 延迟**（快速划过时不闪）", "ok", "可用：Storyboard/DropShadow 动画设 DelayTime=80ms", "https://github.com/tldraw/tldraw/blob/main/packages/tldraw/src/lib/ui.css"],
+  ["选中框与手柄：瞬时，不动", "tldraw 源码（.tl-selection / .tl-handle 无任何 transition）", "无时长、无曲线", "ok", "可用：保持现状（我们本来也是瞬时）。**我上一版加的选中淡入＋手柄错峰已撤销** —— 好的画布产品刻意不做这格", "https://github.com/tldraw/tldraw/blob/main/packages/editor/editor.css"],
+  ["创建 / 删除", "三家产品均未找到该动画", "只做微软 Bare Minimum：纯 opacity 83ms 线性，不位移不缩放", "cost", "可用：`AddDeleteThemeTransition` 是现成的；但我们只上最保守的淡入淡出，判断错了也不显花哨", "https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/motion"],
+  ["深底板上文字可读", "tldraw 做法", "不给便签加边框，给文字加一圈板底色光晕：`min(0.5, 1/zoom) × ±2px`", "cost", "有代价：XAML 无文字描边 ⇒ 退路是 4 枚偏移 TextBlock 或直接跳过；本页先用 text-shadow 演示观感", "https://github.com/tldraw/tldraw/blob/main/packages/editor/editor.css"],
+  ["零圆角能不能做出层次（否定结论）", "Bootstrap .375rem / tldraw 2–11px / Excalidraw 便签均有圆角", "没有找到「圆角=0 且公开了阴影 token」的旗舰产品", "ok", "可用：唯一有出处的直角先例就是 Windows 的 elevation + 1px contour 那张表 ⇒ 我们的层次必须靠 描边＋负spread＋内阴影，不靠圆角", "https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/layering"],
+  ["板底压暗（本轮抓到的一发真缺陷）", "我方定", "radial-gradient(120% 90% at 50% 42%, 透明 45% → 黑 5.5%)。**这一层原来写成 #board::after，于是它盖在了所有便签、连线与右下角读数条之上**——你报的「点阵图的板底在便签上方」就是它：CSS 里伪元素是元素的最后一个子节点，压暗罩因此压在最上层。现在改成一层独立 div，夹在点阵与连线之间（它压板底与点阵，物体全在它上面）。现读核对：板内子节点序＝grid, vignette, links, items, guides, marquee, linkui, badge, contrast；::after 的 background-image 现在为 none", "ok", "可用，但**层序要照这一版写**：WinUI 里那枚压暗 Rectangle 必须排在便签层的**前面**（XAML 后写的在上层），或者干脆并进画布背景的 Brush；写成 Grid 的最后一个子节点就会重现同一个 bug", "https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.media.radialgradientbrush"],
+  ["1px 内对比线（让描边在任何底色上都读得清）", "tldraw editor.css 实测", "每块面板都以 `inset 0 0 0 1px var(--tl-color-panel-contrast)` 收尾；亮档纯白、**深档反而更亮** hsl(245,12%,23%)（面板本身 13.5%）", "ok", "可用：一枚 1px Border/Rectangle；深档要把对比线调亮而不是调暗，这是它给的机制", "https://github.com/tldraw/tldraw/blob/main/packages/editor/editor.css"],
+  ["键盘微调走位移动画", "我方判定", "83ms 位移 —— 键盘不是直接操纵，该动；鼠标拖动不许动", "ok", "可用：Offset 动画 83ms", "https://learn.microsoft.com/en-us/windows/apps/design/motion/timing-and-easing"],
+  ["关动效要连 animation 一起关", "我方实测踩到", "只把时长归零会留下第一帧 opacity:0，格子直接看不见", "ok", "可用：UISettings.AnimationsEnabled=false 时同时禁用过渡与入场，且入场元素初始态必须可读", "https://learn.microsoft.com/en-us/uwp/api/windows.ui.viewmanagement.uisettings"],
+
+  /* ── 本轮（快捷键·组·灵动·生产力）新增的格：每格独立，删任一行不影响其余 ── */
+  ["组＝一个矩形，不是成员列表", "JSON Canvas 1.0 规范（group 节点）", "规范给的 group 字段是 id/type/x/y/width/height/color/label/background/backgroundStyle，**没有成员列表**，原文只说它是 nodes within it 的 visual container ⇒ 成员＝中心点落在矩形内。所以我没往便签上塞私有字段（那会污染文档、agent 也读不懂），groups 就是 [{id,label,x,y,w,h}]。外扩 GROUP_PAD＝10 世界像素（规范没这个数，是我按 Obsidian 的观感定的）。附带行为：把成员拖出框它自然离组、把别的格拖进框它自然入组（Obsidian/tldraw 的 frame 也是这个语义）。组名走规范的 label 字段，双击名字牌可改", "ok", "可用：App 侧同一模型——.canvas 里 group 就是一枚节点，成员按包含现算；组框在 WinUI 里是一枚不参与命中的虚线 Shape，只有名字牌那一小格可点（IsHitTestVisible 收回来）", "https://jsoncanvas.org/spec/1.0/"],
+  ["拖一格＝整组一起走（组被选中时）", "我方判断（tldraw/Figma 的分组同语义，但没公布过实现）", "选中集里的成员一起动，并且**组框自己按同一位移平移**——否则拖完最后一格就出组了。实测：拖 n1 位移 120,69 ⇒ 框位移 120,69（逐枚相等）。微调（方向键）同样带框走。落点不重新贴合成员（那是布局命令落定后才做的事，见 applyTargets）", "ok", "可用：同一个位置写——移动集合里塞进组矩形，平移量共用", ""],
+  ["撤回栈现在带组与线", "我方（与 App 的 History 同一语义）", "快照从 notes 一格扩成 notes/groups/edges 三格 ⇒ 成组、拆组、连线、断线、改组名、导入都能撤回。实测：成组 1→撤 0→重做 1；导入前后各档计数相等（15/5/2）", "ok", "可用：App 侧还是 patch，只是 patch 的范围要覆盖 group/edge 两类节点——这一格在 App 里是**新增工作量**，不是免费的", ""],
+  ["对齐六枚与键位", "tldraw 源码里的 kbd 字符串（本轮逐条现读）", "align-left=alt+A、align-center-horizontal=alt+H、align-right=alt+D、align-top=alt+W、align-center-vertical=alt+V、align-bottom=alt+S；容器＝选中格的共同包围盒。实测 Alt+A 后四格 x 全＝40", "ok", "可用：键位照抄（Alt＋字母在 Win32 里不与输入冲突）；RichEditBox 焦点内不接管，与本页 editing 那一道 guard 同形", "https://github.com/tldraw/tldraw/blob/main/packages/tldraw/src/lib/ui/context/actions.tsx"],
+  ["均匀排开：负间隔这一发是我自己踩的", "Excalidraw 的 space:between 数学 ＋ 我方实测", "首尾钉在包围盒上、间隔＝(包围盒尺寸−尺寸和)/(n−1)。照抄之后实测翻车：刚按完左对齐的四格包围盒只有一格宽 ⇒ 间隔＝**−216**，四格被压成一格。修法＝给间隔一个下限 24（与堆叠、聚拢同一个数），包围盒不够就把它撑开，起点仍钉在原左/上边。实测修后：间隔 24/24/24，起点仍是 40。纵向同理 24/24", "ok", "可用：这是纯数学，落 App 时同一条下限要写在同一个函数里；点名：两家先客都没有这条下限（它们的场景里包围盒通常够宽），所以这是我们自己加的", ""],
+  ["堆叠：像一沓，但每格露出边", "我方判断（NOT FOUND）", "左上角阶梯，偏移 24 世界像素 ⇒ 每格露出上/左各 24px 的边，互相不完全遮挡（你这条要求的具体化）。点名：tldraw 有 stack-horizontal/vertical 两枚动作但**没有默认 kbd**（只在菜单里），它是排成行不是堆成一沓；四家产品都没公布过一沓的固定偏移。键位 Alt+⇧S 也是我给的（与 Alt+S＝下对齐不撞）", "ok", "可用：24 是世界像素，缩放到 25% 时屏幕上只有 6px——真要落 App 可以把这个数改成按屏幕像素取（8/zoom 那一族），本页先按世界像素", ""],
+  ["按颜色／按标签聚拢", "我方判断 ＋ tldraw 的 Alt+⇧H/V 键位形状", "颜色键＝预设名（没有预设的自定义 hex 归到那一格），标签键＝正文里第一个 #xxx。落定后**按簇重建组框**（≥2 张才给框），于是聚拢的产出是可命名的容器而不是一堆碰巧靠近的格子；代价＝原来手工分的组会散（能撤回，快照里带 groups）。实测：改色后聚拢⇒框两张（黄:2、蓝:2），单人簇不给框。自读代码抓到的一发碰撞：#due:2026-10-12 会被标签扫描认成 #due 这枚标签 ⇒ 先把到期那一段摘掉再扫", "ok", "可用：同一套；App 里标签语义要落到正文（规范没有 tag 字段），这也是 agent 能直接读的原因", ""],
+  ["连线＝规范里的 edge，端点落在矩形边上", "JSON Canvas 1.0（edge 字段）＋ 我方几何", "规范字段 id/fromNode/fromSide/fromEnd/toNode/toSide/toEnd/color/label ⇒ 原型只存 {id,a,b}，导出写成 fromNode/toNode，Obsidian 打开就是合法的边。端点不是格子中心而是**矩形边上的交点**（线是从字底下穿过去的这个理由我不接受）。箭头是自己算的三角（9×4.5 屏幕像素，我的判断值：三家都用 marker/箭头但没有公布尺寸）。线宽 1.5 屏幕像素恒定；线色＝tldraw 公布的便签描边灰 rgb(144,144,144)，深档换 rgb(150,157,168)——现量对比：浅档对板底 3.05:1、深档 6.96:1，都过 WCAG 非文字 3:1 那扇门（浅档是压线过，因为它只压 3.00 的门）。Alt+C 是来回键：这几对已有线就删。实测：两格连线 1→2→1；选中时那一枚 g 的 class 变成 edge on", "ok", "可用：WinUI 里就是一枚覆盖层 Path/Line（与吸附线同一层），箭头用 Polygon；**未做的一格要点名**：fromSide/toSide 与贝塞尔走线（Obsidian 会绕），原型是直线", "https://jsoncanvas.org/spec/1.0/"],
+  ["到期：#due:2026-10-12 写在正文里", "我方判断（约定，不是字段）", "不新增字段——日期长在便签文本里，所以它天然进 .canvas、天然被检索到，agent 写一句话就够用。屏上痕迹只有两样：格子左边缘一条 2px 色条（贴边、不吃内边距、不给文字加底），和右侧那张清单（逾期／今天／N 天后，点一行选中并保证它在视野里）。色条用 Radix 公布的 11 步（浅 tomato11 #d13415 / amber11 #ab6400，深 #ff977d / #ffca16，值取自它 src/light.ts 与 src/dark.ts）——现量对便签底色：浅 4.98:1 与 4.61:1，深 7.21:1 与 9.91:1，都过非文字 3:1。只认 ISO 写法，中文日期不解析（写宽了就没法保证 agent 也这么写）", "ok", "可用：同一条约定；App 里逾期那一格如果要提醒，得由文件监听触发而不是渲染循环——这条本页没做", "https://www.radix-ui.com/colors/docs/palette-composition/understanding-the-scale"],
+  ["跳到邻格用 Alt＋方向，不用 Tab", "我方判断（Figma/tldraw 的层间跳转也不是 Tab）", "三件一起挑：必须真在那个方向上（投影>0）、偏离那条射线越少越好、前进量越小越好（偏航罚权 2＝判断值）。跳完保证它在视野里（只平移不改缩放）。为什么不吃 Tab：板子一旦接管 Tab，键盘用户就到不了右侧面板，而那一排按钮正是 WCAG 2.1.4 要求的替代输入面——把替代面挡住等于自己拆自己的合规。实测：从 n1 按 Alt＋→ 选中了 n2", "ok", "可用：WinUI 里同理——画布控件自己处理 Alt＋方向，Tab 留给 XAMLFocus（这一条到 App 里要现验：IsTabStop 的层序和我页面上不一样）", "https://www.w3.org/WAI/WCAG21/Understanding/character-key-shortcuts.html"],
+  ["单字符快捷键总开关", "WCAG 2.1.4 Character Key Shortcuts", "本页最后剩下的裸字符键只有两枚：. 与 /（其余全收进 Alt／Ctrl 或方向键）。页眉那一档「单键快捷＝关」把这一类整体关掉，Ctrl/Alt 组合、方向键、Enter、Del、Esc 不受影响；右侧按钮那一面任何时候都在。实测：关掉之后按 . 不改聚焦（view.focus 仍 false、撤回栈没变长），Ctrl+F 仍然把光标送进查找框；开关拨回开后 . 立刻生效", "ok", "可用：App 里对应「设置›键盘›单键快捷键」一枚开关＋一张键位表；这条是合规项不是偏好项", "https://www.w3.org/WAI/WCAG21/Understanding/character-key-shortcuts.html"],
+  ["缩放三枚＋相机那一段的时长", "tldraw 源码（kbd 与 animationMediumMs 都是本轮现读）", "zoom-to-fit=shift+1、zoom-to-selection=shift+2、zoom-to-100=shift+0（三家一致），Ctrl+0 作为别名留着（浏览器惯例）。数字用 e.code 判：Shift+1 在美式键盘上 e.key 是 ! ——按 e.key 判就得两枚都列，中文键盘更乱。相机 tween 的 320ms **就是** tldraw 公布的 animationMediumMs: 320（它给 zoom-to-selection 传的就是这一档），曲线 easeInOutCubic(0.65,0,0.35,1)", "ok", "可用：Composition 的 LinearCubicEasing 没有现成的三次贝塞尔？其实有——CompositionEasingFunction.Cubic 支持四个控制点，数值照搬", "https://github.com/tldraw/tldraw/blob/main/packages/editor/src/lib/options.ts"],
+  ["灵动的那几档：悬停 120ms、布局 250ms、手柄 83ms", "Radix（曲线）＋ Material 3（曲线与时长）＋ 微软 Bare Minimum ＋ tldraw", "①状态层从 83ms/(0,0,0,1) 换成 **120ms + cubic-bezier(0.16,1,0.3,1)**——曲线是 Radix 公布值（它 tooltip 的 scaleIn 用的就是这一条，本轮从 apps/storybook/stories/tooltip.stories.module.css 现读到 0.6s cubic-bezier(0.16,1,0.3,1) 与 0.2s ease-out），**120ms 这个时长是我定的**（微软 83 与本页 base 167 之间；Radix 给淡入淡出用的是 0.2s，那对弹出层合适、对一枚常驻格子的悬停太慢）。83ms 拿来当悬停像被电了一下＝上一轮「有动效但不灵动」的真因。②布局命令 250ms（M3 medium1，tldraw 的 animationMediumMs 是 320，我取中间偏快）＋ emphasized-decelerate(0.05,0.7,0.1,1)：起步快收尾慢、不回弹。③手柄悬停 8→10px、83ms 线性（微软 Bare Minimum；8/10 这两个数是判断值）。④选中框与手柄的出现**仍然瞬时**——tldraw 的 .tl-selection/.tl-handle 里没有 transition，直接操纵慢一帧会被读成卡。⑤面板/页眉按钮的悬停也统一走 120ms：菜单不是直接操纵，两者不该共用一把尺。现读落地的数：--dur-hover=120ms、曲线 cubic-bezier(0.16,1,0.3,1)、状态层实际 0.12s、手柄 0.083s、连线 0.12s", "ok", "可用：Composition 侧 CompositionEasingFunction.Function(x1,y1,x2,y2) 直接吃这四个数＋ UISettings.AnimationsEnabled 作总闸", "https://github.com/radix-ui/primitives/blob/main/apps/storybook/stories/tooltip.stories.module.css"],
+  ["JS 里手搓贝塞尔：系数写错不会抛异常", "本轮自抓（对照物是浏览器自己）", "第一版把 a 那一项写成 1−3p2+2p1（正解是 1+3p1−3p2），于是 x(1)≠1、曲线非单调：现采样直接露出来——0.1→0.59、0.25→0.698、0.5→**0.621**、0.75→**0.457**（后半程在倒退）。修完之后拿浏览器自己当裁判：用 WAAPI 把同一个 cubic-bezier 挂在探针元素上、逐点 currentTime 取值，与我的求值器比——两条曲线五个采样点 maxErr=0.0000、单调、端点 0/1。牛顿迭代在平坡处会甩出定义域，所以每步夹回 [0,1]", "ok", "可用，但**别手搓**：落 App 时这条曲线应该是 CompositionEasingFunction.Function(x1,y1,x2,y2)，让合成器算；这一发保留下来是因为它证明了「系数错=错曲线，不是崩溃」——错曲线在两套实现里都是安静的", ""],
+  ["导出／导入 .canvas（这一发证明文档装得下）", "JSON Canvas 1.0", "导出一张板子＝nodes（group 节点在前，因为数组顺序就是 z 序）＋ edges。颜色只写预设名 1~6，**不把主题相关的 hex 写进盘**（切主题不该改文档；自定义色才写 hex）。实测一次完整往返：20 枚节点／2 条边，类型 group,text,file 三样都在，group 带 label；导入后各档计数与导出前逐项相等（15/5/2 对 15/5/2），颜色从 2/5/4/6/1 回到 amber/blue/green/purple/tomato，正文里的 #due 原样保留。点名两处未覆盖：① 图片节点规范要的是相对路径 file 字段，原型只有 data:URL ⇒ 导出写的是占位路径，这一格必须由 App 的真实文件系统满足；② 下载那一下（a.click）没测——它不产生任何可核对的读数，测了也只是证明浏览器允许下载", "ok", "可用：App 侧本来就在写 .canvas（DocDiff＋patch），这一格在原型里的作用是**证明手感层的状态都能落进那份文件**，包括本轮新加的组与线", "https://jsoncanvas.org/spec/1.0/"],
+  ["手势词汇重排：左键框选、右键平移、右键拖端点", "tldraw 公布的 rightClickPanning（本轮现读 editor/src/lib/options.ts 的原注释）", "   上一版：左键拖空白＝平移、Shift＋拖＝框选。改成 tldraw 那一套——左键拖空白＝框选（不必再按修饰键）、右键拖＝平移、空格＋拖＝平移（Adobe 习惯留着）。它原文写得很清楚：right-click + drag pans the camera and a static right-click opens the context menu at the release position ⇒ 拖过的右键把 contextmenu 吞掉，静止的右键仍把菜单交回宿主（原型没有自己的菜单，App 那一发要换成弹我们自己的）。框的出现也改了：拖过 4px 阈值才显示，单击不该闪一个 0×0 的点。端点把手同时搬到右键（见上一格）。实测七发：左键拖⇒marquee=block 且 cam 位移 0,0；右键拖⇒cam +80/+50 且 marquee=none；空格＋左拖⇒cam +80 无框选；静止左键点空白⇒sel=0；左键压把手⇒不进端点模式；右键压把手拖到格子上方⇒面变 n 且历史记「端点」；右边偏 30% 高处⇒240→310 缩放没被抢；静止右键⇒菜单未被吞、拖过的⇒被吞", "cost", "可用：WinUI 里用 PointerPoint.Properties.IsRightButtonPressed 分流；空格那一发要小心——XAML 里 Space 常被控件自己吃掉（Button/ListView 用它激活），要 PreviewKeyDown 收且只在焦点不在内容控件时收。右键在 WinUI 还会走 ContextFlyout，拖完得显式压制，否则照样弹菜单", ""],
+  ["选中的层次：第一次点＝组，第二次点＝单枚", "Figma／Obsidian 的进入组，加上你这一轮的口径", "上一版我写成「按下组内的格就把选中集直接扩成整组」，于是**组里的单枚永远选不中**（你的第 1 条）。现在两个状态分开存：groupFocus＝当前 inside 的那一组，unitMode＝停在组这一层还是进到单枚。规则：第一次点组内格＝整组（框由虚线变 2px 实线，选中框罩住整组）；同一个组里第二下＝只点那一枚；已经 inside 之后点别的成员＝继续单枚（不许在整组／单枚之间来回弹）；Esc 是往上退一层（单枚→整组→无），不是一把清空；Ctrl＋点走单枚增删并退出组层。删除在组这一层＝删整组成员。实测：点 n1（组内）⇒ sel 两张＋unitMode；再点 n2⇒sel 只剩 n2、unitMode=false；Esc⇒回到两张；框的 class 是 grouphull unit", "ok", "可用：App 里同一对状态（一个 id + 一个 bool），落盘不动——层次是视图态，不写进 .canvas", "https://jsoncanvas.org/spec/1.0/"],
+  ["连线改自由曲线＋端点可换面", "JSON Canvas 的 fromSide/toSide ＋ 我方判断（控制臂长）", "上一版是直线、端点用「射线与矩形求交」，你判「很突兀」。改成：端点固定在那一面的**中点**（n/e/s/w 四面，规范里的 fromSide/toSide 就是为这件事存在的），走线用三次贝塞尔，控制点沿该面的法向外伸 k＝0.45 倍端点距离、夹在 28~180 屏幕像素（判断值：三家都用贝塞尔但没一家公布控制臂；区间按「短距离别打圈、长距离别变直」定）。新建时按「面对面」自动挑面（主轴归一化比较，扁格优先上下两面）。**改面是拖出来的**：选中那一端的格子 ⇒ 该端出现一枚把手（可见 r=4.5、命中 r=13＝26px 见方，过 WCAG 2.5.8 那扇 24px 的门），**右键拖它**就换面；左键在那一点上仍然归那条边（压边＝缩放），所以两者不再抢同一块——上一版它是 22px 且左键就能拖，那块热区确实被端点吃掉了，拖的过程中曲线实时跟着走；松手记一笔「端点」进撤回栈。箭头沿曲线末端切线，不是两点连线方向（不然弯过来的线头上会翘）。导出写 fromSide/toSide、导入读回来（未写面的旧数据按自动档兜底）", "ok", "可用：WinUI 里 Path 的 BezierSegment ＋ 同一套 k；把手是一枚 Ellipse ＋ 一层透明命中圈（**不能留 Background={x:Null}**，那是上一轮咬过我们的同一把刀）", "https://jsoncanvas.org/spec/1.0/"],
+  ["快捷键按了没反应的真因：焦点在板子上，不在页面上", "我方实测（你的第 3 条）", "上一版监听挂在 #board 上（它有 tabindex=0），于是**没点过板子的时候键盘事件根本到不了我们这里**——不是键位错，是根本没进函数。⇒ 监听从 board 搬到 window；两道放行：正在写字（contentEditable／INPUT／TEXTAREA／SELECT）一概不接管，焦点在按钮上时 Enter／Space 交回按钮自己按（WCAG 2.1.1 的门）。第二条：中文 Windows 上 **Alt+Shift 会被输入法抢去切键盘布局**，所以主键位改成 Alt＋单字母（均分 Alt+J/K、堆叠 Alt+L、聚拢 Alt+Y/T、骨架 Alt+P/R/B），tldraw 原味的 Alt+Shift+H/V 仍认作别名。第三条：右侧按钮点下去必须有结果 ⇒ 命令对象从「选中格」改成 cmdTargets(min)——选中不足就把全体当对象（对齐／均分／堆叠／连线这四族；复制／锁定／成组不退化，那三族拿全体做是事故）。点名风险：Ctrl+L、Alt+D 一类浏览器自己也要用，被宿主吃掉的那一枚只能靠按钮", "ok", "可用：App 里对应「键盘焦点进画布才接管」这件事由 XAML 的焦点域决定，不能照搬 window 监听——要把 PreviewKeyDown 挂在根上并同样放行输入控件；Alt+Shift 那条在 WinUI 里同样成立", ""],
+  ["⇧ 这种记号不许留在屏上", "你这一轮问的「↑是什么意思」", "我把 Shift 写成 ⇧、方向写成「Alt+方向」，你读成了上箭头⇒ 需要解释的记号等于没交付。现在 kbd 里一律写 Ctrl／Shift／Alt 全名，方向键写「Alt+方向键」", "ok", "可用：App 的键位表同理——用文字，不用符号", ""],
+  ["便签大小随文字（可关）", "我方（默认值来自上一轮的测量）", "页眉加一档「便签大小：随文字／固定」。默认随文字——那是上一轮量出来的最大一项：六格演示里文字只占框高 39.7%~50.1%，字漂在半空色块正中。关掉之后 fit() 直接返回：编辑只改文字不改框高，框的大小归手柄管。拨回「随文字」时立刻按当前文字重排一次（不然开关只对新输入生效，看着像没反应）", "cost", "可用：App 侧就是「文字变化时是否重算 height 再写进 .canvas」那一步开关；关掉时要注意**写盘字段与屏上高度会不一致**，所以这一档在 App 里应当只影响新建与编辑，不该把已有框高改掉", ""],
+  ["三套骨架（日程／复盘／看板）", "复盘那一套＝我方判断（4F 是会议法，不是产品规格）", "都只造节点、不碰别的机制：列名用 group 的 label，空卡两张一列，落点＝当前视口中心（不是世界原点，免得跳相机）。尺寸列宽 240／列间 32／卡高 118／卡间 24＝判断值，四家产品都没公布过骨架尺寸。复盘那一列额外挂一条边（卡点两张卡之间），是为了让「线」这一格在开屏就看得见。实测：Alt+⇧R ⇒ +8 张卡、4 个组框、+1 条边；撤回后三项全部回到 0", "ok", "可用：同一套；App 里骨架该由 agent 生成而不是菜单硬编码——这里的三套就是给它预留的形状", ""],
+];
+const TAG = { ok: ["可用", "ok"], cost: ["可用·有代价", "cost"], no: ["不可得", "no"], un: ["未证", "un"] };
+document.getElementById("recipe").innerHTML =
+  "<tr><th>格</th><th>抄谁</th><th>数值</th><th>落到 WinUI</th></tr>" +
+  R.map(([name, who, val, tag, why, url]) =>
+    `<tr><td>${name}${url ? `<br><a href="${url}" target="_blank" rel="noreferrer">来源</a>` : ""}</td>` +
+    `<td>${who}</td><td class="v">${val}</td>` +
+    `<td><span class="tag ${TAG[tag][1]}">${TAG[tag][0]}</span><br>${why}</td></tr>`).join("");
+
+render();
+/* 演示格子先按内容定高再画第二遍：不然一开屏就是六个半空的 240×240，
+   而这正是这一轮要修的那件事 */
+for (const n of notes) if (n.kind === "text") fit(n);
+render();
+</script>
+</body>
+</html>

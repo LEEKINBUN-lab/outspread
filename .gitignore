@@ -1,0 +1,12 @@
+bin/
+obj/
+*.user
+
+# The board's own camera and per-note font sizes: app state, not board content.
+*.canvas.view.json
+*.canvas.*.tmp
+*.canvas.tmp
+
+# What a round that could not push leaves behind: the intended state, kept whole.
+# Named like the sidecar on purpose — a `.canvas` suffix would make it look like a board.
+*.canvas.conflict-r*

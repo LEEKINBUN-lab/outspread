@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>Outspread.Board</RootNamespace>
+    <AssemblyName>Outspread.Board</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!-- 图标是 node design/logo/make-ico.mjs 出的（9 档：16/20/24/32/40/48/64/128/256）。
+         形状和材质不在脚本里画 —— 全在 design/logo-variants.html 的 C8·F1 那一枚上，
+         脚本只是驱动无头浏览器按档各出一张 PNG 再装进 .ico（材质用了 SVG 滤镜，纯 JS 光栅化做不了）。
+         16/20 与 24/32 是**换形**不是缩放：墨条在 16px 上只有 0.44 个像素，所以那两档并成一条粗的。
+         改形状就改 logo-variants.html 再跑一次，别手改二进制。 -->
+    <ApplicationIcon>Assets\outspread.ico</ApplicationIcon>
+
+    <!-- WinUI 3 requires an explicit architecture; AnyCPU is not supported. -->
+    <Platforms>x64</Platforms>
+    <Platform>x64</Platform>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+
+    <!-- Unpackaged: plain .exe, no MSIX, no package identity. Packaged installs
+         build fine on this machine but do not launch (see Helm README), and the
+         Windows App Runtime 2.5.1 is already installed machine-wide, so the
+         framework-dependent layout is the one that actually runs here. -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <EnableWinAppRunSupport>false</EnableWinAppRunSupport>
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
+
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Outspread.Core\Outspread.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
+  </ItemGroup>
+
+</Project>

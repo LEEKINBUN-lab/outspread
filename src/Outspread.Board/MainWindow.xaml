@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Window
+    x:Class="Outspread.Board.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    Title="铺陈"
+    mc:Ignorable="d">
+
+    <!--
+        A free canvas: no scrolling host anywhere, so a scrollbar cannot appear.
+        Dragging empty space pans, the wheel zooms about the pointer, Shift+drag
+        draws a marquee. Items are laid out in screen coordinates by us, so text is
+        rasterised at the size it is read at instead of being stretched by a
+        composition scale.
+    -->
+    <Grid
+        x:Name="Root"
+        UseLayoutRounding="False"
+        Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+
+        <Grid.Resources>
+            <!-- His rule: square corners on anything this app draws itself. -->
+            <CornerRadius x:Key="ControlCornerRadius">0</CornerRadius>
+            <CornerRadius x:Key="OverlayCornerRadius">0</CornerRadius>
+        </Grid.Resources>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 原来这里有一栏页眉：左边"铺陈"、右边"板子 · scratch"。删了——板子就是要占满，
+             而名字和文件名该说话的时候在底下那行说（打开时报一次，之后让位给操作回执）。 -->
+        <Grid
+            x:Name="BoardArea"
+            Grid.Row="0"
+            UseLayoutRounding="False"
+            AllowDrop="True"
+            IsTabStop="True"
+            Background="#FFF9FAFB">
+
+            <!-- 点阵底与板底压暗：必须排在 ItemLayer **之前**——XAML 里后写的在上层。
+                 网页那版把压暗写成 #board::after，伪元素是最后一个子节点，于是它盖住了所有便签，
+                 看起来就是“板底在便签上方”。 -->
+            <Image
+                x:Name="GridLayer"
+                IsHitTestVisible="False"
+                Stretch="Fill"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top">
+                <!-- BoardArea 是 Grid，不是 Canvas：Canvas.SetLeft 对它无效，相位只能靠这个变换走。 -->
+                <Image.RenderTransform>
+                    <TranslateTransform x:Name="GridOffset" />
+                </Image.RenderTransform>
+            </Image>
+
+            <Rectangle x:Name="VignetteLayer" IsHitTestVisible="False" />
+
+            <!-- 平移期间整层走一枚 TranslateTransform：逐格重排一次要 20–50ms（日志里那行
+                 "arrange took … ms"），右键平移就会变成 20fps 的顿挫。松手时再走一次真正的
+                 逐格排布并把这枚变换归零。位移不改缩放，所以字形不会因为走变换而变糊——
+                 那条"不用 render transform"的规矩针对的是缩放，不是平移。 -->
+            <Canvas x:Name="PanLayer">
+                <Canvas.RenderTransform>
+                    <TranslateTransform x:Name="PanShift" />
+                </Canvas.RenderTransform>
+
+                <!-- 便签之间的箭头。必须排在 ItemLayer **之前**（XAML 后写的在上层）：
+                     网页那版 #links 也在 #items 之前——线是两张格子的关系，压在纸上就会挡住字。 -->
+                <Canvas x:Name="LinkLayer" IsHitTestVisible="False" />
+
+                <!-- Realised nodes, positioned in screen coordinates. -->
+                <Canvas
+                    x:Name="ItemLayer"
+                    UseLayoutRounding="False"
+                    IsHitTestVisible="True" />
+
+                <!-- Alignment guides: drawn over the items, never in the way of a click. -->
+                <Canvas x:Name="GuideLayer" IsHitTestVisible="False" />
+
+                <!-- Selection outline, handles and the marquee. Colours come from Core's
+                     SelectionChrome (ChromeStyling), not from theme resources. -->
+                <Canvas x:Name="HandleLayer" IsHitTestVisible="True">
+                    <Rectangle
+                        x:Name="SelectionOutline"
+                        StrokeThickness="1"
+                        IsHitTestVisible="False" />
+
+                    <!-- 内侧那条对比线：深色便签上纯蓝描边会糊进卡面（Figma 的做法）。
+                         WinUI 没有 inset box-shadow，所以是一枚往里缩一像素的第二描边。 -->
+                    <Rectangle
+                        x:Name="SelectionInner"
+                        StrokeThickness="1"
+                        IsHitTestVisible="False" />
+                </Canvas>
+
+                <!-- The in-place editor: a TextBox that is composition-scaled gets soft glyphs
+                     and a caret rect the IME candidate window cannot anchor to. 平移时它跟着层走
+                     位移（编辑器开着时按到别处就先提交，所以不存在"编辑中被平移"）。 -->
+                <Canvas x:Name="LinkHandleLayer" IsHitTestVisible="True" />
+
+                <Canvas x:Name="EditorLayer" IsHitTestVisible="True" />
+            </Canvas>
+
+            <!-- 键位清单（按住 Tab 出现）。不是 Popup：Popup 是另一个顶层窗口，
+                 outspread shot 拍不到，于是它的样式成了一个没有读数支持的断言。这块是板子树里的
+                 Border，截图能看见，判语就能自己复验。
+                 居中 + 整块板子压暗 46%（原型 #scrim/#cheat 现量）。压暗不是装饰：清单要压在板子上，
+                 不压暗就分不清哪一层是可点的。里面的行是菜单那一枚控件（PanelKit），宿主自带滚动。 -->
+            <Rectangle
+                x:Name="CheatScrim"
+                Visibility="Collapsed"
+                Fill="#75000000"
+                IsHitTestVisible="False" />
+            <Border
+                x:Name="CheatPanel"
+                Visibility="Collapsed"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                MaxWidth="772"
+                MaxHeight="660"
+                PointerPressed="OnCheatPanelPressed">
+                <ScrollViewer x:Name="CheatScroll" />
+            </Border>
+
+            <!-- 筛选面板（右键菜单里"筛选：日期与标签…"打开它）。常驻的 chip 排撤了：卡片左缘那条色条
+                 已经把"这格有日期"说完了，第二处永远在场就是把数据摘要当主界面在说话。 -->
+            <Border
+                x:Name="FilterPanel"
+                Visibility="Collapsed"
+                MinWidth="190"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,12,52"
+                MaxHeight="320"
+                PointerPressed="OnFilterPanelPressed">
+                <ScrollViewer x:Name="FilterScroll" />
+            </Border>
+
+            <!-- 只有筛选真在起作用时才出现的一条窄横幅。行仍是菜单那一枚（点它＝清除）。 -->
+            <Border
+                x:Name="FilterBanner"
+                Visibility="Collapsed"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Margin="0,12,0,0" />
+
+            <!-- 右下角那一组：一枚发丝边的容器，里面是无边框的成员（漏斗｜↶ ↷｜− 100% ＋）。
+                 形状/尺寸/颜色全部读 Core 的 Badge 令牌，而令牌是 2026-10-11 从 feel.html#badge
+                 用 getComputedStyle 现读的。之前这里是三枚默认样式的 Button——那等于把微软的控件
+                 设计当成我们的设计交了出去。成员仍是真 Button（能吃焦点、键盘按得到），
+                 只是把边框、底色、内距、字形尺寸都按令牌钉死。 -->
+            <Border
+                x:Name="BadgeHost"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,12,12">
+                <StackPanel Orientation="Horizontal" Spacing="2">
+                    <Button
+                        x:Name="UndoButton"
+                        Content="&#x21B6;"
+                        ToolTipService.ToolTip="撤回这一步"
+                        Click="OnUndoClick" />
+                    <Button
+                        x:Name="RedoButton"
+                        Content="&#x21B7;"
+                        ToolTipService.ToolTip="重做这一步"
+                        Click="OnRedoClick" />
+                    <Rectangle x:Name="BadgeSep2" Width="1" />
+                    <Button
+                        x:Name="ZoomOutButton"
+                        Content="&#x2212;"
+                        ToolTipService.ToolTip="缩小"
+                        Click="OnZoomOut" />
+                    <Button
+                        x:Name="ZoomLevelButton"
+                        ToolTipService.ToolTip="点一下回到 100%"
+                        Click="OnZoomActualSize">
+                        <TextBlock
+                            x:Name="ZoomLevelText"
+                            Text="100%"
+                            MinWidth="52"
+                            TextAlignment="Center" />
+                    </Button>
+                    <Button
+                        x:Name="ZoomInButton"
+                        Content="&#xFF0B;"
+                        ToolTipService.ToolTip="放大"
+                        Click="OnZoomIn" />
+                </StackPanel>
+            </Border>
+
+            <!-- 原来窗口底下有一整行常驻状态文字（"已存盘 · 15 个节点 · 1 处改动 · 缩放 71%"）。
+                 删了：那是第二条"永远在场的读数条"，它说的事没有一件需要一直说。
+                 现在只有真有一句话要说（没存上、外面改成读不懂了、去掉了哪枚标记）才浮出来，
+                 手再碰到板子就收起。文字仍然进日志，删掉的只是常驻那一行。 -->
+            <Border
+                x:Name="SayHost"
+                Visibility="Collapsed"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Bottom"
+                Margin="0,0,0,58"
+                MaxWidth="620"
+                PointerPressed="OnSayPressed" />
+        </Grid>
+    </Grid>
+</Window>

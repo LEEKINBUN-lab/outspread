@@ -227,6 +227,9 @@ public sealed partial class MainWindow : Window
 
         Diagnostics.Write($"window created; log at {Diagnostics.LogPath ?? "disabled"} · 构造完 +{App.SinceBoot():0}ms");
 
+        // 试过在这里先 Activate() 再读板子，让窗口早 200ms 亮出来。量下来没有用：
+        // 启动→窗口句柄 1091ms（改前）对 980/1213ms（改后），因为 Activate() 自己就是那
+        // 270ms 的第一帧合成。白多一屏空板子的闪，所以撤。
         LoadBoard();
     }
 

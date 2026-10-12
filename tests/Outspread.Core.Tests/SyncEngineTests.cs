@@ -209,6 +209,10 @@ public class SyncEngineTests
 
         var copyName = Path.GetFileName(report.ConflictCopy!);
 
+        // 名字里要看得见"哪台机器、哪一分钟"：同一块板子两台设备相隔几秒各留一份的时候，
+        // 只能靠资源管理器里那一行认，靠修改时间猜不算认得出。
+        Assert.Matches(@"\.conflict-.+-\d{8}-\d{4}-r\d+$", copyName);
+
         Assert.DoesNotContain(
             copyName,
             Directory.GetFiles(Path.GetDirectoryName(report.ConflictCopy!)!, "*.canvas")

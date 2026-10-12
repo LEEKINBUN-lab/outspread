@@ -319,8 +319,10 @@ internal static class SyncCommand
         var directory = AssetStore.BoardDirectory(boardPath);
         var name = Path.GetFileName(boardPath);
 
+        // `conflict-*` rather than `conflict-r*`: the name gained a machine and a minute on
+        // 2026-10-12, and copies written before that are still sitting on people's disks.
         return Directory.Exists(directory)
-            ? Directory.GetFiles(directory, $"{name}.conflict-r*").ToList()
+            ? Directory.GetFiles(directory, $"{name}.conflict-*").ToList()
             : [];
     }
 

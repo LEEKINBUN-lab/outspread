@@ -38,7 +38,7 @@ JSON Canvas 1.0 规范里**没有任何版本、时间戳、revision 字段**（
 3. 否则取远端 `.canvas`，与本地、祖先三份做 `Merge3`。
 4. 要上传的东西 = `DocDiff.Between(远端, 合并结果)` —— **往线上发的也是"补丁算出来的那部分"**，整份文件只是承载它的容器。这正对安卓定档里"`BoardSyncTransport` 必须交 `DocPatch` 而非整份文档"：接收侧收到远端状态后必须 `DocDiff.Between(祖先, 收到)` 再 `PatchApplier.Apply` 到本地副本，**禁止整份覆盖**。
 5. `PUT` 带 `expectToken`。被挡回 ⇒ 重读远端、用**同一个祖先**重新合并、再发。上限 `MaxRounds = 3`（`SyncEngine.cs:98`）。
-6. 三轮都挤不进 ⇒ `GaveUpConflict`：**本地一个字不改**，把本想上传的那份整份写到板子旁边的 `<板子文件名>.canvas.conflict-r<N>`（例如 `scratch.canvas.conflict-r2`，`SyncEngine.cs` 的 `ConflictCopyPath`）。**故意不叫 `.canvas` 结尾**：`BoardLocator` 有一条"取目录里 Ordinal 最小的 `*.canvas`"的兜底，冲突副本要是被当成板子打开，一次同步失败就变成了一块新板子。人工动作只有三个：重试 / 以本地为准 / 以远端为准。
+6. 三轮都挤不进 ⇒ `GaveUpConflict`：**本地一个字不改**，把本想上传的那份整份写到板子旁边的 `<板子文件名>.canvas.conflict-<设备名>-<yyyyMMdd>-<HHmm>-r<N>`（例如 `scratch.canvas.conflict-ENMUSUBI-20261012-1531-r2`，`SyncEngine.cs` 的 `ConflictCopyPath`）。**故意不叫 `.canvas` 结尾**：`BoardLocator` 有一条"取目录里 Ordinal 最小的 `*.canvas`"的兜底，冲突副本要是被当成板子打开，一次同步失败就变成了一块新板子。人工动作只有三个：重试 / 以本地为准 / 以远端为准。
 
 ## 合并裁决（`Merge3.cs`）——两份实现必须逐字一致
 

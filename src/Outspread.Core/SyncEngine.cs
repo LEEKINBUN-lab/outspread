@@ -591,12 +591,40 @@ public sealed class SyncEngine
     /// "first .canvas in the folder" rule the moment the real board went missing — a refusal
     /// to sync must never be able to become the board.
     /// </summary>
+    /// <remarks>
+    /// The name also carries the machine and the minute, because a conflict copy with neither is
+    /// a dead file: two devices syncing the same board produce copies seconds apart, and "which one
+    /// came from the laptop" has to be readable off the filename in Explorer, not guessed from a
+    /// modification time. Same reason Obsidian names its conflicted copies.
+    /// </remarks>
     private string ConflictCopyPath(int rev)
     {
         var directory = AssetStore.BoardDirectory(_boardPath);
         var name = Path.GetFileName(_boardPath);
 
-        return Path.Combine(directory, $"{name}.conflict-r{rev + 1}");
+        return Path.Combine(
+            directory,
+            $"{name}.conflict-{DeviceTag()}-{DateTime.Now:yyyyMMdd-HHmm}-r{rev + 1}");
+    }
+
+    /// <summary>机器名要能当文件名用：只留字母数字与 <c>-</c> <c>_</c>，其余换成 <c>-</c>，并截到 20 个字符。</summary>
+    private static string DeviceTag()
+    {
+        var raw = Environment.MachineName;
+        var kept = new char[Math.Min(raw.Length, 20)];
+        var written = 0;
+
+        foreach (var character in raw)
+        {
+            if (written == kept.Length)
+            {
+                break;
+            }
+
+            kept[written++] = char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-';
+        }
+
+        return written == 0 ? "device" : new string(kept, 0, written);
     }
 
     private SyncReport Finish(SyncState state, SyncReport report)

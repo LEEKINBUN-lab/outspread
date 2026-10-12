@@ -9,7 +9,7 @@ obj/
 
 # What a round that could not push leaves behind: the intended state, kept whole.
 # Named like the sidecar on purpose — a `.canvas` suffix would make it look like a board.
-*.canvas.conflict-r*
+*.canvas.conflict-*
 
 # 写前快照（.canvas 本体，不含 assets/）：设备本地的恢复点，不进版本库。
 .outspread-history/

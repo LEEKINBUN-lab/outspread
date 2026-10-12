@@ -511,6 +511,14 @@ public sealed partial class MainWindow : Window
         CloseRestorePanel();
 
         var point = e.GetCurrentPoint(BoardArea);
+
+        // 拉线中按到空白＝这根线没画过（一个字节都没动，所以也不需要撤销）。
+        if (Pulling && FinishPull(point.Position))
+        {
+            e.Handled = true;
+            return;
+        }
+
         // 空格按住＝平移模式（Adobe 那条习惯）；右键那一发先当作平移，松手时没拖过阈值再改成菜单。
         var spaceDown = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Space)
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
@@ -566,6 +574,11 @@ public sealed partial class MainWindow : Window
         var screen = e.GetCurrentPoint(BoardArea).Position;
 
         _lastPointer = screen;
+
+        if (Pulling)
+        {
+            TrackPull(screen);
+        }
 
         if (_panning)
         {
@@ -944,6 +957,13 @@ public sealed partial class MainWindow : Window
 
         var screen = e.GetCurrentPoint(BoardArea).Position;
 
+        // 拉线中：这一发按在这格上就是落点，不归移动也不归缩放。
+        if (Pulling && FinishPull(screen))
+        {
+            e.Handled = true;
+            return;
+        }
+
         // 压边＝缩放：离某条边 6 屏幕像素以内，这一发归那条边。网页那一侧同一格就是这个语义，
         // 而"抓哪儿都是移动"会让人以为边缘拖缩放没做——它做了，只是被移动抢走了。
         if (_selection.Count == 1 && NodeOf(id) is { } pressed && EdgeOf(pressed, screen) is { } edge)
@@ -973,12 +993,27 @@ public sealed partial class MainWindow : Window
 
     private void OnNodeDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
-        if (sender is NodeVisual visual)
+        if (sender is not NodeVisual visual)
         {
-            SelectOnly(visual.NodeId);
-            BeginEdit(visual.NodeId);
-            e.Handled = true;
+            return;
         }
+
+        var screen = e.GetPosition(BoardArea);
+
+        // 双击落在边缘那 6 屏幕像素带上＝把线起在那一面，不是编辑：边缘那一发的按下已经归了
+        // 缩放，双击是这块面上唯一还没被占用的动作。双击格内＝编辑，双击空白＝新建，三条不打架。
+        if (NodeOf(visual.NodeId) is { } node && EdgeOf(node, screen) is { } edge)
+        {
+            SelectOnly(node.Id);
+            StartPull(node.Id, edge);
+            e.Handled = true;
+
+            return;
+        }
+
+        SelectOnly(visual.NodeId);
+        BeginEdit(visual.NodeId);
+        e.Handled = true;
     }
 
     private void SelectInside(Rect worldRect, bool append)
@@ -1612,11 +1647,16 @@ public sealed partial class MainWindow : Window
     /// a note grow for a line that is not drawn, and measuring only the body would cut the readout
     /// that the same card promises to show.
     /// </remarks>
-    private double MeasureTextHeight(string text, double widthWorld, double fontSizeWorld)
+    private double MeasureTextHeight(string text, double widthWorld, double fontSizeWorld, bool paintsChips = true)
     {
         var type = NoteTypography.For(fontSizeWorld);
         var marks = Tags.Read(text);
-        var band = NoteMarks.Readout(marks, _view.Today).Length > 0 ? NoteType.ChipBand(1) : 0;
+
+        /* 牌子那一排占不占高度，问的是"卡片会不会画它"，不是"有没有日期"。
+           以前这里读的是 Readout()（只有日期才非空），于是只写 @t 的那格被算矮了一排：
+           框比内容短 22 世界像素，最后一行被横切——他 10-12 报的"敲回车有时便签变小"就是这一格。
+           分组不画牌子（NodeVisual 那一支传的是空表），所以也不给它留位。 */
+        var band = paintsChips && NoteMarks.Chips(marks, _view.Today).Count > 0 ? NoteType.ChipBand(1) : 0;
 
         if (_measureProbe is null)
         {
@@ -1690,7 +1730,11 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        node.Height = MeasureTextHeight(node.Text ?? string.Empty, node.Width, _view.FontSizeFor(node.Id));
+        node.Height = MeasureTextHeight(
+            node.Text ?? string.Empty,
+            node.Width,
+            _view.FontSizeFor(node.Id),
+            paintsChips: node.Kind != CanvasNodeKind.Group);
     }
 
     private void OnDragOver(object sender, DragEventArgs e)
@@ -2827,6 +2871,67 @@ public sealed partial class MainWindow : Window
             }
         }
 
+        /* 拉线那一发问的是状态机：起一根、放弃、再接上。
+           放弃必须一个字节都不动（不变量 5），接上必须把人挑的那两面写进文档
+           ——不然以后格子被拖过中线，线会自己改路。 */
+        {
+            var ends = BoardNotes().Take(2).ToList();
+
+            if (ends.Count == 2)
+            {
+                var untouched = _document.ToJson();
+
+                StartPull(ends[0].Id, "e");
+
+                if (!Pulling)
+                {
+                    problems.Add("起了拉线却没进入拉线态");
+                }
+
+                CancelPull();
+
+                if (_document.ToJson() != untouched)
+                {
+                    problems.Add("放弃一根线改了文档：Esc 必须是纯放弃");
+                }
+
+                if (_pullGhost is not null)
+                {
+                    problems.Add("放弃以后那根虚线还挂在导层上");
+                }
+
+                StartPull(ends[0].Id, "e");
+
+                FinishPull(new Point(
+                    _view.ToScreenX(ends[1].X + ends[1].Width / 2),
+                    _view.ToScreenY(ends[1].Y + ends[1].Height / 2)));
+
+                var joined = _document.Edges.FirstOrDefault(edge =>
+                    edge.FromNode == ends[0].Id && edge.ToNode == ends[1].Id);
+
+                if (joined is null)
+                {
+                    problems.Add("点中另一格没有接上线");
+                }
+                else if (joined.FromSide != CanvasEdge.Right)
+                {
+                    problems.Add($"起点挑的那一面没存下来：读到 {joined.FromSide ?? "自动"}");
+                }
+
+                if (Pulling)
+                {
+                    problems.Add("接上之后还留在拉线态");
+                }
+
+                if (joined is not null)
+                {
+                    _document.RemoveEdge(joined.Id);
+                }
+
+                ArrangeAll();
+            }
+        }
+
         // 右下角那一组是不是照原型那枚"发丝边的容器"长的：高度 34（28 的成员 + 2 的内距 + 2 条边），
         // 成员无边框、漏斗是一枚 PathIcon（不是 SymbolIcon 那套微软字形）。
         {
@@ -3354,6 +3459,23 @@ public sealed partial class MainWindow : Window
                         SetRestorePanel(true);
                         break;
 
+                    case "pull":
+                        // 那根虚线只在拉线途中存在，所以取证也要真的拉起来：起点钉在第一格的
+                        // 右边，自由端停在第二格中心前面——拍的就是"还没落定"那一帧。
+                        {
+                            var ends = BoardNotes().Take(2).ToList();
+
+                            if (ends.Count == 2)
+                            {
+                                StartPull(ends[0].Id, "e");
+                                TrackPull(new Point(
+                                    _view.ToScreenX(ends[1].X + (ends[1].Width / 2)),
+                                    _view.ToScreenY(ends[1].Y + (ends[1].Height / 2))));
+                            }
+                        }
+
+                        break;
+
                     case "banner":
                         // 横幅只在"真在筛着"时存在，所以取证也得真的筛上：拿板上第一个有人在用的标签，
                         // 拍完再交回原来那副 lens（没有就清掉）。
@@ -3364,7 +3486,7 @@ public sealed partial class MainWindow : Window
                         break;
 
                     default:
-                        return new ShotReply(false, null, Error: $"不懂的 panel \"{panelArg}\"，可给 filter / cheat / banner / search / restore");
+                        return new ShotReply(false, null, Error: $"不懂的 panel \"{panelArg}\"，可给 filter / cheat / banner / search / restore / pull");
                 }
 
                 panelsOpened = true;
@@ -3487,6 +3609,12 @@ public sealed partial class MainWindow : Window
                 if (!savedRestore)
                 {
                     CloseRestorePanel();
+                }
+
+                if (Pulling)
+                {
+                    // 取证不许留下一根没落定的线：文档本来也没动过。
+                    CancelPull();
                 }
             }
 
@@ -3678,6 +3806,15 @@ public sealed partial class MainWindow : Window
         switch (e.Key)
         {
             case Windows.System.VirtualKey.Escape:
+                if (Pulling)
+                {
+                    // 一按退一层：正在拉的那根线先断掉，板子上什么都没留下。
+                    CancelPull();
+                    Say("那根线没收了");
+                    e.Handled = true;
+                    break;
+                }
+
                 if (_filterPanelOpen)
                 {
                     // Esc 先收起眼前这层面板，再管选中：一按退一层，和它在网页里一样。

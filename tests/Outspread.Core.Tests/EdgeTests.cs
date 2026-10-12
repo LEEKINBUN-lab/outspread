@@ -119,4 +119,41 @@ public class EdgeTests
         Assert.False(double.IsNaN(degenerate.LeftX));
         Assert.Equal(10, degenerate.TipX);
     }
+
+    [Fact]
+    public void 拉线挑好的两面写得进文件也读得回来()
+    {
+        var document = CanvasDocument.CreateNew();
+
+        var left = document.Add(CanvasNodeKind.Text, 0, 0, 200, 80);
+        var right = document.Add(CanvasNodeKind.Text, 600, 400, 200, 80);
+
+        // 自动那一条会选 e/w；这里强行要"从右边出、从上边进"，它必须原样落盘。
+        document.AddEdge(left.Id, right.Id, "s", "n");
+
+        var again = CanvasDocument.Parse(document.ToJson(), "board.canvas");
+
+        var edge = Assert.Single(again.Edges);
+
+        Assert.Equal("s", edge.FromSide);
+        Assert.Equal("n", edge.ToSide);
+    }
+
+    [Fact]
+    public void 留空的两面仍然交给自动朝向()
+    {
+        var document = CanvasDocument.CreateNew();
+
+        var left = document.Add(CanvasNodeKind.Text, 0, 0, 200, 80);
+        var right = document.Add(CanvasNodeKind.Text, 600, 0, 200, 80);
+
+        var auto = document.AddEdge(left.Id, right.Id);
+        var picked = document.AddEdge(right.Id, left.Id, CanvasEdge.Left, CanvasEdge.Right);
+
+        // 自动那一支朝向对方：右边出去、左边进来。挑的那一支不许被改写。
+        Assert.Equal(CanvasEdge.Right, auto.FromSide);
+        Assert.Equal(CanvasEdge.Left, auto.ToSide);
+        Assert.Equal(CanvasEdge.Left, picked.FromSide);
+        Assert.Equal(CanvasEdge.Right, picked.ToSide);
+    }
 }

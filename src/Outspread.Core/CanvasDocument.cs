@@ -98,11 +98,15 @@ public sealed class CanvasDocument
     /// the picture does not move when a card is dragged past the midpoint — the prototype learned this
     /// by writing them at creation time, and the spec has the fields for it.
     /// </summary>
-    public CanvasEdge AddEdge(string fromId, string toId)
+    /// <param name="fromSide">留空＝自动朝向对方；拉线那一发把人挑的那一面写进来。</param>
+    public CanvasEdge AddEdge(string fromId, string toId, string? fromSide = null, string? toSide = null)
     {
         var from = Find(fromId) ?? throw new ArgumentException($"板上没有 id {fromId}", nameof(fromId));
         var to = Find(toId) ?? throw new ArgumentException($"板上没有 id {toId}", nameof(toId));
-        var (fromSide, toSide) = CanvasEdge.AutoSides(from, to);
+        var auto = CanvasEdge.AutoSides(from, to);
+
+        fromSide ??= auto.From;
+        toSide ??= auto.To;
 
         if (_root["edges"] is not JsonArray array)
         {

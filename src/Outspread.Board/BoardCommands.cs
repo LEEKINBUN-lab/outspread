@@ -63,13 +63,14 @@ public sealed partial class MainWindow
 
         // 连线按叠放次序把选中的串成一条链，全都在就是拆链（原型同一条命令两用）。
         new("连线", "Alt+C", "组织", ConnectSelection),
+        new("从边缘拉一根线", "双击边缘", "组织", StartPullFromSelection, Dispatched: false),
         new("全部选中", "Ctrl+A", "板子", SelectAll, Dispatched: false, Listed: false),
         new("粘贴剪贴板", "Ctrl+V", "板子", () => _ = PasteFromClipboardAsync(), Dispatched: false),
         new("取消选中", "Esc", "板子", () => { ClearSelection(); ProjectSelection(); }, Dispatched: false),
         new("删掉选中", "Delete", "板子", RemoveSelection, Dispatched: false, Listed: false),
         new("撤回", "Ctrl+Z", "板子", Undo, Dispatched: false, Listed: false),
         new("重做", "Ctrl+Y", "板子", Redo, Dispatched: false, Listed: false),
-        new("回到 100%", "Ctrl+0", "看", ResetView, Dispatched: false),
+        new("回到 100%", "Ctrl+0", "看", ResetView, Dispatched: false, Listed: false),
         new("新建一格", "双击空白", "板子", NewNoteAtCentre, Dispatched: false),
 
         // 查找与恢复没有第二个入口的要不得：查找是"贴进去的东西找得回来"，恢复是"改坏了还够得着"。

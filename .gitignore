@@ -13,3 +13,6 @@ obj/
 
 # 写前快照（.canvas 本体，不含 assets/）：设备本地的恢复点，不进版本库。
 .outspread-history/
+
+# 子代理的隔离工作树与对照构建：工具产物，不进版本库。
+.qoder/

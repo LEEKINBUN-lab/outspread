@@ -68,6 +68,16 @@ public static class Sheet
     /// </summary>
     public const double RowPx = 40;
 
+    /// <summary>
+    /// The band for the two surfaces that are one sentence long — the filter banner and the receipt
+    /// line. Same type system as a list row (one font, one body ink, the same inset), one step less
+    /// air: 40px is the pitch a row needs when a finger has to hit one of many rows, and a sentence
+    /// that is not a row does not need it. He asked for this on 2026-10-12 off a capture of the
+    /// receipt chip ("这行字没居中，而且弹窗稍微大了点") — the centring half of that was a real
+    /// defect (an empty right column still ate the 14px gap), this half is a deliberate second band.
+    /// </summary>
+    public const double OneLineRowPx = 30;
+
     /// <summary>The command name's size; the menu's glyph band was 12–13px tall.</summary>
     public const double FontPx = 14;
 

@@ -148,10 +148,10 @@ public sealed partial class MainWindow : Window
 
         // 两块"只有一行"的浮层：筛选横幅与回执那一句话。行就是菜单那一枚控件，文字由各自的事件改，
         // 所以建窗时搭一次、以后只换字——换字不改结构，就不会长成第三、第四种组件。
-        _bannerRow = PanelKit.Row(string.Empty, null, ClearFilters);
+        _bannerRow = PanelKit.OneLine(string.Empty, null, ClearFilters);
         FilterBanner.Child = PanelKit.Host(_bannerRow);
 
-        _sayRow = PanelKit.Row("正在读取板面…");
+        _sayRow = PanelKit.OneLine("正在读取板面…");
         SayHost.Child = PanelKit.Host(_sayRow);
 
         BuildSearchSurface();
@@ -2886,19 +2886,22 @@ public sealed partial class MainWindow : Window
             // 模板要排过一次量才不是 0：行高与字号都是模板给的值，不是控件自带的。
             BoardArea.UpdateLayout();
 
-            var surfaces = new (string Where, FrameworkElement Surface)[]
+            // 两族，不是一把尺：列表那一族（要点中某一行）共用 40px 那一档，
+            // 只说一句话的那两枚（横幅、回执）共用 30px 那一档。字号、墨、内缩仍然只有一套——
+            // 他 10-12 说回执那枚"大了点"，改的是带高，不是类型系统。
+            var surfaces = new (string Where, string Family, FrameworkElement Surface)[]
             {
-                ("键位清单", CheatPanel),
-                ("筛选面板", FilterPanel),
-                ("筛选横幅", FilterBanner),
-                ("回执那一句话", SayHost),
-                ("查找面板", SearchPanel),
-                ("恢复面板", RestorePanel),
+                ("键位清单", "列表", CheatPanel),
+                ("筛选面板", "列表", FilterPanel),
+                ("查找面板", "列表", SearchPanel),
+                ("恢复面板", "列表", RestorePanel),
+                ("筛选横幅", "一句话", FilterBanner),
+                ("回执那一句话", "一句话", SayHost),
             };
 
-            var heights = new List<(string Where, int Count, double Height, string Applied)>();
+            var heights = new List<(string Where, string Family, int Count, double Height, string Applied)>();
 
-            foreach (var (where, surface) in surfaces)
+            foreach (var (where, family, surface) in surfaces)
             {
                 var rows = MenuRows(surface);
 
@@ -2933,14 +2936,26 @@ public sealed partial class MainWindow : Window
                     problems.Add($"{where}自己内部的行就不齐：读到 {string.Join("/", rows.Select(row => Height(row).ToString("0.##")))}");
                 }
 
-                heights.Add((where, rows.Count, tallest, applied));
+                heights.Add((where, family, rows.Count, tallest, applied));
             }
 
-            // 四块浮层的行高与那一套字号必须彼此相等——他要的是"一眼看出是一个组件"，
+            // 同一族之内行高必须彼此相等——他要的是"一眼看出是一个组件"，
             // 一块 32 一块 40、一处雅黑一处雅 UI 是这句话最直接的破法。
-            if (heights.Count > 0 && heights.Select(item => item.Height).Distinct().Count() > 1)
+            foreach (var band in heights.GroupBy(item => item.Family))
             {
-                problems.Add($"四块浮层的行高不止一个数：{string.Join(" / ", heights.Select(item => $"{item.Where} {item.Height:0.##}"))}");
+                if (band.Select(item => item.Height).Distinct().Count() > 1)
+                {
+                    problems.Add($"{band.Key}那一族的行高不止一个数：{string.Join(" / ", band.Select(item => $"{item.Where} {item.Height:0.##}"))}");
+                }
+            }
+
+            // 两族必须真的是两档：要是有人把 30 改回 40（或反过来），上面那条就再也问不出东西了。
+            var listBand = heights.Where(item => item.Family == "列表").Select(item => item.Height).DefaultIfEmpty().Max();
+            var lineBand = heights.Where(item => item.Family == "一句话").Select(item => item.Height).DefaultIfEmpty().Min();
+
+            if (listBand > 0 && lineBand > 0 && Math.Abs(listBand - lineBand) < 4)
+            {
+                problems.Add($"两族挤成同一档了：列表 {listBand:0.##}、一句话 {lineBand:0.##}——那一枚回执要的就是矮这一截");
             }
 
             CloseCheatsheet();
@@ -2966,9 +2981,9 @@ public sealed partial class MainWindow : Window
 
             // 输入框是浮层里唯一一条不是 SheetRow 的行。它必须和行同高，否则"只是换了一下文字"
             // 这句话就从这里开始漏。
-            if (heights.Count > 0 && Math.Abs(_searchBox.ActualHeight - heights.Max(item => item.Height)) > 0.5)
+            if (listBand > 0 && Math.Abs(_searchBox.ActualHeight - listBand) > 0.5)
             {
-                problems.Add($"查找那一格输入框 {_searchBox.ActualHeight:0.##}px，行是 {heights.Max(item => item.Height):0.##}px——那是第二种组件");
+                problems.Add($"查找那一格输入框 {_searchBox.ActualHeight:0.##}px，列表那一档行带是 {listBand:0.##}px——那是第二种组件");
             }
 
             SetSearchPanel(false);
@@ -2978,7 +2993,7 @@ public sealed partial class MainWindow : Window
             if (problems.Count == before)
             {
                 Diagnostics.Write(
-                    $"selftest 同一枚控件: {string.Join("、", heights.Select(item => $"{item.Where} {item.Count} 行"))}，行高 {heights.Max(item => item.Height):0.##}px、{heights.First().Applied}，四处同一套");
+                    $"selftest 同一枚控件: {string.Join("、", heights.Select(item => $"{item.Where} {item.Count} 行"))}，两档行带 列表 {listBand:0.##}px / 一句话 {lineBand:0.##}px、{heights.First().Applied}，族内同一套");
             }
 
             // 取证那一发：把筛选面板里**带计数的那一行**实际画出来的东西倒出来。右列有没有键位、

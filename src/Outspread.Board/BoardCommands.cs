@@ -26,7 +26,13 @@ public sealed partial class MainWindow
     /// about them, but the table must not also run them — that would fire twice. M1b's registry
     /// pass is meant to fold those six into the switch-free path and drop this flag.
     /// </param>
-    private readonly record struct Command(string Label, string Chord, string Section, Action Run, bool Dispatched = true)
+    /// <param name="Listed">
+    /// False keeps a working command off the two surfaces that *list* things (the key sheet and the
+    /// right-click menu) while the keyboard still dispatches it. His call on 2026-10-12: the
+    /// everyday five (全选 / 删除 / 撤销 / 重做 / 查找) do not need a menu route — a list that
+    /// carries them reads like a manual, and the sheet is for the chords nobody guesses.
+    /// </param>
+    private readonly record struct Command(string Label, string Chord, string Section, Action Run, bool Dispatched = true, bool Listed = true)
     {
         public string MenuText => Chord is { Length: > 0 } chord ? $"{Label}    {chord}" : Label;
     }
@@ -57,17 +63,17 @@ public sealed partial class MainWindow
 
         // 连线按叠放次序把选中的串成一条链，全都在就是拆链（原型同一条命令两用）。
         new("连线", "Alt+C", "组织", ConnectSelection),
-        new("全部选中", "Ctrl+A", "板子", SelectAll, Dispatched: false),
+        new("全部选中", "Ctrl+A", "板子", SelectAll, Dispatched: false, Listed: false),
         new("粘贴剪贴板", "Ctrl+V", "板子", () => _ = PasteFromClipboardAsync(), Dispatched: false),
         new("取消选中", "Esc", "板子", () => { ClearSelection(); ProjectSelection(); }, Dispatched: false),
-        new("删掉选中", "Delete", "板子", RemoveSelection, Dispatched: false),
-        new("撤回", "Ctrl+Z", "板子", Undo, Dispatched: false),
-        new("重做", "Ctrl+Y", "板子", Redo, Dispatched: false),
+        new("删掉选中", "Delete", "板子", RemoveSelection, Dispatched: false, Listed: false),
+        new("撤回", "Ctrl+Z", "板子", Undo, Dispatched: false, Listed: false),
+        new("重做", "Ctrl+Y", "板子", Redo, Dispatched: false, Listed: false),
         new("回到 100%", "Ctrl+0", "看", ResetView, Dispatched: false),
         new("新建一格", "双击空白", "板子", NewNoteAtCentre, Dispatched: false),
 
         // 查找与恢复没有第二个入口的要不得：查找是"贴进去的东西找得回来"，恢复是"改坏了还够得着"。
-        new("查找", "Ctrl+F", "板子", OpenSearch),
+        new("查找", "Ctrl+F", "板子", OpenSearch, Listed: false),
         new("恢复…", string.Empty, "板子", OpenRestorePanel),
 
         // Shift+1 / Shift+2 同样走那枚 switch（数字键的 e.Key 是 Number1），这里只负责菜单与清单上有它。
@@ -88,8 +94,12 @@ public sealed partial class MainWindow
         Say($"选中 {_selection.Count} 个节点 · 缩放 {Percent()}");
     }
 
-    /// <summary>Sections in first-appearance order, so the menu reads like this table.</summary>
-    private IEnumerable<IGrouping<string, Command>> Sections() => Commands().GroupBy(command => command.Section);
+    /// <summary>
+    /// Sections in first-appearance order, so the menu reads like this table — and only the rows that
+    /// are <b>listed</b>: the two surfaces that enumerate commands read this, the keyboard dispatcher
+    /// reads <see cref="Commands"/> whole, so hiding a row from the list cannot switch it off.
+    /// </summary>
+    private IEnumerable<IGrouping<string, Command>> Sections() => Commands().Where(command => command.Listed).GroupBy(command => command.Section);
 
     // ---------------------------------------------------------------------
     // The group layer

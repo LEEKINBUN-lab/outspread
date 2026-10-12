@@ -90,12 +90,20 @@ internal static class PanelKit
     /// </para>
     /// </summary>
     public static SheetRow Row(string label, string? hint = null, Action? onClick = null, bool keys = false)
-        => Build(label, hint, onClick, quiet: false, keys: keys);
+        => Build(label, hint, onClick, quiet: false, keys: keys, band: Sheet.RowPx);
+
+    /// <summary>
+    /// The one-sentence surfaces (the filter banner, the receipt line): the same row — one font, one
+    /// body ink, the same inset — at <see cref="Sheet.OneLineRowPx"/>. A sentence is not a row a
+    /// finger has to hit, so it does not get the list band.
+    /// </summary>
+    public static SheetRow OneLine(string label, string? hint = null, Action? onClick = null)
+        => Build(label, hint, onClick, quiet: false, keys: false, band: Sheet.OneLineRowPx);
 
     /// <summary>A quiet line — a section title, an empty-board note. The menu has no such thing, so
     /// this borrows the look of the thing it is closest to: a disabled row, in the menu's own
     /// disabled ink. It is still the same row, at the same size, on the same band.</summary>
-    public static SheetRow Line(string label) => Build(label, null, null, quiet: true, keys: false);
+    public static SheetRow Line(string label) => Build(label, null, null, quiet: true, keys: false, band: Sheet.RowPx);
 
     /// <summary>
     /// The one格 you can type into. It is a row that holds a <see cref="TextBox"/> instead of two
@@ -138,19 +146,18 @@ internal static class PanelKit
         };
     }
 
-    private static SheetRow Build(string label, string? hint, Action? onClick, bool quiet, bool keys)
+    private static SheetRow Build(string label, string? hint, Action? onClick, bool quiet, bool keys, double band)
     {
         var dark = NoteStyling.IsDark;
 
         var grid = new Grid
         {
-            MinHeight = Sheet.RowPx,
+            MinHeight = band,
             Padding = new Thickness(Sheet.PadX, 0, Sheet.PadX, 0),
             ColumnSpacing = Sheet.GapPx,
         };
 
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var name = new TextBlock
         {
@@ -168,6 +175,11 @@ internal static class PanelKit
 
         if (!string.IsNullOrEmpty(hint))
         {
+            // 右列那一格只在真要有内容时才存在：Grid 的 ColumnSpacing 是按"列与列之间"算的，
+            // 空列照样吃那 14px——量过回执那一枚（左 17px、右 30px），字就因此不居中、
+            // 盒子还比需要宽一截。没有右列的行是一整行，不是一行加一段空气。
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
             FrameworkElement column;
 
             if (keys)

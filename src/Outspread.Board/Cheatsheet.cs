@@ -108,48 +108,15 @@ public sealed partial class MainWindow
         ChromeStyling.Ensure(NoteStyling.IsDark);
         ChromeStyling.ApplyFloatingChrome(CheatPanel);
 
-        // 顶部那行"键位"删了（他 10-12 点名）：按住 Tab 出来的东西不需要自报家门，
-        // 而那一行还是整块清单里唯一一句不是命令的话，读起来像表头压着表头。
-        var groups = Sections().ToList();
+        // 分节字样删了（他 10-12 点名）："排布 / 组织 / 板子"是我给这张表起的分类名，
+        // 不是他按下键时要找的东西。清单里只该有一种行：这一发按键干什么。
+        var rows = Sections().SelectMany(section => section)
+            .Select(command => PanelKit.Row(command.Label, command.Chord, keys: true))
+            .ToList();
 
-        // 每一节现在占一行标题加它的命令行，全是菜单那一枚控件的高度——所以"齐不齐"只由行数决定。
-        var heights = groups.Select(section => (section.Count() + 1) * Sheet.RowPx).ToList();
-        var total = heights.Sum();
-
-        // 两栏，切在让两栏最齐的那道**分节边界**上：一栏到底是一张 23 行的清单，
-        // 而按组轮流塞（上一版的作法）会让某一栏的收尾空半截——他截图里指的就是那个。
-        // 分节永远不跨栏拆开：读到一半被换到右栏，等于没有分节。
-        var split = 1;
-        var best = double.MaxValue;
-        var left = 0.0;
-
-        for (var i = 0; i < groups.Count - 1; i++)
-        {
-            left += heights[i];
-
-            var gap = Math.Abs(left - (total - left));
-
-            if (gap < best - 0.001)
-            {
-                best = gap;
-                split = i + 1;
-            }
-        }
-
-        var columns = new[] { new List<PanelKit.SheetRow>(), new List<PanelKit.SheetRow>() };
-
-        for (var i = 0; i < groups.Count; i++)
-        {
-            var column = columns[i < split ? 0 : 1];
-
-            // 分节的标题就是菜单里那种"灰掉的行"：这一套语言里没有第二种线。
-            column.Add(PanelKit.Line(groups[i].Key));
-
-            foreach (var command in groups[i])
-            {
-                column.Add(PanelKit.Row(command.Label, command.Chord, keys: true));
-            }
-        }
+        // 两栏按行数切平。上一版切在分节边界上是为了"一节不许跨栏"——节名一删，那条约束
+        // 就没有对象了，剩下的只是让两边一样高：收尾空半截正是他截图里指过的样子。
+        var half = (rows.Count + 1) / 2;
 
         // 两栏各按自己的内容长：这里不能用星号列——presenter 的模板里有一枚横向禁滚的 ScrollViewer，
         // 它在"可用宽度由内容决定"的宿主里会退化成最小宽度（量到过：整块清单被压到 240 宽、
@@ -160,8 +127,8 @@ public sealed partial class MainWindow
             Spacing = 34,
         };
 
-        pair.Children.Add(PanelKit.Host(columns[0].ToArray()));
-        pair.Children.Add(PanelKit.Host(columns[1].ToArray()));
+        pair.Children.Add(PanelKit.Host(rows.Take(half).ToArray()));
+        pair.Children.Add(PanelKit.Host(rows.Skip(half).ToArray()));
 
         CheatScroll.Content = pair;
 

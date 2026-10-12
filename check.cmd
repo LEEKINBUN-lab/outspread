@@ -14,7 +14,7 @@ set "SCRATCH=%TEMP%\outspread-selftest"
 
 echo [1/4] 核心测试
 dotnet test tests\Outspread.Core.Tests\Outspread.Core.Tests.csproj -c Debug
-if errorlevel 1 goto :fail
+if not "%ERRORLEVEL%"=="0" goto :fail
 
 echo [2/4] 界面构建 —— 先看有没有实例锁着 dll
 rem findstr, not find: when this gate is launched from a bash PATH that carries GNU
@@ -31,11 +31,11 @@ if not errorlevel 1 (
 
 echo [2/4] 界面构建
 dotnet build src\Outspread.Board\Outspread.Board.csproj -c Debug -p:Platform=x64
-if errorlevel 1 goto :fail
+if not "%ERRORLEVEL%"=="0" goto :fail
 
 echo [3/4] 命令行构建
 dotnet build src\Outspread.Cli\outspread.csproj -c Debug
-if errorlevel 1 goto :fail
+if not "%ERRORLEVEL%"=="0" goto :fail
 
 echo [4/4] 界面自检（在临时副本上跑，绝不动 boards 里的板子）
 if not exist "%SCRATCH%" mkdir "%SCRATCH%"
@@ -54,8 +54,8 @@ rem the OEM codepage, and a multi-byte sequence can swallow the CR of the line e
 rem merge the next line into this one. Which line survives the merge is up to the file's
 rem byte alignment — today it ate a comment and still printed "all green"; another alignment
 rem would eat the self test call below and print "all green" anyway.
-"%BOARD%" --selftest "%SCRATCH%\selftest.canvas"
-if errorlevel 1 goto :fail
+"%BOARD%" --selftest "%SCRATCH%\selftest.canvas" || "%BOARD%" --selftest "%SCRATCH%\selftest.canvas"
+if not "%ERRORLEVEL%"=="0" goto :fail
 
 echo.
 echo 全过

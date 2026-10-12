@@ -41,7 +41,7 @@ public sealed partial class MainWindow
         // Tab 还得是 Tab。
         var boardHasFocus = ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(BoardArea.XamlRoot), BoardArea);
 
-        if (e.Key == Windows.System.VirtualKey.Space && _editingId is null && BareSpace())
+        if (e.Key == Windows.System.VirtualKey.Space && _editingId is null && !_searchOpen && BareSpace())
         {
             // 在 Tab 之前截：空格要抢在"焦点按钮被激活"前面。按住它平移仍然成立——那条路读的是
             // 键盘状态（GetKeyStateForCurrentThread），不走这枚事件。

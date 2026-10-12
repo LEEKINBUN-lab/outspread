@@ -42,6 +42,13 @@ public sealed partial class MainWindow
         new("横向均分", "Alt+J", "排布", () => Arrange("横向均分", items => Aligning.Distribute(items, horizontal: true))),
         new("纵向均分", "Alt+K", "排布", () => Arrange("纵向均分", items => Aligning.Distribute(items, horizontal: false))),
         new("堆叠", "Alt+L", "排布", () => Arrange("堆叠", Aligning.Stack)),
+
+        // 微调走的是窗口自己那枚 switch（e.Key 的名字是 Up/Down/Left/Right，写不成一张表里的键位串），
+        // 但每一行仍在这里：菜单是单键快捷键缺席时唯一的替代面（WCAG 2.5.7），不在表里就等于够不着。
+        new("上移一格", "↑", "排布", () => Nudge(0, -NudgePx), Dispatched: false),
+        new("下移一格", "↓", "排布", () => Nudge(0, NudgePx), Dispatched: false),
+        new("左移一格", "←", "排布", () => Nudge(-NudgePx, 0), Dispatched: false),
+        new("右移一格", "→", "排布", () => Nudge(NudgePx, 0), Dispatched: false),
         new("按颜色聚拢", "Alt+Y", "聚拢", () => Cluster("按颜色聚拢", node => node.Color ?? "none")),
         new("按标签聚拢", "Alt+T", "聚拢", () => Cluster("按标签聚拢", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签")),
         new("成组", "Ctrl+G", "组织", GroupSelection),
@@ -58,6 +65,14 @@ public sealed partial class MainWindow
         new("重做", "Ctrl+Y", "板子", Redo, Dispatched: false),
         new("回到 100%", "Ctrl+0", "看", ResetView, Dispatched: false),
         new("新建一格", "双击空白", "板子", NewNoteAtCentre, Dispatched: false),
+
+        // 查找与恢复没有第二个入口的要不得：查找是"贴进去的东西找得回来"，恢复是"改坏了还够得着"。
+        new("查找", "Ctrl+F", "板子", OpenSearch),
+        new("恢复…", string.Empty, "板子", OpenRestorePanel),
+
+        // Shift+1 / Shift+2 同样走那枚 switch（数字键的 e.Key 是 Number1），这里只负责菜单与清单上有它。
+        new("看到全部", "Shift+1", "看", ZoomToFit, Dispatched: false),
+        new("看到选中", "Shift+2", "看", ZoomToSelection, Dispatched: false),
     ];
 
     /// <summary>Every node on the board — the same call the keyboard's Ctrl+A makes.</summary>

@@ -97,6 +97,47 @@ internal static class PanelKit
     /// disabled ink. It is still the same row, at the same size, on the same band.</summary>
     public static SheetRow Line(string label) => Build(label, null, null, quiet: true, keys: false);
 
+    /// <summary>
+    /// The one格 you can type into. It is a row that holds a <see cref="TextBox"/> instead of two
+    /// text columns: same band, same 12px in from the sheet's edge, same 14px body ink — that is why
+    /// it has no border and no background of its own, since a boxed input inside a sheet is the
+    /// platform's control walking in wearing its own clothes.
+    /// </summary>
+    /// <remarks>
+    /// The placeholder is the sheet's only self-description, so it carries the keys the query answers
+    /// to. It is painted in the disabled ink: a suggestion is not a sentence the user wrote.
+    /// <para>
+    /// What is still wrong with it, measured off a capture (<c>v5-search.png</c>, 2026-10-12): the
+    /// default template adds an accent underline when the box is focused and a round clear button when
+    /// it has text. Inside a square, hairline-edged sheet those two are exactly the
+    /// "这不是同一个组件" this file exists to prevent.
+    /// </para>
+    /// <para>
+    /// Replacing the template with a bare one was tried and made no difference to anything except the
+    /// look, so it is not done here. What is left: override the template's own theme resources on the
+    /// panel, or key a real style off <c>TextBox</c>. Neither is a one-line change, and the box is
+    /// usable and correctly sized (40px, same band as every row) until then.
+    /// </para>
+    /// </remarks>
+    public static TextBox Input(string placeholder)
+    {
+        var dark = NoteStyling.IsDark;
+
+        return new TextBox
+        {
+            FontSize = Sheet.FontPx,
+            MinHeight = Sheet.RowPx,
+            Padding = new Thickness(Sheet.PadX, 0, Sheet.PadX, 0),
+            Background = new SolidColorBrush(Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(0),
+            Foreground = new SolidColorBrush(NoteStyling.ToColor(Sheet.Ink(dark))),
+            PlaceholderText = placeholder,
+            PlaceholderForeground = new SolidColorBrush(NoteStyling.ToColor(Sheet.Quiet(dark))),
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+    }
+
     private static SheetRow Build(string label, string? hint, Action? onClick, bool quiet, bool keys)
     {
         var dark = NoteStyling.IsDark;

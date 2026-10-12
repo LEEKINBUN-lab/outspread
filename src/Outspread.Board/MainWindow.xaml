@@ -139,6 +139,42 @@
                 <ScrollViewer x:Name="FilterScroll" />
             </Border>
 
+            <!-- 查找（Ctrl＋F）。放在板子的树里而不是 Popup，和键位清单同一个理由：
+                 Popup 是另一个顶层窗口，outspread shot 拍不到，它的样式就成了没有读数支持的断言。
+                 里面第一格是能打字的（PanelKit.Input，行高/字号/墨色全取行那一套），
+                 下面是命中列表，每行仍是菜单那一枚 SheetRow。
+                 命中行**不加粗、不染色的**：这一套语言里只有两种线（正文墨、禁用墨），
+                 为"强调命中那几个字"开第三种线，正是他第三次打回的那件事。 -->
+            <Border
+                x:Name="SearchPanel"
+                Visibility="Collapsed"
+                MinWidth="380"
+                MaxWidth="560"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Margin="0,44,0,0"
+                PointerPressed="OnSearchPanelPressed">
+                <StackPanel>
+                    <StackPanel x:Name="SearchBody" Spacing="0" />
+                    <ScrollViewer x:Name="SearchScroll" MaxHeight="330" />
+                </StackPanel>
+            </Border>
+
+            <!-- 恢复…（右键菜单里那一行）。写前快照已经落了盘，这层就是让它在屏幕上够得着：
+                 一行一个时刻，点它＝回到那一版；恢复自己也强制存一份，所以还能再回来。 -->
+            <Border
+                x:Name="RestorePanel"
+                Visibility="Collapsed"
+                MinWidth="240"
+                MaxWidth="360"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Margin="0,44,0,0"
+                MaxHeight="380"
+                PointerPressed="OnRestorePanelPressed">
+                <ScrollViewer x:Name="RestoreScroll" />
+            </Border>
+
             <!-- 只有筛选真在起作用时才出现的一条窄横幅。行仍是菜单那一枚（点它＝清除）。 -->
             <Border
                 x:Name="FilterBanner"

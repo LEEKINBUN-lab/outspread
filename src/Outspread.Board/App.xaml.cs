@@ -6,11 +6,26 @@ public partial class App : Application
 {
     private Window? _window;
 
+    /// <summary>这一发是不是自检那一发。决定"出了意外该以什么退出码收场"。</summary>
+    private static bool SelfTestMode
+        => Environment.GetCommandLineArgs().Contains("--selftest", StringComparer.OrdinalIgnoreCase);
+
     public App()
     {
         InitializeComponent();
 
-        UnhandledException += (_, e) => Diagnostics.Write($"unhandled: {e.Exception}");
+        // 自检里抛出来的东西必须以非零退出码落地：cmd 的 `if errorlevel 1` 看不见负数
+        // （崩溃码 0xC00000FD 换成正数是 -1073741685，比 1 小），所以一条"跑飞了"的自检
+        // 会被 check.cmd 念成"全过"。这一句把那条路堵死——红灯要能自己红。
+        UnhandledException += (_, e) =>
+        {
+            Diagnostics.Write($"unhandled: {e.Exception}");
+
+            if (SelfTestMode)
+            {
+                Environment.Exit(1);
+            }
+        };
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
@@ -20,7 +35,7 @@ public partial class App : Application
         _window = window;
         window.Activate();
 
-        if (Environment.GetCommandLineArgs().Contains("--selftest", StringComparer.OrdinalIgnoreCase))
+        if (SelfTestMode)
         {
             window.BeginSelfTest();
         }

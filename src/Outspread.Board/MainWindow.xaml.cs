@@ -154,6 +154,8 @@ public sealed partial class MainWindow : Window
         _sayRow = PanelKit.Row("正在读取板面…");
         SayHost.Child = PanelKit.Host(_sayRow);
 
+        BuildSearchSurface();
+
         // 浮层出现/收起那一下走平台的"弹出层"transition：右键菜单用的就是这一族，
         // 板子上这四块浮层以前是"啪"地出现——同一套皮配两种动法，正是"不是一个组件"的读法。
         BoardArea.ChildrenTransitions = new TransitionCollection { new PopupThemeTransition() };
@@ -183,6 +185,8 @@ public sealed partial class MainWindow : Window
             {
                 CloseCheatsheet();
                 CloseFilterPanel();
+                CloseSearchPanel();
+                CloseRestorePanel();
                 return;
             }
 
@@ -503,6 +507,8 @@ public sealed partial class MainWindow : Window
         CloseFilterPanel();
         SayHost.Visibility = Visibility.Collapsed;
         CloseCheatsheet();
+        CloseSearchPanel();
+        CloseRestorePanel();
 
         var point = e.GetCurrentPoint(BoardArea);
         // 空格按住＝平移模式（Adobe 那条习惯）；右键那一发先当作平移，松手时没拖过阈值再改成菜单。
@@ -858,6 +864,9 @@ public sealed partial class MainWindow : Window
         SayHost.Visibility = Visibility.Collapsed;
 
         CloseCheatsheet();
+
+        CloseSearchPanel();
+        CloseRestorePanel();
 
         var pointOnSurface = e.GetCurrentPoint(BoardArea).Position;
 
@@ -2859,6 +2868,21 @@ public sealed partial class MainWindow : Window
             ShowCheatsheet();
             SetFilterPanel(true);
 
+            // 查找那一层要拿板上真的有的那半句话去搜：命中为 0 的面板只是在演它自己。
+            var probeTerm = ProbeTerm();
+
+            if (probeTerm.Length > 0)
+            {
+                SetSearchPanel(true);
+                _searchBox.Text = probeTerm;
+                RunSearch();
+
+                Diagnostics.Write(
+                    $"selftest 查找: 探词『{probeTerm}』⇒ 框里『{_searchBox.Text}』、命中 {_searchHits.Count} 处、行 {MenuRows(SearchPanel).Count} 条");
+            }
+
+            SetRestorePanel(true);
+
             // 模板要排过一次量才不是 0：行高与字号都是模板给的值，不是控件自带的。
             BoardArea.UpdateLayout();
 
@@ -2868,6 +2892,8 @@ public sealed partial class MainWindow : Window
                 ("筛选面板", FilterPanel),
                 ("筛选横幅", FilterBanner),
                 ("回执那一句话", SayHost),
+                ("查找面板", SearchPanel),
+                ("恢复面板", RestorePanel),
             };
 
             var heights = new List<(string Where, int Count, double Height, string Applied)>();
@@ -2920,6 +2946,35 @@ public sealed partial class MainWindow : Window
             CloseCheatsheet();
             SetFilterPanel(false);
 
+            // 查找那一发问的不是"这层好不好看"，是"这层有用吗"：拿板上真的有的那半句话去搜，
+            // 命中为 0 就说明 matcher、面板、或者两者之间的接线断了。
+            if (probeTerm.Length > 0)
+            {
+                if (_searchHits.Count == 0)
+                {
+                    problems.Add($"查找「{probeTerm}」命中 0 处，可那半句话就在某格的正文里");
+                }
+
+                foreach (var hit in _searchHits)
+                {
+                    if (hit.MatchStart < 0 || hit.MatchLength < 0 || hit.MatchStart + hit.MatchLength > hit.Snippet.Length)
+                    {
+                        problems.Add($"命中『{hit.Snippet}』的强调区间 {hit.MatchStart}+{hit.MatchLength} 落在摘要外——界面一染色就越界");
+                    }
+                }
+            }
+
+            // 输入框是浮层里唯一一条不是 SheetRow 的行。它必须和行同高，否则"只是换了一下文字"
+            // 这句话就从这里开始漏。
+            if (heights.Count > 0 && Math.Abs(_searchBox.ActualHeight - heights.Max(item => item.Height)) > 0.5)
+            {
+                problems.Add($"查找那一格输入框 {_searchBox.ActualHeight:0.##}px，行是 {heights.Max(item => item.Height):0.##}px——那是第二种组件");
+            }
+
+            SetSearchPanel(false);
+            SetRestorePanel(false);
+            _searchBox.Text = string.Empty;
+
             if (problems.Count == before)
             {
                 Diagnostics.Write(
@@ -2960,6 +3015,8 @@ public sealed partial class MainWindow : Window
                 ("筛选面板", FilterPanel, FilterPanel.CornerRadius.TopLeft, FilterPanel.Background, ChromeStyling.ShadowCount(FilterPanel)),
                 ("筛选横幅", FilterBanner, FilterBanner.CornerRadius.TopLeft, FilterBanner.Background, ChromeStyling.ShadowCount(FilterBanner)),
                 ("回执那一句话", SayHost, SayHost.CornerRadius.TopLeft, SayHost.Background, ChromeStyling.ShadowCount(SayHost)),
+                ("查找面板", SearchPanel, SearchPanel.CornerRadius.TopLeft, SearchPanel.Background, ChromeStyling.ShadowCount(SearchPanel)),
+                ("恢复面板", RestorePanel, RestorePanel.CornerRadius.TopLeft, RestorePanel.Background, ChromeStyling.ShadowCount(RestorePanel)),
             };
 
             var beforeChrome = problems.Count;
@@ -3187,6 +3244,8 @@ public sealed partial class MainWindow : Window
         var savedSelection = new HashSet<string>(_selection, StringComparer.Ordinal);
         var savedFilterPanel = _filterPanelOpen;
         var savedCheatsheet = _cheatsheetOpen;
+        var savedSearch = _searchOpen;
+        var savedRestore = _restoreOpen;
         var panelsOpened = false;
         string? savedPanelTagFilter = null;
         Box? framedBox = null;
@@ -3261,6 +3320,25 @@ public sealed partial class MainWindow : Window
                         ShowCheatsheet();
                         break;
 
+                    case "search":
+                        // 取证要看的是"有命中的那一屏"，所以拿板上真的有的那半句话去搜——
+                        // 空的查找框拍出来只是一格光标，量不到行高与摘要的排法。
+                        OpenSearch();
+
+                        var term = ProbeTerm();
+
+                        if (term.Length > 0)
+                        {
+                            _searchBox.Text = term;
+                            RunSearch();
+                        }
+
+                        break;
+
+                    case "restore":
+                        SetRestorePanel(true);
+                        break;
+
                     case "banner":
                         // 横幅只在"真在筛着"时存在，所以取证也得真的筛上：拿板上第一个有人在用的标签，
                         // 拍完再交回原来那副 lens（没有就清掉）。
@@ -3271,7 +3349,7 @@ public sealed partial class MainWindow : Window
                         break;
 
                     default:
-                        return new ShotReply(false, null, Error: $"不懂的 panel \"{panelArg}\"，可给 filter / cheat / banner");
+                        return new ShotReply(false, null, Error: $"不懂的 panel \"{panelArg}\"，可给 filter / cheat / banner / search / restore");
                 }
 
                 panelsOpened = true;
@@ -3384,6 +3462,16 @@ public sealed partial class MainWindow : Window
                     _view.TagFilter = savedPanelTagFilter;
 
                     Rebuild();
+                }
+
+                if (!savedSearch)
+                {
+                    CloseSearchPanel();
+                }
+
+                if (!savedRestore)
+                {
+                    CloseRestorePanel();
                 }
             }
 
@@ -3532,6 +3620,21 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // 查找那一格持键盘时板子的键位一律不进（不变量 1）：那一格里打进去的每个字都该是查询串，
+        // 而不是"Ctrl+A 把整块板子选中"。它自己的 Enter/Esc/F3 在输入框上处理。
+        if (_searchOpen)
+        {
+            // 焦点不在输入框上时（点了右下角那一组再按 Esc）这一层也得关得掉——
+            // 一按退一层，不许留一层没人持键盘却还挂在板上。
+            if (e.Key == Windows.System.VirtualKey.Escape)
+            {
+                CloseSearchPanel();
+                e.Handled = true;
+            }
+
+            return;
+        }
+
         var control = (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down));
 
@@ -3568,8 +3671,47 @@ public sealed partial class MainWindow : Window
                     break;
                 }
 
+                if (_restoreOpen)
+                {
+                    CloseRestorePanel();
+                    e.Handled = true;
+                    break;
+                }
+
                 ClearSelection();
                 ProjectSelection();
+                e.Handled = true;
+                break;
+
+            // 方向键＝微调选中的格子（1 世界像素，Shift 是 10 倍）。带 Ctrl 的那一发留给以后的
+            // "跳到邻格"，这里先不占——不占也比占错了强。
+            case Windows.System.VirtualKey.Up when !control:
+                Nudge(0, -(shift ? NudgePx * 10 : NudgePx));
+                e.Handled = true;
+                break;
+
+            case Windows.System.VirtualKey.Down when !control:
+                Nudge(0, shift ? NudgePx * 10 : NudgePx);
+                e.Handled = true;
+                break;
+
+            case Windows.System.VirtualKey.Left when !control:
+                Nudge(-(shift ? NudgePx * 10 : NudgePx), 0);
+                e.Handled = true;
+                break;
+
+            case Windows.System.VirtualKey.Right when !control:
+                Nudge(shift ? NudgePx * 10 : NudgePx, 0);
+                e.Handled = true;
+                break;
+
+            case Windows.System.VirtualKey.Number1 when shift:
+                ZoomToFit();
+                e.Handled = true;
+                break;
+
+            case Windows.System.VirtualKey.Number2 when shift:
+                ZoomToSelection();
                 e.Handled = true;
                 break;
 

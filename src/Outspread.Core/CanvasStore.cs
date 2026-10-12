@@ -17,7 +17,24 @@ namespace Outspread.Core;
 /// </remarks>
 public static class CanvasStore
 {
-    public const string MutexName = @"Global\outspread.canvas";
+    /// <summary>
+    /// The write lock is per board file, not per machine.
+    ///
+    /// <para>
+    /// It used to be one global name for every board, which is a real defect and not a detail: the
+    /// CLI writing board A and the window writing board B (or two boards open at once, or a test
+    /// suite holding one board's lock for six seconds) serialise behind each other and the loser
+    /// gets "nothing was saved, try again" after <see cref="LockTimeout"/>. Mutual exclusion is only
+    /// ever wanted between writers of *the same file*, so the name is derived from the file.
+    /// </para>
+    /// </summary>
+    public static string MutexNameFor(string path)
+    {
+        var full = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar).ToUpperInvariant();
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(full));
+
+        return $@"Global\outspread.canvas-{Convert.ToHexString(digest[..8]).ToLowerInvariant()}";
+    }
 
     public const string Extension = ".canvas";
 
@@ -63,6 +80,12 @@ public static class CanvasStore
     }
 
     /// <summary>
+    /// 把一份快照写回板子。走的是同一条原子写，但**先无条件存当前**：恢复正是"万一我选错了"
+    /// 代价最大的那一刻，所以间隔与同内容两道闸在这里绕开。
+    /// </summary>
+    public static byte[] Restore(string path, string text) => Transact(path, _ => text, forceSnapshot: true);
+
+    /// <summary>
     /// Reads the file as it is on disk right now, applies the patch to that, and
     /// publishes. Nodes an agent added in the meantime survive; the patch is only
     /// what the human actually did.
@@ -99,8 +122,14 @@ public static class CanvasStore
     /// Runs <paramref name="serialize"/> while holding the write lock, then publishes
     /// whatever it returns. Returns the hash of the bytes written, so a caller can
     /// recognise its own write in the file-system notifications it gets back.
+    /// <para>
+    /// Inside the lock and before the atomic move, the bytes about to be replaced are
+    /// snapshotted (<see cref="Snapshots"/>). That placement is the whole point: outside
+    /// the lock a snapshot can record a state that never existed on disk, and after the
+    /// move the state it should have recorded is already gone.
+    /// </para>
     /// </summary>
-    public static byte[] Transact(string path, Func<string, string> serialize)
+    public static byte[] Transact(string path, Func<string, string> serialize, bool forceSnapshot = false)
     {
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
 
@@ -109,7 +138,7 @@ public static class CanvasStore
             Directory.CreateDirectory(directory);
         }
 
-        using var mutex = new Mutex(initiallyOwned: false, MutexName);
+        using var mutex = new Mutex(initiallyOwned: false, MutexNameFor(path));
         var held = false;
 
         try
@@ -130,8 +159,12 @@ public static class CanvasStore
                     $"{(int)LockTimeout.TotalSeconds} s; nothing was saved, try again");
             }
 
-            var text = serialize(File.Exists(path) ? ReadAllText(path) : string.Empty);
+            var current = File.Exists(path) ? ReadAllText(path) : string.Empty;
+            var text = serialize(current);
             var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(text);
+
+            // 要被替换掉的那一份，先存下来（间隔与同内容两道闸在 Snapshots 里）。
+            Snapshots.TryPreserve(path, current, DateTimeOffset.Now, force: forceSnapshot);
 
             var temporary = $"{path}.{Environment.ProcessId}.tmp";
 

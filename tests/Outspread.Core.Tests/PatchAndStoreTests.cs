@@ -266,7 +266,7 @@ public class PatchAndStoreTests
         // different thread — that is also what makes it look like the CLI or the board.
         var holder = new Thread(() =>
         {
-            using var mutex = new Mutex(initiallyOwned: false, CanvasStore.MutexName);
+            using var mutex = new Mutex(initiallyOwned: false, CanvasStore.MutexNameFor(scratch.BoardPath));
 
             if (!mutex.WaitOne(TimeSpan.FromSeconds(2)))
             {

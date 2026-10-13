@@ -133,14 +133,9 @@ public sealed partial class MainWindow
         var name = System.IO.Path.GetFileNameWithoutExtension(_boardPath);
 
         PairingBody.Children.Clear();
+        // 只有码和两枚动作：码里那六个键是给手机读的，不是给人在这层逐行念的。
         PairingBody.Children.Add(PanelKit.Line($"配对手机 · {name}"));
         PairingBody.Children.Add(picture);
-        PairingBody.Children.Add(PanelKit.Line(
-            $"扫这枚码 · {PairingPayload.ByteLength(payload)} 字节"));
-        PairingBody.Children.Add(PanelKit.Line(
-            "里面是一枚能写这个仓库的令牌。屏幕会被看到，日志和文件不会。"));
-        PairingBody.Children.Add(PanelKit.Line(
-            "要让手机再扫一次，就按重新生成。"));
         PairingBody.Children.Add(PanelKit.Row("重新生成", null, () => SetPairingPanel(true)));
         PairingBody.Children.Add(PanelKit.Row("关掉", null, ClosePairingPanel));
     }

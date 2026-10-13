@@ -3664,7 +3664,7 @@ public sealed partial class MainWindow : Window
                         break;
 
                     default:
-                        return new ShotReply(false, null, Error: $"不懂的 panel \"{panelArg}\"，可给 filter / cheat / banner / search / restore / pull");
+                        return new ShotReply(false, null, Error: $"不懂的 panel \"{panelArg}\"，可给 filter / cheat / banner / search / restore / pair / pull / shrink / scrolled");
                 }
 
                 panelsOpened = true;

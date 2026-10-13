@@ -28,6 +28,10 @@ Board (`src/Outspread.Board/Outspread.Board.csproj`):
   redistribution. The nuspec carries no licence expression, only a `licenseUrl`
   pointing to `https://aka.ms/WinSDKLicenseURL`, and no licence file ships in
   the package as restored here.
+- `QRCoder` 1.8.0 — verified: `LICENSE.txt` in the restored package is The MIT
+  License (copyright 2013-2025 Raffael Herrmann, 2024-2025 Shane Krueger). Same
+  pin as the CLI's: it turns the pairing payload into a module grid for the
+  in-window sheet (`PairingPanel.cs`); the grid-to-shapes drawing is first-party.
 
 Tests (`tests/Outspread.Core.Tests/Outspread.Core.Tests.csproj`, test-only,
 not shipped in the app):

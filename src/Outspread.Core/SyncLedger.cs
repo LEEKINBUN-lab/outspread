@@ -59,8 +59,57 @@ public static class SyncLayout
         "Outspread",
         "sync");
 
+    /// <summary>
+    /// The folder this subsystem used before the product was renamed. It is not hypothetical:
+    /// the rename moved <see cref="Root"/>, which silently hid the far-repository pointer and,
+    /// worse, the ancestor text — and a merge without its ancestor stops being a merge.
+    /// </summary>
+    public static string LegacyRoot => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "TanKai",
+        "sync");
+
     public static string LedgerFolder(string boardPath)
         => Path.Combine(Root, Path.GetFileNameWithoutExtension(boardPath).ToLowerInvariant());
+
+    private static string? migratedOnce;
+
+    /// <summary>
+    /// Moves the old folder aside-and-back into the new one, once per process. Nothing is
+    /// deleted: the old path is renamed, so if the new location already had content the move
+    /// is refused and reported rather than swallowing a ledger.
+    /// </summary>
+    /// <returns>A sentence saying what happened, or null when there was nothing to do.</returns>
+    public static string? Migrate()
+    {
+        if (migratedOnce is not null)
+        {
+            return migratedOnce.Length == 0 ? null : migratedOnce;
+        }
+
+        var legacy = LegacyRoot;
+
+        if (!Directory.Exists(legacy) || Directory.Exists(Root))
+        {
+            migratedOnce = string.Empty;
+
+            return null;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Root)!);
+            Directory.Move(legacy, Root);
+
+            migratedOnce = $"账本从旧名字搬过来了：{legacy} → {Root}";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            migratedOnce = $"旧账本 {legacy} 没能搬到 {Root}（{ex.Message}）；同步先按空配置处理，旧文件一个字没动";
+        }
+
+        return migratedOnce;
+    }
 }
 
 /// <summary>
@@ -110,10 +159,9 @@ public sealed class SyncConfig
     {
         Directory.CreateDirectory(ledgerFolder);
 
-        File.WriteAllText(
+        File.WriteAllBytes(
             Path.Combine(ledgerFolder, FileName),
-            JsonSerializer.Serialize(this, Ledger.Options) + Environment.NewLine,
-            new UTF8Encoding(false));
+            Ledger.Encode(JsonSerializer.Serialize(this, Ledger.Options)));
     }
 
     public string ShortName => $"{Owner}/{Repo}";
@@ -165,6 +213,12 @@ public sealed class SyncSetupException : Exception
 public sealed class SyncWorkspace
 {
     public const string RepoPath = "outspread.sync.json";
+
+    /// <summary>
+    /// The name this file had before the product was renamed. <c>link</c> replaces it on the far
+    /// side once; leaving both would mean two answers to "which format is this folder".
+    /// </summary>
+    public const string LegacyRepoPath = "tankan.sync.json";
 
     public int Schema { get; set; } = Ledger.Schema;
 
@@ -267,7 +321,13 @@ public static class Ledger
 
     private static readonly UTF8Encoding NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
-    public static byte[] Encode(string text) => NoBom.GetBytes(text);
+    /// <summary>
+    /// The single place text becomes bytes for the sync layer, and it normalises line endings
+    /// on the way through. The board file already had to be LF for the same reason: the ledger
+    /// entry travels to the far side and the phone reads it as LF, so a CRLF from .NET's
+    /// indented writer would make one content answer as two different digests.
+    /// </summary>
+    public static byte[] Encode(string text) => NoBom.GetBytes(JsonText.NormalizeNewLines(text));
 
     public static string Digest(byte[] bytes)
         => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
@@ -340,8 +400,7 @@ public sealed class SyncLedger
 
     public void Save(SyncState state)
     {
-        var text = JsonSerializer.Serialize(state, Ledger.Options);
-        File.WriteAllText(StatePath, text + "\n", new UTF8Encoding(false));
+        File.WriteAllBytes(StatePath, Ledger.Encode(JsonSerializer.Serialize(state, Ledger.Options)));
     }
 
     /// <summary>
@@ -351,11 +410,12 @@ public sealed class SyncLedger
     /// </summary>
     public string KeepBase(CanvasDocument ancestor)
     {
-        var text = ancestor.ToJson();
-        var digest = Ledger.Digest(Ledger.Encode(text));
-        var name = $"base-{digest[..12]}.canvas";
+        var bytes = Ledger.Encode(ancestor.ToJson());
+        var name = $"base-{Ledger.Digest(bytes)[..12]}.canvas";
 
-        File.WriteAllText(Path.Combine(Folder, name), text, new UTF8Encoding(false));
+        // The name claims to be the hash of this file, so the bytes written are the bytes that
+        // were hashed — not the text before normalisation.
+        File.WriteAllBytes(Path.Combine(Folder, name), bytes);
 
         return name;
     }

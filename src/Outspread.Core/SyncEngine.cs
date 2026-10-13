@@ -63,7 +63,8 @@ public sealed record SyncReport(
     int PendingNodes,
     int Rounds,
     IReadOnlyList<MergeVerdict> Verdicts,
-    string? ConflictCopy = null)
+    string? ConflictCopy = null,
+    AssetReport? Assets = null)
 {
     /// <summary>
     /// The one line a status bar shows. Readings, not adjectives: "synced" is not a
@@ -233,7 +234,12 @@ public sealed class SyncEngine
         // spending quota to sit still.
         if (docToken == state.DocToken && manifestToken == state.ManifestToken && digest == state.PublishedSha)
         {
-            return new SyncReport(SyncOutcome.NothingToDo, "neither side moved", state.Rev, 0, 0, []);
+            // Idle is not the same as carried: the board can have been up there since before
+            // this asset layer existed, and the picture it points at must still catch up. The
+            // cost of asking is zero — a path already in the tree is never read or written.
+            var idleAssets = await CarryAssetsAsync(localDoc, tree, cancel);
+
+            return new SyncReport(SyncOutcome.NothingToDo, "neither side moved", state.Rev, 0, 0, [], null, idleAssets);
         }
 
         var ancestor = _ledger.ReadBase(state);
@@ -292,9 +298,13 @@ public sealed class SyncEngine
 
         var delta = DocDiff.Between(far, merged);
 
-        return delta.IsEmpty
+        var assets = await CarryAssetsAsync(merged, tree, cancel);
+
+        var round = delta.IsEmpty
             ? await PullOnlyAsync(state, localText, merged, manifest, verdicts, cancel)
             : await PushAsync(state, localDoc, localText, merged, manifest, verdicts, docToken, manifestToken, pending, delta.NodeCount, cancel);
+
+        return round;
     }
 
     private async Task<SyncReport> PushAsync(
@@ -473,6 +483,36 @@ public sealed class SyncEngine
             0,
             rounds,
             verdicts);
+    }
+
+    /// <summary>
+    /// Pictures first, board second, and on every path that touches the far side — including a
+    /// round with nothing to say about the board itself.
+    /// </summary>
+    private async Task<AssetReport> CarryAssetsAsync(CanvasDocument document, RemoteTree tree, CancellationToken cancel)
+    {
+        var pulled = await AssetSync.PullAsync(_remote, _boardPath, document, tree, _paths, cancel);
+        var pushed = await AssetSync.PushAsync(_remote, _boardPath, document, tree, _paths, cancel);
+
+        foreach (var name in pushed.Uploaded)
+        {
+            pulled.Uploaded.Add(name);
+        }
+
+        foreach (var pair in pushed.Refused)
+        {
+            pulled.Refused.Add(pair);
+        }
+
+        foreach (var name in pushed.Absent)
+        {
+            if (!pulled.Absent.Contains(name))
+            {
+                pulled.Absent.Add(name);
+            }
+        }
+
+        return pulled;
     }
 
     private async Task<SyncReport> PullOnlyAsync(

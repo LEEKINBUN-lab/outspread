@@ -56,6 +56,22 @@ internal sealed class SyncHost
     public bool Enabled
         => SyncConfig.Load(SyncLayout.Root) is { IsSet: true } && SyncCredentials.Read() is { Length: > 0 };
 
+    /// <summary>
+    /// The rename moved the ledger folder and the credential name. Both are reported once into
+    /// the log — a window that silently stopped syncing is the failure this subsystem keeps
+    /// meeting, so it gets a sentence rather than a guess.
+    /// </summary>
+    private void ReportMigrations()
+    {
+        SyncCredentials.Read();
+
+        foreach (var note in new[] { SyncLayout.Migrate(), SyncCredentials.LastMigration }
+                     .Where(item => !string.IsNullOrEmpty(item)))
+        {
+            Diagnostics.Write($"sync migrated: {note}");
+        }
+    }
+
     /// <summary>Starts the poll and runs one round at once. Silent when nothing is configured.</summary>
     public void Start()
     {
@@ -144,6 +160,8 @@ internal sealed class SyncHost
         {
             return;
         }
+
+        ReportMigrations();
 
         _running = true;
 

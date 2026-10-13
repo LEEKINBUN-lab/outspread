@@ -37,7 +37,15 @@ not shipped in the app):
 - `xunit` 2.9.3 — verified: nuspec declares `Apache-2.0`.
 - `xunit.runner.visualstudio` 2.8.2 — verified: nuspec declares `Apache-2.0`.
 
-Core and Cli reference no packages; they are plain `net10.0` projects.
+Cli (`src/Outspread.Cli/outspread.csproj`):
+
+- `QRCoder` 1.8.0 — verified: `LICENSE.txt` in the restored package is The MIT
+  License, copyright 2013-2025 Raffael Herrmann and 2024-2025 Shane Krueger; the
+  nuspec's `licenseUrl` points at `https://licenses.nuget.org/MIT`. Used only to
+  turn a pairing payload into a module grid; the grid-to-terminal-glyphs mapping
+  is first-party and dependency-free (`src/Outspread.Core/QrTerminal.cs`).
+
+Core references no packages; it is a plain `net10.0` project.
 
 ## Notable transitive components (resolved graph)
 

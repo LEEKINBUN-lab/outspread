@@ -61,7 +61,7 @@ src\Outspread.Cli\bin\Debug\net10.0\outspread.exe list
 
 ## 手机 ↔ 电脑同步
 
-板子的**跨端副本**放一个私有仓库（现在：`LEEKINBUN-lab/outspread-boards`），只用平台的"按路径读写单文件"HTTPS API 搬——**不装 git、不装同步软件、不买服务器**。`.canvas` 本体仍是纯 JSON Canvas 1.0，同步元数据一律在外面：远端多一个 `boards/.sync/<名字>.manifest.json`，每台设备自己在 `%LOCALAPPDATA%\Outspread\sync\` 存**上次大家一致的祖先全文**。
+板子的**跨端副本**放一个私有仓库（现在：`LEEKINBUN-lab/tankan-boards`），只用平台的"按路径读写单文件"HTTPS API 搬——**不装 git、不装同步软件、不买服务器**。`.canvas` 本体仍是纯 JSON Canvas 1.0，同步元数据一律在外面：远端多一个 `boards/.sync/<名字>.manifest.json`，每台设备自己在 `%LOCALAPPDATA%\Outspread\sync\` 存**上次大家一致的祖先全文**。
 
 为什么要祖先：格式的规范里**没有任何版本／时间戳字段**，两份文件放在一起没法从内容判"谁新"。所以"谁新"靠远端文件的一次性令牌（写的时候带上你读到的那个，被人抢先就失败重和），"怎么合"按 `id` 逐格逐字段判。
 
@@ -69,7 +69,10 @@ src\Outspread.Cli\bin\Debug\net10.0\outspread.exe list
 outspread sync link --remote owner/仓库名 --token-stdin   （令牌进 Windows 凭据管理器，不进仓、不进文件）
 outspread sync status [--json]     读数：rev / 远端令牌 / 待发几块 / 上次为什么没成 / 冲突副本
 outspread sync once                拉—合—推一轮（界面的触发点：存盘后、回前台、每 120 秒）
+outspread sync pair                把手机要的配对载荷画成二维码，只出现一次；窗口太窄会明说而不是画半张
 ```
+
+图片**只搬被某一格引用的**：`assets/` 里没人指的孤儿图不上云（那是 `AssetStore` 对孤儿的一贯态度——报告，不删）；单张超过 1 MiB 的会被点名拒发，其余照走；板子引用着而两头都没有的图，会被说成"那一格会空着"。空转一轮实测**只发 1 个请求**（一发树，稳态不读任何文件），120 秒轮询占免费限额 5000/小时的 0.60%。
 
 三条要记住的行为：**首轮两端取并集**（没祖先时删除无法判定，所以谁都不清空）；**内容双改不隐形取胜**（远端那半留在原格，本地那半另起一张落在原格下方，并在日志里留一条判决）；**挤不进去就一个字节都不动**（三轮都被挡 ⇒ 本地保持原样，本想上传的那份整份写在旁边的 `<板子名>.canvas.conflict-<设备名>-<yyyyMMdd>-<HHmm>-r<N>`）。
 

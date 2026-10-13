@@ -23,7 +23,8 @@ JSON Canvas 1.0 规范里**没有任何版本、时间戳、revision 字段**（
 
 ## 每台设备自己存什么（不进仓库）
 
-`%LOCALAPPDATA%\Outspread\sync\{device}\state.json` ＋ `base-<12位hash>.canvas`。
+`%LOCALAPPDATA%\Outspread\sync\{板名小写}\state.json` ＋ `base-<12位hash>.canvas`。
+**分文件夹的键是板名，不是设备名**（`SyncLedger.LedgerFolder` → `Path.GetFileNameWithoutExtension(...).ToLowerInvariant()`）：一台机器上两块板各有各的祖先，测试 `Two_boards_can_share_one_folder_without_naming_each_other` 钉的就是这件事。
 
 `base-*.canvas` 是**祖先的全文**，不是哈希。少了它三方合并就退化成"谁后写谁整份赢"。
 
@@ -31,13 +32,16 @@ JSON Canvas 1.0 规范里**没有任何版本、时间戳、revision 字段**（
 
 **`deviceId` 一旦生成就不能改**：几何字段打架时它参与决胜（`Merge3.cs:424` `Wins`），改了等于把历史合并结果变成不可复现。
 
+**所有同步用的 JSON 一律 LF**：`Ledger.Encode` 过一个 `JsonText.NormalizeNewLines` 才成字节，`state.json`／`remote.json`／仓里的 `<名>.manifest.json`／`outspread.sync.json` 都走它。原因不是好看——`.NET` 的缩进写器给的是平台行尾，而 `manifest.json` 是**进仓、两端都读**的文件，手机端读 LF：同一份内容在两台上算出两个摘要就是错的。测试 `The_ledger_entry_a_phone_reads_is_line_ending_free`；真机复验：`remote.json`/`state.json` 重写后 CR 计数 0。`base-*.canvas` 的**文件名哈希与落盘字节同源**（`KeepBase` 先 `Encode` 再写，名字声称是这份的哈希，就得真是这份的哈希）。
+
 ## 一轮同步干什么（`SyncEngine.cs`）
 
 1. **一发 tree 请求**拿回全部 path→token。
-2. 若 `docToken`、`manifestToken` 都还是我上次写的，且本地文件哈希 == `publishedSha` ⇒ `NothingToDo`，**一个文件都没读**（`SyncEngine.cs:229`；测试 `Nothing_moving_costs_one_request_and_not_one_file_read`：断言 `ReadCalls == 0`）。
+2. 若 `docToken`、`manifestToken` 都还是我上次写的，且本地文件哈希 == `publishedSha` ⇒ `NothingToDo`，**一个文件都没读**（`SyncEngine.RoundAsync` 的空转返回；测试 `Nothing_moving_costs_one_request_and_not_one_file_read`：断言 `ReadCalls == 0`）。
 3. 否则取远端 `.canvas`，与本地、祖先三份做 `Merge3`。
-4. 要上传的东西 = `DocDiff.Between(远端, 合并结果)` —— **往线上发的也是"补丁算出来的那部分"**，整份文件只是承载它的容器。这正对安卓定档里"`BoardSyncTransport` 必须交 `DocPatch` 而非整份文档"：接收侧收到远端状态后必须 `DocDiff.Between(祖先, 收到)` 再 `PatchApplier.Apply` 到本地副本，**禁止整份覆盖**。
-5. `PUT` 带 `expectToken`。被挡回 ⇒ 重读远端、用**同一个祖先**重新合并、再发。上限 `MaxRounds = 3`（`SyncEngine.cs:98`）。
+4. **上传的是整份合并结果，不是补丁**：`PUT boards/<名>.canvas` 带 `merged.ToJson()` 的全部字节（`SyncEngine.PushAsync`）。`DocDiff.Between(远端, 合并结果)` 只用来判断"这一轮有没有东西要发"（`delta.IsEmpty`），不当作线上格式。
+   安卓定档里那句"`BoardSyncTransport` 必须交 `DocPatch` 而非整份文档"约束的是**收端怎么写自己的盘**：收到远端状态后必须 `DocDiff.Between(祖先, 收到)` 再 `PatchApplier.Apply` 到本地副本，**不许拿远端那份直接覆盖本地文件**。桌面端就是这么实现的——写完之前比对，比对不过就不写（`SyncEngine.PublishIfUnchanged`，在 `PushAsync` / `PullOnlyAsync` 末尾各调一次），所以"整份文件"是载体、"补丁"才是落地方式。**下一个实现者不要以为线上要传 delta。**
+5. `PUT` 带 `expectToken`。被挡回 ⇒ 重读远端、用**同一个祖先**重新合并、再发。上限 `SyncEngine.MaxRounds = 3`。
 6. 三轮都挤不进 ⇒ `GaveUpConflict`：**本地一个字不改**，把本想上传的那份整份写到板子旁边的 `<板子文件名>.canvas.conflict-<设备名>-<yyyyMMdd>-<HHmm>-r<N>`（例如 `scratch.canvas.conflict-ENMUSUBI-20261012-1531-r2`，`SyncEngine.cs` 的 `ConflictCopyPath`）。**故意不叫 `.canvas` 结尾**：`BoardLocator` 有一条"取目录里 Ordinal 最小的 `*.canvas`"的兜底，冲突副本要是被当成板子打开，一次同步失败就变成了一块新板子。人工动作只有三个：重试 / 以本地为准 / 以远端为准。
 
 ## 合并裁决（`Merge3.cs`）——两份实现必须逐字一致
@@ -58,7 +62,7 @@ JSON Canvas 1.0 规范里**没有任何版本、时间戳、revision 字段**（
 
 ## 首轮没有祖先时
 
-`state.baseFile` 为空 ⇒ 祖先取**空文档**（`SyncEngine.cs:271` `ancestor ?? CanvasDocument.CreateNew()`）。于是首轮是**并集**，任何一端的节点都不会被当成"另一端删掉的"。
+`state.baseFile` 为空 ⇒ 祖先取**空文档**（`SyncEngine.RoundAsync` 里的 `ancestor ?? CanvasDocument.CreateNew()`）。于是首轮是**并集**，任何一端的节点都不会被当成"另一端删掉的"。
 
 这是硬规矩：首轮若拿远端当祖先，本地缺的每个远端节点都会被 `DocDiff` 报成本地的删除，第一次同步就清空对面。
 
@@ -72,20 +76,52 @@ JSON Canvas 1.0 规范里**没有任何版本、时间戳、revision 字段**（
 4. `expected.*` 由生成器产出、人手不写：合并裁决的用例将来要从这份表里生成，两端跑同一份向量。
 5. `deviceId` 形状：`<机器名清洗后>-<6位hex>`，持久化后不许重铸。
 
-## 现在的落点，以及各自卡在哪
+## 图片怎么跟着走（`AssetSync.cs`）
+
+| 规则 | 为什么 |
+|---|---|
+| **只搬被节点 `file` 引用的**，孤儿图不动 | `AssetStore` 的既定态度是"孤儿只报告、不删除"（agent 可能正贴到一半）。把没人引用的图上云是花别人的配额搬没人在看的东西 |
+| **删除不搬** | 格式里没有墓碑。另一台顶多多留一张没人引用的图，不会少一张在显示的 |
+| **>1 MiB 的单张图拒发并点名** | Contents API 官方分级里 ≤1MB 才是全功能；超了宁可写明"这张没搬，因为 X 字节"，也不要一次半途上传看着像同步成功 |
+| 板子引用着、**两头都没有** ⇒ 点名 `Absent` | 那一格注定空着，这句话必须有人说 |
+| 落盘走"写临时名＋改名" | 和 `.canvas` 同一把规矩；进程被杀留下的半截 PNG 不该顶着内容哈希的名字存在 |
+| 路径过 `AssetStore` 那道墙 | 文档里写 `../../…` 或绝对路径一律不进引用集合——同步层不许比渲染层更宽松 |
+
+**实测（2026-10-12，你的凭据，真仓）**：本地没图而远端有 ⇒ 第一轮 `Pulled` 把 `boards/assets/probe-chart.png` 取回，字节落地；板子与图都齐之后连续空转 ⇒ **每轮 1 个请求**（只一发 tree，资产层不花配额）；冷启那轮 5 个。⇒ 120 秒轮询 = **0.60%** 的官方 5000/小时限额。
+
+## 配对载荷的形状（`PairCommand.cs`，`outspread sync pair`）
+
+```json
+{ "v": "1", "host": "github", "owner": "…", "repo": "…", "branch": "main", "token": "…" }
+```
+
+实测整份 **192 字节**（令牌 93 字符）⇒ 画成二维码是可行的尺寸。纪律：只在被点名时出现在屏幕上，**不落盘、不进日志、不进异常文本**（`download_url` 那条教训），要看第二次得重跑。载荷里**故意不带板子清单**——清单从手机本来就要发的那发 tree 里当场读。
+
+**渲染已接（2026-10-12）**：CLI 加了一个第三方包 `QRCoder` 1.8.0（MIT，从包内 `LICENSE.txt` 读到原文；登记在 `NOTICE.md`），它**只负责把文字变成模块网格**；网格→终端方块字的映射是第一方的 `QrTerminal`（在 Core，零依赖、有 9 条测试）。
+
+两条只能实测的事实：
+
+- **`QRCodeData.ModuleMatrix` 不含静区**：192 字节载荷 ECC Q 出来是 **73×73**，而 73 = 4×14+17 正好是版本 14 的边长。文档没写这一条，所以静区由 `QrTerminal` 自己补 4 圈（ISO 18004 的数），加完是 **81 列 × 33 行**。
+- **终端画出来的这张图确实扫得出来**：验证方法不是人眼看，而是在**仓库外**把 `QrTerminal` 的方块字反向光栅化成 RGBA（一格字 = 4×8 像素，`█/▀/▄/空格` 四种映射），再交给独立解码器 jsQR 解 ⇒ 解回的文字与载荷**逐字节相同**（带静区与不带静区两版都过；带静区那版才是我们会用的）。
+
+还有一条物理限制：码宽 81 列，**终端窗口不够宽会把它折行，折了就不是码**。所以 `pair` 先量 `Console.WindowWidth`，不够宽就明说"拉宽再跑"，绝不画半张；输出被重定向时宽度无从测，按"够宽"处理而不是让探测本身把命令弄崩。
+
+
 
 | 项 | 状态 |
 |---|---|
-| GitHub 适配器（`GitHubContents.cs`） | **已做并已真机验证**（2026-10-12，跑在 `LEEKINBUN-lab/outspread-boards` 上） |
+| GitHub 适配器（`GitHubContents.cs`） | **已做并已真机验证**（2026-10-12，跑在 `LEEKINBUN-lab/tankan-boards` 上） |
 | CLI `outspread sync link / status --json / once / forget` | **已做**：`SyncCommand.cs` 新文件，`Program.cs` 只加了两处（分发一行 ＋ 帮助文本） |
 | 界面接线（`SyncHost.cs`） | **已做**：触发点＝存盘后、外来改动并入后、回前台、每 120 秒轮询；提示走现有的 `Say()`，**沿用他们那条判断——常态不是消息**，所以传成功时空转什么都不说，只有没传上去/挤不进/读不懂才浮一句 |
 | Gitee 备胎适配器 | **没做**。限额官方无数字、`sha` 过期的错误码官方没写 ⇒ 等 GitHub 被手机侧证伪再做 |
 | 手机蜂窝可达性 | 他说能连上 GitHub。**但没拿到是哪一条边**：`github.com` 与 `api.github.com` 是两条（本机桌面宽带实测就是 api 通、主站超时、raw 被重置），同步只用 api 域 ⇒ 判据应是手机上打开 `https://api.github.com/rate_limit` 出不出 JSON |
-| `assets/` 图片同步与删除墓碑 | **没做**（P4）。现在只搬 `.canvas` |
+| `assets/` 图片同步与删除墓碑 | **搬运已做**（见下「图片怎么跟着走」）。**删除不搬**：跨端删除要可靠仍需墓碑，格式里没有、这里也不发明 |
 | 私有 sidecar `*.canvas.view.json` | 已在 `.gitignore`，**永远不进同步** |
-| 令牌的存放 | `outspread sync link --token-stdin` 写进 Windows 凭据管理器；本轮真机跑通用的是环境变量 `TANKAN_SYNC_TOKEN` 临时喂 gh 已有的 OAuth token，**没有落盘**。他存好 fine-grained PAT 之后，界面才会真的动 |
+| 令牌的存放 | **已接**：他本人的 fine-grained PAT 存在 Windows 凭据管理器 `outspread.sync.github`，读写删都在真仓验过。环境变量优先认 `OUTSPREAD_SYNC_TOKEN`，旧名 `TANKAN_SYNC_TOKEN` 仍作兜底 |
+| 改名留下的用户态 | **已迁移**：凭据 target（`tankan.sync.github` → 新名，**认过来但旧的没删**）与账本目录（`%LOCALAPPDATA%\TanKai\sync` → `Outspread\sync`，整目录搬走）都在 `status` / 日志里明说发生了什么；仓根说明文件也跟着改成 `outspread.sync.json`，`link` 会把远端旧名那份删掉 |
+| 配对 `outspread sync pair` | **载荷已做**（192 字节，含令牌，只出现一次、不落盘不进日志）；**画成二维码没做**，卡在编码器那一步（见上） |
 
-## 真机读数（2026-10-11，实测对象 = `LEEKINBUN-lab/outspread-boards` 私有库）
+## 真机读数（2026-10-11，实测对象 = `LEEKINBUN-lab/tankan-boards` 私有库）
 
 不是文档抄来的，是这台机器一发一发打出来的：
 
@@ -110,7 +146,7 @@ JSON Canvas 1.0 规范里**没有任何版本、时间戳、revision 字段**（
 **这一轮真机抓出的我自己的两个缺陷**（夹具测试没能发现的，因为它们绕过了真实响应形状）：
 
 1. 手拼 JSON 的请求体无效 —— `JsonEncodedText.Encode` 只转义**不加引号**，发出去是 `{message:…}`。改用 `JsonSerializer.Serialize`。
-2. 文档写成功后我把 `manifestToken` 清了空，等于对一个**已存在的**账本文件发"创建"，被平台拒 ⇒ 出现过"板子上去了、账本没上去"的半程状态。账本是另一个文件，它的令牌不会因为这块板被写而失效，所以不许清。
+2. 文档写成功后我把 `manifestToken` 清了空，等于对一个**已存在的**账本文件发"创建"，被平台拒 ⇒ 出现过"板子上去了、账本没上去"的半程状态。**规矩是"本轮已读到的账本令牌不许清"**：它是另一个文件的令牌，不会因为我们写这块板而失效。今天代码里只剩两种合法置空——(a) 账本这一发确实被拒（`SyncEngine.PushAsync` 里 `state.ManifestToken = ... : null`），下一轮从 tree 重取；(b) 补记前先重读 tree 拿新令牌再试一次。二者都不会拿旧令牌硬重发。
 3. （映射缺陷）形状被拒（`Rejected`）曾被报成"远端限流" ⇒ 新增 `SyncOutcome.RemoteRejected`，状态行"远端不收这份：形状或大小"；限流与拒收是两种等待，测试 `A_refusal_for_size_is_not_reported_as_a_limit` 看着这条。
 
 **令牌这一格差点没人会发现**（2026-10-12，用他本人存进凭据管理器的那把才暴露）：`cmdkey` 把 blob 存成 **UTF-16**，按 UTF-8 解就是"每个字符中间夹一个 NUL"，组 `Authorization` 头时在框架深处抛 `FormatException`，离真正的错处十万八千里。`SyncCredentials.DecodeStored` 因此**按字节形状判编码**（偶数长度且奇数位全 0 ⇒ UTF-16LE），两条来源（凭据／`--token-stdin`）都再过一次 `Normalize` 去掉随粘贴带来的换行。测试：`A_credential_written_by_cmdkey_is_still_one_token`、`A_token_with_the_newline_that_came_with_it_is_still_one_token`。

@@ -483,6 +483,32 @@ public class SyncEngineTests
     }
 
     [Fact]
+    public void The_ledger_entry_a_phone_reads_is_line_ending_free()
+    {
+        // This file is committed to the repository and read by both ends; the phone reads LF.
+        // .NET's indented writer emits the platform line ending, so without normalising, one
+        // content answers as two digests depending on which machine wrote it.
+        var bytes = SyncManifest.ToBytes(new SyncManifest { Rev = 3, ContentSha = "ab", By = "pc", Clock = 3 });
+
+        Assert.DoesNotContain((byte)13, bytes);
+        Assert.Contains((byte)10, bytes);
+
+        var config = new SyncConfig { Owner = "o", Repo = "r" };
+        var folder = Path.Combine(Path.GetTempPath(), "outspread-lf-check", Guid.NewGuid().ToString("N")[..8]);
+
+        try
+        {
+            config.Save(folder);
+
+            Assert.DoesNotContain((byte)13, File.ReadAllBytes(Path.Combine(folder, SyncConfig.FileName)));
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
     public void A_token_with_the_newline_that_came_with_it_is_still_one_token()
     {
         // cmdkey and a piped --token-stdin both hand over a trailing newline, and a header

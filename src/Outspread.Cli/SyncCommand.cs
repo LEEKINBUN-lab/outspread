@@ -29,17 +29,53 @@ internal static class SyncCommand
         // machine with nothing on it yet can still take.
         var boardPath = sub == "link" ? Locate(options).BoardPath : RequireBoard(options);
 
+        // The product rename moved both the ledger folder and the credential name. Doing this
+        // here, before any sub-command reads them, is what keeps "I never changed anything"
+        // from becoming "sync quietly stopped".
+        ReportMigrations(options);
+
         return sub switch
         {
             "link" => Link(options),
             "status" => Status(options, boardPath),
             "once" or "push" or "pull" => Once(options, boardPath),
+            "pair" => PairCommand.Run(options),
             "forget" => Forget(options, boardPath),
-            _ => throw new ArgumentException($"outspread sync 不认识 \"{sub}\"；能用的有 link、status、once、forget"),
+            _ => throw new ArgumentException($"outspread sync 不认识 \"{sub}\"；能用的有 link、status、once、pair、forget"),
         };
     }
 
     private static BoardLocator.Resolution Locate(Options options) => BoardLocator.Resolve(options.Value("board"));
+
+    /// <summary>
+    /// What the rename moved, said out loud: a ledger folder that quietly became empty and a
+    /// credential that quietly became unreadable both look like "sync is off", which is the one
+    /// thing a user should never have to guess at.
+    /// </summary>
+    private static IReadOnlyList<string> Notices()
+    {
+        SyncCredentials.Read();
+
+        return new[] { SyncLayout.Migrate(), SyncCredentials.LastMigration }
+            .Where(note => !string.IsNullOrEmpty(note))
+            .Select(note => note!)
+            .ToList();
+    }
+
+    private static void ReportMigrations(Options options)
+    {
+        if (options.Flag("json"))
+        {
+            // The JSON answer carries them as a field instead; printing into a machine-readable
+            // stream would corrupt it.
+            return;
+        }
+
+        foreach (var note in Notices())
+        {
+            Console.WriteLine($"  ! {note}");
+        }
+    }
 
     private static string RequireBoard(Options options)
     {
@@ -142,6 +178,19 @@ internal static class SyncCommand
             ? $"  已写 {SyncWorkspace.RepoPath}（格式 {workspace.Format}）"
             : $"  {SyncWorkspace.RepoPath} 没写上：{stamp.Detail}");
 
+        // The file carried the old product name. Leaving both in the folder would mean two
+        // answers to "which format is this", so the superseded one is removed once, here.
+        var staleToken = tree.TokenFor(SyncWorkspace.LegacyRepoPath);
+
+        if (staleToken is not null)
+        {
+            var removed = transport.DeleteAsync(SyncWorkspace.LegacyRepoPath, staleToken, default).GetAwaiter().GetResult();
+
+            Console.WriteLine(removed == WriteOutcome.Written
+                ? $"  旧名的 {SyncWorkspace.LegacyRepoPath} 已从远端删掉（内容已在新名里）"
+                : $"  旧名的 {SyncWorkspace.LegacyRepoPath} 没删掉（{removed}），新名那份已经在了");
+        }
+
         var boards = tree.Entries.Where(entry => entry.Path.StartsWith("boards/", StringComparison.Ordinal)).ToList();
 
         Console.WriteLine($"  远端共有 {tree.Entries.Count} 个文件，其中 boards/ 下 {boards.Count} 个");
@@ -186,6 +235,7 @@ internal static class SyncCommand
                 ["conflictCopies"] = conflicts,
                 ["ledgerFolder"] = ledger.Folder,
                 ["hasToken"] = SyncCredentials.Read() is not null,
+                ["notices"] = Notices(),
             };
 
             Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(payload, Ledger.Options));
@@ -204,6 +254,7 @@ internal static class SyncCommand
         Console.WriteLine($"  上次    {(string.IsNullOrEmpty(state.LastError) ? "没有失败记录" : $"{state.LastErrorKind}：{state.LastError}")}");
         Console.WriteLine($"  冲突副本  {conflicts.Count} 个" + (conflicts.Count > 0 ? $"：{string.Join('、', conflicts.Select(Path.GetFileName))}" : string.Empty));
         Console.WriteLine($"  账本目录  {ledger.Folder}");
+
 
         return 0;
     }
@@ -236,6 +287,29 @@ internal static class SyncCommand
         foreach (var verdict in report.Verdicts)
         {
             Console.WriteLine($"    {verdict.Rule} {verdict.Id}/{verdict.Field} → {verdict.Chosen}（{verdict.Detail}）");
+        }
+
+        if (report.Assets is { } assets)
+        {
+            foreach (var name in assets.Uploaded)
+            {
+                Console.WriteLine($"    图已上传 {name}");
+            }
+
+            foreach (var name in assets.Downloaded)
+            {
+                Console.WriteLine($"    图已取回 {name}");
+            }
+
+            foreach (var pair in assets.Refused)
+            {
+                Console.WriteLine($"    图没搬 {pair.Path}：{pair.Reason}");
+            }
+
+            foreach (var name in assets.Absent)
+            {
+                Console.WriteLine($"    图两头都没有 {name}：板子上那一格会空着");
+            }
         }
 
         if (!options.Flag("verbose"))

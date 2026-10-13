@@ -108,6 +108,8 @@ internal static class Program
               outspread sync once   [--verbose]
                                拉—合—推一轮。退出码 0=成，1=等一下还会成（离线、限流、盘上被人抢写过），
                                2=要人看一眼（令牌无效、远端没了、形状被拒、三轮没挤进去）
+              outspread sync pair   [--json]
+                               把手机要的配对载荷打在屏幕上：只出现一次，不落盘、不进日志；画成二维码还没接上
               outspread sync forget [--all]
                                忘掉这块板与远端的对应关系；远端和本地板子都不动
 

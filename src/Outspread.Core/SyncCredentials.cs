@@ -20,27 +20,23 @@ public static class SyncCredentials
     /// <summary>Target name in the store. It is part of the contract: renaming it logs every device out.</summary>
     public const string Target = "outspread.sync.github";
 
-    public const string EnvironmentVariable = "TANKAN_SYNC_TOKEN";
+    public const string EnvironmentVariable = "OUTSPREAD_SYNC_TOKEN";
 
-    private const int CredentialTypeGeneric = 1;
-
-    /// <summary>CRED_PERSIST_LOCAL_MACHINE: survives a reboot, stays visible to this user only.</summary>
-    private const int PersistLocalMachine = 1;
+    /// <summary>Read after the new name, for a round started from a shell that still exports the old one.</summary>
+    public const string LegacyEnvironmentVariable = "TANKAN_SYNC_TOKEN";
 
     /// <summary>
-    /// Returns the token, or null when nothing is stored. A token passed through the
-    /// environment wins for this one call, which is how a rehearsal can be run without
-    /// rewriting what the board will use tomorrow.
+    /// The target name used before the product was renamed. The rename left a real token
+    /// stranded under the old name, which reads as "no credential" — that is, the rename
+    /// logged every already-paired machine out without saying so.
     /// </summary>
-    public static string? Read(string target = Target)
+    public const string LegacyTarget = "tankan.sync.github";
+
+    /// <summary>The old name is copied up, never deleted: an earlier build may still be reading it.</summary>
+    public static string? LastMigration { get; private set; }
+
+    private static string? ReadRaw(string target)
     {
-        var fromEnvironment = Environment.GetEnvironmentVariable(EnvironmentVariable);
-
-        if (!string.IsNullOrWhiteSpace(fromEnvironment))
-        {
-            return Normalize(fromEnvironment);
-        }
-
         if (!OperatingSystem.IsWindows())
         {
             return null;
@@ -69,6 +65,56 @@ public static class SyncCredentials
         {
             CredFree(buffer);
         }
+    }
+
+    private const int CredentialTypeGeneric = 1;
+
+    /// <summary>CRED_PERSIST_LOCAL_MACHINE: survives a reboot, stays visible to this user only.</summary>
+    private const int PersistLocalMachine = 1;
+
+    /// <summary>
+    /// Returns the token, or null when nothing is stored. A token passed through the
+    /// environment wins for this one call, which is how a rehearsal can be run without
+    /// rewriting what the board will use tomorrow.
+    /// </summary>
+    public static string? Read(string target = Target)
+    {
+        var fromEnvironment = Environment.GetEnvironmentVariable(EnvironmentVariable)
+            ?? Environment.GetEnvironmentVariable(LegacyEnvironmentVariable);
+
+        if (!string.IsNullOrWhiteSpace(fromEnvironment))
+        {
+            return Normalize(fromEnvironment);
+        }
+
+        var stored = ReadRaw(target);
+
+        if (stored is not null)
+        {
+            return stored;
+        }
+
+        if (target != Target)
+        {
+            return null;
+        }
+
+        var legacy = ReadRaw(LegacyTarget);
+
+        if (legacy is null)
+        {
+            return null;
+        }
+
+        // Copied up, not moved: the old entry stays where an earlier build left it, because
+        // deleting a credential this program no longer owns the meaning of is not ours to do.
+        var adopted = Write(legacy, user: null, target: Target);
+
+        LastMigration = adopted
+            ? $"令牌从旧名字 {LegacyTarget} 认到了 {Target}（旧那条仍在凭据管理器里，没删）"
+            : $"找到了旧名字 {LegacyTarget} 下的令牌，但没能复制到 {Target}：这次先用旧的，下次还得再认一遍";
+
+        return legacy;
     }
 
     public static bool Write(string token, string? user = null, string target = Target)
@@ -156,24 +202,18 @@ public static class SyncCredentials
     /// </summary>
     public static string Origin(string target = Target)
     {
-        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(EnvironmentVariable)))
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(EnvironmentVariable)
+                ?? Environment.GetEnvironmentVariable(LegacyEnvironmentVariable)))
         {
             return "环境变量（只在这一次调用里有效，没有落盘）";
         }
 
-        if (!OperatingSystem.IsWindows())
+        if (ReadRaw(target) is not null)
         {
-            return "没有";
+            return "凭据管理器";
         }
 
-        if (!CredReadW(target, CredentialTypeGeneric, 0, out var buffer))
-        {
-            return "没有";
-        }
-
-        CredFree(buffer);
-
-        return "凭据管理器";
+        return ReadRaw(LegacyTarget) is not null ? "凭据管理器（旧名字）" : "没有";
     }
 
     /// <summary>A short, non-secret hint for a status line: enough to tell two tokens apart, never the token.</summary>

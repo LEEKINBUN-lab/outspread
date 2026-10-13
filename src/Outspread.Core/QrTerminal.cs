@@ -24,10 +24,39 @@ public static class QrTerminal
     public const int QuietZoneModules = 4;
 
     /// <summary>
-    /// The row-of-bits shape an encoder hands over, so the conversion to a grid is here under a
-    /// test rather than inside the command line that draws it.
+    /// The grid with its light border already around it, square, side = size + 2·quietZone.
+    /// Both drawers start here: the terminal folds this into block characters and the window
+    /// paints it into pixels. Two implementations of "add four modules of white" is how one of
+    /// them ends up scannable and the other not.
     /// </summary>
-    public static string Render(IList<BitArray> rows, int quietZone = QuietZoneModules)
+    public static bool[,] Padded(bool[,] matrix, int quietZone = QuietZoneModules)
+    {
+        ArgumentNullException.ThrowIfNull(matrix);
+
+        var size = matrix.GetLength(0);
+
+        if (matrix.GetLength(1) != size)
+        {
+            throw new ArgumentException($"a QR grid must be square; this one is {size}×{matrix.GetLength(1)}", nameof(matrix));
+        }
+
+        var side = size + (2 * quietZone);
+        var padded = new bool[side, side];
+
+        for (var row = 0; row < size; row++)
+        {
+            for (var column = 0; column < size; column++)
+            {
+                padded[row + quietZone, column + quietZone] = matrix[row, column];
+            }
+        }
+
+        return padded;
+    }
+
+    /// <summary>The row-of-bits shape an encoder hands over, so the conversion to a grid is here under a
+    /// test rather than inside the command line that draws it.</summary>
+    public static bool[,] ToGrid(IList<BitArray> rows)
     {
         ArgumentNullException.ThrowIfNull(rows);
 
@@ -42,22 +71,16 @@ public static class QrTerminal
             }
         }
 
-        return Render(matrix, quietZone);
+        return matrix;
     }
+
+    public static string Render(IList<BitArray> rows, int quietZone = QuietZoneModules)
+        => Render(ToGrid(rows), quietZone);
 
     public static string Render(bool[,] matrix, int quietZone = QuietZoneModules)
     {
-        ArgumentNullException.ThrowIfNull(matrix);
-
-        var size = matrix.GetLength(0);
-        var columns = matrix.GetLength(1);
-
-        if (matrix.GetLength(1) != size)
-        {
-            throw new ArgumentException($"a QR grid must be square; this one is {size}×{columns}", nameof(matrix));
-        }
-
-        var side = size + (2 * quietZone);
+        var padded = Padded(matrix, quietZone);
+        var side = padded.GetLength(0);
 
         var builder = new StringBuilder(side * ((side / 2) + 1));
 
@@ -65,8 +88,8 @@ public static class QrTerminal
         {
             for (var column = 0; column < side; column++)
             {
-                var top = IsDark(matrix, quietZone, size, row, column);
-                var bottom = row + 1 < side && IsDark(matrix, quietZone, size, row + 1, column);
+                var top = padded[row, column];
+                var bottom = row + 1 < side && padded[row + 1, column];
 
                 builder.Append((top, bottom) switch
                 {
@@ -81,15 +104,5 @@ public static class QrTerminal
         }
 
         return builder.ToString();
-    }
-
-    private static bool IsDark(bool[,] matrix, int quietZone, int size, int row, int column)
-    {
-        var innerRow = row - quietZone;
-        var innerColumn = column - quietZone;
-
-        return innerRow >= 0 && innerColumn >= 0
-            && innerRow < size && innerColumn < size
-            && matrix[innerRow, innerColumn];
     }
 }

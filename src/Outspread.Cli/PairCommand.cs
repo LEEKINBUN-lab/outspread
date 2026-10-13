@@ -21,9 +21,6 @@ namespace Outspread.Cli;
 /// </remarks>
 internal static class PairCommand
 {
-    /// <summary>The shape a phone parser must match, field for field. Changing it is a contract break.</summary>
-    public const int PayloadVersion = 1;
-
     public static int Run(Options options)
     {
         var config = SyncConfig.Load(SyncLayout.Root);
@@ -44,17 +41,7 @@ internal static class PairCommand
             return 2;
         }
 
-        var payload = new Dictionary<string, string>
-        {
-            ["v"] = PayloadVersion.ToString(),
-            ["host"] = config.Host,
-            ["owner"] = config.Owner,
-            ["repo"] = config.Repo,
-            ["branch"] = config.Branch,
-            ["token"] = token,
-        };
-
-        var text = JsonSerializer.Serialize(payload);
+        var text = PairingPayload.Build(config, token);
 
         if (options.Flag("json"))
         {
@@ -86,7 +73,9 @@ internal static class PairCommand
         using var generator = new QRCodeGenerator();
         using var code = generator.CreateQrCode(text, QRCodeGenerator.ECCLevel.Q);
 
-        Console.WriteLine("手机扫这个（屏幕上的这一块码，扫完就作废不了它——令牌本身要 90 天才自己死）：");
+        // 这句里不写"90 天"：到期日是建这把 PAT 时选的，载荷里没有那一位，代码也读不到它——
+        // 屏幕上写一个具体天数就是把它变成机制的一部分，而它不是。能说的只有撤销在哪。
+        Console.WriteLine("手机扫这个（屏幕上的这一块码）：");
         Console.WriteLine();
 
         // Measured here rather than trusted from docs: QRCoder hands back the code at its exact

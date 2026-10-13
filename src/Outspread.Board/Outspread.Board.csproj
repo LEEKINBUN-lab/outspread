@@ -48,6 +48,9 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
+    <!-- 只为把配对载荷画成矩阵（PairingPanel）。Core 保持零第三方包：安卓那台生成 golden
+         语料的工具直接吃 Core.dll。许可证见 NOTICE.md（MIT，从包内 LICENSE.txt 读到原文）。 -->
+    <PackageReference Include="QRCoder" Version="1.8.0" />
   </ItemGroup>
 
 </Project>

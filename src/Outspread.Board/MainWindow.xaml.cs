@@ -2431,6 +2431,12 @@ public sealed partial class MainWindow : Window
         filter.Click += (_, _) => SetFilterPanel(true);
         menu.Items.Add(filter);
 
+        // 配对不开漏斗那一组（那是读板子的），也不放底栏（那是缩放）：它跟"筛选"同类——
+        // 整块板的一个动作，开了会挡画面，所以也归右键这一处。
+        var pair = new MenuFlyoutItem { Text = "配对手机…" };
+        pair.Click += (_, _) => OpenPairingPanel();
+        menu.Items.Add(pair);
+
         if (_history.CanUndo)
         {
             var undo = new MenuFlyoutItem { Text = $"撤销『{_history.NextUndoLabel}』", KeyboardAcceleratorTextOverride = "Ctrl+Z" };
@@ -3584,6 +3590,12 @@ public sealed partial class MainWindow : Window
 
                     case "restore":
                         SetRestorePanel(true);
+                        break;
+
+                    case "pair":
+                        // 取证要看的是"码真画出来了"那一屏：一层浮窗加几百枚矩形，拍下来的 PNG
+                        // 里有没有那块白底，就是它可不可见的证据。
+                        OpenPairingPanel();
                         break;
 
                     case "shrink":

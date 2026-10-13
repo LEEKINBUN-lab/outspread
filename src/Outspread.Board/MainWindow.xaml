@@ -175,6 +175,19 @@
                 <ScrollViewer x:Name="RestoreScroll" />
             </Border>
 
+            <!-- 配对手机…（右键菜单里那一行）。码画在屏幕上是因为用这块板的人开的是这个窗口，
+                 不是终端；按它不关（里面有两枚动作），关掉只走"关掉"那一枚。 -->
+            <Border
+                x:Name="PairingPanel"
+                Visibility="Collapsed"
+                MinWidth="280"
+                MaxWidth="380"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                PointerPressed="OnPairingPanelPressed">
+                <StackPanel x:Name="PairingBody" Spacing="0" />
+            </Border>
+
             <!-- 只有筛选真在起作用时才出现的一条窄横幅。行仍是菜单那一枚（点它＝清除）。 -->
             <Border
                 x:Name="FilterBanner"

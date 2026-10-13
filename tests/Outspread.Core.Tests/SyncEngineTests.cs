@@ -483,6 +483,53 @@ public class SyncEngineTests
     }
 
     [Fact]
+    public async Task A_round_that_moved_a_picture_says_which_one_even_though_the_board_changed_too()
+    {
+        using var scratch = new Scratch("sync-assets");
+
+        var document = CanvasDocument.CreateNew();
+        document.Add(CanvasNodeKind.File, 0, 0, 200, 100, id: "ufile01").FilePath = "assets/img_aaa.png";
+        CanvasStore.Write(scratch.BoardPath, document.ToJson());
+
+        var image = Path.Combine(AssetStore.AssetsDirectory(scratch.BoardPath), "img_aaa.png");
+        Directory.CreateDirectory(Path.GetDirectoryName(image)!);
+        File.WriteAllBytes(image, new byte[] { 1, 2, 3, 4 });
+
+        var far = new FakeRemote();
+        var (engine, _, _) = Build(scratch, far);
+
+        var report = await engine.SynchronizeAsync();
+
+        Assert.Equal(SyncOutcome.Pushed, report.Outcome);
+        Assert.NotNull(report.Assets);
+        Assert.Equal(new[] { "assets/img_aaa.png" }, report.Assets!.Uploaded);
+        Assert.Equal(new byte[] { 1, 2, 3, 4 }, far.Files["boards/assets/img_aaa.png"]);
+
+        // The same round on a second device that lacks the picture has to name it as taken
+        // down, or a panel can only stay silent about the one change the user can see.
+        using var other = new Scratch("sync-assets-b");
+
+        var mirror = CanvasDocument.Parse(CanvasStore.ReadAllText(scratch.BoardPath));
+        CanvasStore.Write(other.BoardPath, mirror.ToJson());
+
+        var secondLedger = new SyncLedger(Path.Combine(other.Folder, "ledger"));
+        var second = new SyncEngine(far, secondLedger, other.BoardPath);
+
+        await second.SynchronizeAsync();
+        far.PublishRaw("boards/assets/img_bbb.png", new byte[] { 7, 7, 7 });
+
+        var boardWithSecond = CanvasDocument.Parse(CanvasStore.ReadAllText(other.BoardPath));
+        boardWithSecond.Add(CanvasNodeKind.File, 300, 0, 200, 100, id: "ufile02").FilePath = "assets/img_bbb.png";
+        CanvasStore.Write(other.BoardPath, boardWithSecond.ToJson());
+
+        var pulled = await second.SynchronizeAsync();
+
+        Assert.NotNull(pulled.Assets);
+        Assert.Contains("assets/img_bbb.png", pulled.Assets!.Downloaded);
+        Assert.True(File.Exists(Path.Combine(other.Folder, "assets", "img_bbb.png")));
+    }
+
+    [Fact]
     public void The_ledger_entry_a_phone_reads_is_line_ending_free()
     {
         // This file is committed to the repository and read by both ends; the phone reads LF.
@@ -500,7 +547,13 @@ public class SyncEngineTests
         {
             config.Save(folder);
 
-            Assert.DoesNotContain((byte)13, File.ReadAllBytes(Path.Combine(folder, SyncConfig.FileName)));
+            var written = File.ReadAllBytes(Path.Combine(folder, SyncConfig.FileName));
+
+            Assert.DoesNotContain((byte)13, written);
+
+            // The phone ends these with one LF; a device-local file that differs only by a
+            // trailing byte is a difference nobody asked for.
+            Assert.Equal((byte)10, written[^1]);
         }
         finally
         {

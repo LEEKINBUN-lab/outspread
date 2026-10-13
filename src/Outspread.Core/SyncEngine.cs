@@ -304,7 +304,10 @@ public sealed class SyncEngine
             ? await PullOnlyAsync(state, localText, merged, manifest, verdicts, cancel)
             : await PushAsync(state, localDoc, localText, merged, manifest, verdicts, docToken, manifestToken, pending, delta.NodeCount, cancel);
 
-        return round;
+        // Reported at the one place every non-idle path leaves through, rather than inside the
+        // two branches: a round that carried pictures and then refused to publish the board
+        // still has to say which pictures it moved.
+        return assets.DidAnything ? round with { Assets = assets } : round;
     }
 
     private async Task<SyncReport> PushAsync(

@@ -161,7 +161,7 @@ public sealed class SyncConfig
 
         File.WriteAllBytes(
             Path.Combine(ledgerFolder, FileName),
-            Ledger.Encode(JsonSerializer.Serialize(this, Ledger.Options)));
+            Ledger.Encode(JsonSerializer.Serialize(this, Ledger.Options) + Environment.NewLine));
     }
 
     public string ShortName => $"{Owner}/{Repo}";
@@ -400,7 +400,11 @@ public sealed class SyncLedger
 
     public void Save(SyncState state)
     {
-        File.WriteAllBytes(StatePath, Ledger.Encode(JsonSerializer.Serialize(state, Ledger.Options)));
+        // Trailing newline, like the phone writes: these two are device-local, but an
+        // unnecessary byte difference between the two implementations is a bug waiting for
+        // the day one of them starts comparing them. Encode normalises, so the platform
+        // ending here still lands as LF in the file.
+        File.WriteAllBytes(StatePath, Ledger.Encode(JsonSerializer.Serialize(state, Ledger.Options) + Environment.NewLine));
     }
 
     /// <summary>

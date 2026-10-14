@@ -890,7 +890,13 @@ public class SyncEngineTests
 
         Assert.Equal(SyncOutcome.Pushed, refused.Outcome);
         Assert.Single(refused.Assets!.Held);
+
+        // retry ⊆ held, by construction — and the window's notice filter walks held and asks
+        // this one, so a retry nobody held would go unsaid.
+        Assert.Equal(refused.Assets.Held.Select(pair => pair.Path), refused.Assets.Retry);
         Assert.True(far.Files.ContainsKey("boards/assets/img_aaa.png"));
+
+        far.ResetCounters();
 
         // The board is perfectly still now, and so is the far side. A deletion this device
         // started is still its own unfinished business, which is why it waits in this device's
@@ -899,6 +905,11 @@ public class SyncEngineTests
 
         Assert.Equal(SyncOutcome.NothingToDo, idle.Outcome);
         Assert.Equal(new[] { "assets/img_aaa.png" }, idle.Assets!.Deleted);
+
+        // Two tree calls, not one: the round's own, and the one right before the deletion.
+        // That second request is the price of a residual, and only a residual pays it.
+        Assert.Equal(2, far.TreeCalls);
+
         Assert.False(far.Files.ContainsKey("boards/assets/img_aaa.png"));
         Assert.Null(AssetStore.ResolveExisting(scratch.BoardPath, "assets/img_aaa.png"));
         Assert.Empty(ledger.Load().PendingDeletions);

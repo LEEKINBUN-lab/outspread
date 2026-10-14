@@ -868,6 +868,32 @@ public class SyncEngineTests
     }
 
     [Fact]
+    public void The_tombstone_list_sits_last_in_the_ledger_entry()
+    {
+        var bytes = SyncManifest.ToBytes(new SyncManifest
+        {
+            Rev = 3,
+            ContentSha = "ab",
+            By = "pc",
+            Clock = 3,
+            At = "2026-10-14T00:00:00Z",
+            DroppedAssets = ["assets/img_aaa.png", "assets/img_bbb.png"],
+        });
+
+        var text = System.Text.Encoding.UTF8.GetString(bytes);
+
+        // The phone reads this file by shape as well as by name, and pinned three claims about
+        // it: `droppedAssets` after `at`, LF only, and no trailing newline. The byte lengths it
+        // measured (207 / 153) belong to its own fixture, so they are not repeated here — a
+        // number copied from a reading whose inputs you did not set is a claim, not a test.
+        Assert.DoesNotContain((byte)13, bytes);
+        Assert.Equal((byte)'}', bytes[^1]);
+        Assert.True(
+            text.IndexOf("\"droppedAssets\"", StringComparison.Ordinal) > text.IndexOf("\"at\"", StringComparison.Ordinal),
+            "droppedAssets must not move ahead of at: " + text);
+    }
+
+    [Fact]
     public async Task A_deletion_the_far_side_refused_is_asked_again_by_a_round_with_nothing_else_to_do()
     {
         using var scratch = new Scratch("sync-reap-retry");

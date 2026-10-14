@@ -138,7 +138,7 @@ JSON Canvas 1.0 规范里**没有任何版本、时间戳、revision 字段**（
 | 界面接线（`SyncHost.cs`） | **已做**：触发点＝存盘后、外来改动并入后、回前台、每 120 秒轮询；提示走现有的 `Say()`，**沿用他们那条判断——常态不是消息**，所以传成功时空转什么都不说，只有没传上去/挤不进/读不懂才浮一句 |
 | Gitee 备胎适配器 | **没做**。限额官方无数字、`sha` 过期的错误码官方没写 ⇒ 等 GitHub 被手机侧证伪再做 |
 | 手机蜂窝可达性 | 他说能连上 GitHub。**但没拿到是哪一条边**：`github.com` 与 `api.github.com` 是两条（本机桌面宽带实测就是 api 通、主站超时、raw 被重置），同步只用 api 域 ⇒ 判据应是手机上打开 `https://api.github.com/rate_limit` 出不出 JSON |
-| `assets/` 图片同步与删除墓碑 | **搬运与删除都已做**（删除走 `<名>.manifest.json` 的 `droppedAssets`，见「图片怎么跟着走」）。**只在夹具里证过**：`FakeRemote` 的令牌是真 sha 形状、CAS 逐字比对，但"真仓里删掉一张图"这一发还没在 GitHub 上打过 |
+| `assets/` 图片同步与删除墓碑 | **搬运与删除都已做，且真仓打过**（2026-10-14，见「真机读数」那张表：远端 404 ＋ 本地空 ＋ 清单里记着 `droppedAssets` ＋ 空转那发不多问）。**"另一台收到墓碑后清自己那份"仍只有夹具读数**——两块同名临时板会撞同一本账，真机上打不了 |
 | 私有 sidecar `*.canvas.view.json` | 已在 `.gitignore`，**永远不进同步** |
 | 令牌的存放 | **已接**：他本人的 fine-grained PAT 存在 Windows 凭据管理器 `outspread.sync.github`，读写删都在真仓验过。环境变量优先认 `OUTSPREAD_SYNC_TOKEN`，旧名 `TANKAN_SYNC_TOKEN` 仍作兜底 |
 | 改名留下的用户态 | **已迁移**：凭据 target（`tankan.sync.github` → 新名，**认过来但旧的没删**）与账本目录（`%LOCALAPPDATA%\TanKai\sync` → `Outspread\sync`，整目录搬走）都在 `status` / 日志里明说发生了什么；仓根说明文件也跟着改成 `outspread.sync.json`，`link` 会把远端旧名那份删掉 |
@@ -176,6 +176,19 @@ JSON Canvas 1.0 规范里**没有任何版本、时间戳、revision 字段**（
 
 他这把 fine-grained PAT 已真机验过读＋写＋删（`outspread sync once` 走的是凭据，不是环境变量）。
 
+**图片删除的真机那一发（2026-10-14 11:34–11:37，探针板在 `%TEMP%`，用户当场点头授权"**会在你仓里建两个文件再删掉**"）**：
+
+| 打了什么 | 平台上实际回什么 | 我这侧看到什么 |
+|---|---|---|
+| 一块带图卡的临时板 `sync once` | `已上传 r1 · 远端 3a8e12` | 报告一行 `图已上传 assets/img_reap_probe.png` |
+| `GET contents/boards/assets/img_reap_probe.png`（**独立见证，不走我方代码**） | `blob_sha=22a565bf6e0c… size=70` | 远端真有那张 |
+| 删掉图卡再 `sync once` | `已上传 r2 · 远端 b1f6a8 · 裁决=0` | `图已清掉 assets/img_reap_probe.png：板子不再引用它，仓里和本地那份都拿掉了`；本地 `assets/` 空 |
+| 再 `GET` 同一路径 | **HTTP 404** | 远端那份真没了（不是"我们以为没了"） |
+| `GET contents/boards/.sync/probe-reap.manifest.json` | `rev:2, clock:2, by:enmusubi-736350, droppedAssets:["assets/img_reap_probe.png"]` | 墓碑在**仓里**，字段序 `at` 之后，LF |
+| 一个字不改再 `sync once` | `NothingToDo · rounds=0`，**没提图** | 账本里那条墓碑还在，但没残留 ⇒ 不多问一发（夹具里 `TreeCalls == 1` 那条的同形） |
+
+探针收干净了：`boards/probe-reap.canvas` 与它的账本都 `DELETE`（commit `3155ee74` / `a2335df2`），事后 tree 里只剩 `boards/scratch.canvas`、`boards/assets/probe-chart.png` 与他自己的那块板，本地 `sync/` 下只剩 `remote.json` 与 `scratch/`。
+
 **临时目录护栏是唯一必经点**：`SyncHost` 的"这块板不-sync"判决必须放在 `RoundAsync()` 里，不能只放 `Start()` —— 一开始只挡了 `Start()`，一次门禁跑照样给 `%TEMP%` 那份自检副本铸了个 `deviceId`（存盘后的 `NotifyChanged()` 绕过它发起了网络轮）。修后复验：带真凭据跑 `check.cmd`，远端树逐字节不变、本地不再出现 `sync/selftest/` 账本。
 
 **门禁自身的缺陷已修**：`check.cmd` 里三行中文 `rem`（2026-10-11 18:53 那一版新增）—— 文件是 UTF-8 而 cmd 按 936 代码页解析批处理，多字节序列会吃掉行尾 CR 把下一行并进注释，被剩下那一半**当成命令执行**，于是"全过"里混着一行 `不是内部或外部命令`。今天被吃掉的是注释；换个字节对齐就可能吃掉第 49 行的自检本身而门禁照喊全过。已改成 ASCII 并留下"这几行不许写中文"的原因。
@@ -188,7 +201,8 @@ JSON Canvas 1.0 规范里**没有任何版本、时间戳、revision 字段**（
 - **临时目录护栏只证了"不写网络"**：护栏加在 `SyncHost.RoundAsync()` 这个唯一必经点上（一开始只挡在 `Start()`，被一次门禁跑打回原形——它照样给 `%TEMP%` 那份副本铸了个 `deviceId`）。修后复验：远端树逐字节不变、本地不再出现 `sync/selftest/` 账本。
 - **空仓（零提交）时 `git/trees` 到底回什么码**：没测到（排练时仓里已有 README 提交）。代码按"409 ⇒ 当作空远端、可以首次创建"处理，这一格没有实测支持。
 - Gitee 备胎适配器**一行没写**：它的 `sha` 是否等价 CAS 官方无文字，本机也没测；GitHub 已真机跑通，备胎要等主通道被手机侧证伪才值得做。
-- `assets/` **搬运与删除都已在夹具里证过**（两端真机验过的是搬运）。删除这一格**还没在真仓打过**：`FakeRemote.DeleteAsync` 按内容 sha 判 CAS，真主机是 blob sha 且不透明，引擎两边都不解析——但"真仓里删一张图、另一台把本地那份也清掉"这一发今天没有读数。**节点的跨端删除仍无墓碑**：`droppedAssets` 只管图片，首轮并集那格对便签仍然无解。
+- `assets/` **搬运与删除都已在真仓打过**（2026-10-14，一发一发数的，见「真机读数」最后那段：上传 → 独立见证远端有 → 删卡再同步 → 独立见证远端 404 ＋ 本地那份也没了 ＋ 清单里记着 `droppedAssets` → 再空转一发不多问）。**节点的跨端删除仍无墓碑**：`droppedAssets` 只管图片，首轮并集那格对便签仍然无解。
+- **第二台设备收到墓碑后清自己本地那份**：这一格**只有夹具读数**（`The_other_end_reads_the_tombstone_and_loses_its_copy_without_one_verdict`）。真仓那一发没法用两块临时板打——`SyncLayout.LedgerFolder` 按**板名**分文件夹，两块同名板会撞同一本账，所以"另一台"在真机上要么等手机端回来，要么得改板名（那就不再是同一块板）。
 - **一张图被两块板共用时删掉其中一块的引用**：`Held` 那一格（"另一块板还在引用它"）在真仓里长什么样、`AssetStore` 的孤儿报告会不会跟它打架，没测。
 
 ## 配对：谁告诉手机"同步给谁"

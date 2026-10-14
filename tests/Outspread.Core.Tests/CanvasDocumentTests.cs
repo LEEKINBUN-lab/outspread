@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -209,5 +210,104 @@ public class CanvasDocumentTests
         var node = document.Add(CanvasNodeKind.Text, 1, 2, 3, 4);
         Assert.StartsWith("u", node.Id, StringComparison.Ordinal);
         Assert.Equal(NodeIds.Length, node.Id.Length);
+    }
+
+    private static (int Length, string Sha, int CR) Emitted(CanvasDocument document)
+    {
+        var bytes = Encoding.UTF8.GetBytes(document.ToJson());
+
+        return (bytes.Length, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), bytes.Count(b => b == (byte)'\r'));
+    }
+
+    private static CanvasDocument Words()
+    {
+        var document = CanvasDocument.CreateNew();
+
+        document.Add(CanvasNodeKind.Text, 0, 0, 260, 90, color: "4", id: "uzhong1").Text =
+            "接口 <b> & '引号' \"双引号\" " + (char)0x2028 + " 斜杠\\ 尾部";
+
+        return document;
+    }
+
+    private static CanvasDocument Grouped()
+    {
+        var document = CanvasDocument.CreateNew();
+
+        document.Add(CanvasNodeKind.Group, 0, 0, 400, 300, id: "ugroup1").Text = "一季度";
+
+        var child = document.Add(CanvasNodeKind.Text, 20, 20, 200, 60, id: "ukid001");
+
+        child.Json["group"] = "ugroup1";
+        child.Text = "子里头那格";
+
+        return document;
+    }
+
+    private const string FractionJson = """
+        {"nodes":[{"id":"uone","type":"text","text":"x","x":0,"y":0,"width":260,"height":40.0}],"edges":[]}
+        """;
+
+    private static CanvasDocument Linked()
+    {
+        var document = CanvasDocument.CreateNew();
+
+        document.Add(CanvasNodeKind.Text, 0, 0, 200, 60, id: "uaaaa1").Text = "上";
+        document.Add(CanvasNodeKind.Text, 0, 200, 200, 60, id: "ubbbb1").Text = "下";
+
+        // An explicit edge id: AddEdge mints a random one, and a random id in a frozen-byte
+        // test is a test that fails on the second run for the wrong reason.
+        document.AppendEdge(new JsonObject
+        {
+            ["id"] = "uedge001",
+            ["fromNode"] = "uaaaa1",
+            ["toNode"] = "ubbbb1",
+            ["fromSide"] = "bottom",
+            ["toSide"] = "top",
+        });
+
+        return document;
+    }
+
+    /// <summary>
+    /// The other end reproduces this emitter byte for byte in its own CI. Nothing else on this
+    /// side guards it: change the indent, the encoder, the trailing newline, or how a number is
+    /// written, and no test here would have gone red — it would have surfaced over there as
+    /// "the phone can't keep up", and the attribution would have landed on them.
+    /// </summary>
+    /// <remarks>
+    /// This is a single-end regression pin, not the cross-end referee: the phone's own corpus
+    /// stays the judge of agreement between the two. The two must not be confused for each other.
+    /// </remarks>
+    [Fact]
+    public void The_bytes_this_emitter_writes_are_frozen()
+    {
+        Assert.Equal((256, "6b4af732068d957a8abb5a99e01a9bcef32c83af99151a332c7bb99ae88fa6b3", 0), Emitted(Words()));
+        Assert.Equal((375, "10f83fc6d53748dcc0ec1f6816630f3aa8a9962e2e726b676943e47b59fe5207", 0), Emitted(Grouped()));
+        Assert.Equal((470, "d01ff16290827e9bbff7657d0f4c7a1ef97aa78f5ff645c9d3138d84dee59e33", 0), Emitted(Linked()));
+        Assert.Equal((178, "0767894b4e4704f9ef27fa3e1d67dbe05ac29a09f4fb8f2d1610d9176dbc0371", 0), Emitted(CanvasDocument.Parse(FractionJson)));
+    }
+
+    [Fact]
+    public void The_emitter_writes_lf_and_ends_with_a_newline()
+    {
+        var text = Words().ToJson();
+
+        // CR would make one document answer as two digests depending on the machine that wrote
+        // it, which is the same trap the sync JSONs normalise away. And a board without its
+        // trailing newline differs from the one on disk by a byte nobody chose.
+        Assert.DoesNotContain('\r', text);
+        Assert.EndsWith("}\n", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_number_that_arrived_with_a_fraction_comes_back_the_same_way_twice()
+    {
+        var once = CanvasDocument.Parse(FractionJson).ToJson();
+
+        // `40.0` is kept as written rather than re-minted as `40`. An end that normalises it
+        // would never converge with one that does not, and the board would look dirty after
+        // every round trip even though nothing was edited.
+        Assert.Contains("40.0", once, StringComparison.Ordinal);
+        Assert.Equal(once, CanvasDocument.Parse(once).ToJson());
     }
 }

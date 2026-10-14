@@ -891,6 +891,40 @@ public class SyncEngineTests
         Assert.True(
             text.IndexOf("\"droppedAssets\"", StringComparison.Ordinal) > text.IndexOf("\"at\"", StringComparison.Ordinal),
             "droppedAssets must not move ahead of at: " + text);
+
+        // The phone pins these same six inputs in its own test and reads 207 / 153 bytes back.
+        // The numbers here are not copied from it: they were recomputed from this emitter with
+        // its fixture, and came out byte-for-byte equal. That makes the pair a cross-end anchor
+        // rather than one side's claim — and it is why changing the indent, the property order
+        // or the encoder has to break this test, because it breaks the other end too.
+        var two = SyncManifest.ToBytes(new SyncManifest
+        {
+            Rev = 3,
+            ContentSha = "deadbeef",
+            By = "enmusubi-3acd0c",
+            Clock = 2,
+            At = "2026-10-12T00:00:00Z",
+            DroppedAssets = ["assets/img_aaa.png", "assets/img_bbb.png"],
+        });
+
+        Assert.Equal(207, two.Length);
+        Assert.Equal(
+            "28f341842a515bc19e31449cba66f05947137acaaf107fba89c6e3e7b6c2cb2e",
+            Ledger.Digest(two));
+
+        var without = SyncManifest.ToBytes(new SyncManifest
+        {
+            Rev = 3,
+            ContentSha = "deadbeef",
+            By = "enmusubi-3acd0c",
+            Clock = 2,
+            At = "2026-10-12T00:00:00Z",
+        });
+
+        Assert.Equal(153, without.Length);
+        Assert.Equal(
+            "f1e2fe5cee6d370cf594cee06f0f1c78f8469928229ecb09f3374c51baa981ec",
+            Ledger.Digest(without));
     }
 
     [Fact]

@@ -36,6 +36,9 @@ public sealed class FakeRemote : IRemoteFiles
     private WriteOutcome _refuseOutcome;
     private bool _refuseArmed;
 
+    private WriteOutcome _refuseDeleteOutcome;
+    private bool _refuseDeleteArmed;
+
     private bool _offline;
 
     public int TreeCalls { get; private set; }
@@ -43,6 +46,9 @@ public sealed class FakeRemote : IRemoteFiles
     public int ReadCalls { get; private set; }
 
     public int WriteCalls { get; private set; }
+
+    /// <summary>Deletions asked for, whatever the answer was. A reap that should not happen shows up here.</summary>
+    public int DeleteCalls { get; private set; }
 
     /// <summary>What the far folder holds right now.</summary>
     public IReadOnlyDictionary<string, byte[]> Files => _files;
@@ -95,6 +101,17 @@ public sealed class FakeRemote : IRemoteFiles
     public void Corrupt(string path, string text = "not a canvas at all, and not JSON")
         => Publish(path, text);
 
+    /// <summary>
+    /// Refuse the next delete, whatever the token says. A platform that answers no to a
+    /// removal is a different failure from one that never saw the file, and the two have to be
+    /// distinguishable from here — one is worth asking again.
+    /// </summary>
+    public void FailNextDelete(WriteOutcome outcome = WriteOutcome.Conflict)
+    {
+        _refuseDeleteOutcome = outcome;
+        _refuseDeleteArmed = true;
+    }
+
     /// <summary>Takes the far side away, the way this laptop losing WiFi does.</summary>
     public void DropConnection() => _offline = true;
 
@@ -105,6 +122,7 @@ public sealed class FakeRemote : IRemoteFiles
         TreeCalls = 0;
         ReadCalls = 0;
         WriteCalls = 0;
+        DeleteCalls = 0;
     }
 
     public Task<RemoteTree?> ReadTreeAsync(CancellationToken cancel)
@@ -199,6 +217,17 @@ public sealed class FakeRemote : IRemoteFiles
 
     public Task<WriteOutcome> DeleteAsync(string path, string expectToken, CancellationToken cancel)
     {
+        DeleteCalls++;
+
+        Refuse();
+
+        if (_refuseDeleteArmed)
+        {
+            _refuseDeleteArmed = false;
+
+            return Task.FromResult(_refuseDeleteOutcome);
+        }
+
         var current = Token(path);
 
         if (current is null)

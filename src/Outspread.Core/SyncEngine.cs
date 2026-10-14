@@ -239,6 +239,11 @@ public sealed class SyncEngine
             // cost of asking is zero — a path already in the tree is never read or written.
             var idleAssets = await CarryAssetsAsync(localDoc, tree, cancel);
 
+            // A deletion this device started and could not finish is still work, so an
+            // otherwise idle round goes back for it. With nothing pending this costs no
+            // request: the candidates are checked against the tree already in hand.
+            await ReapAsync(localDoc, state.PendingDeletions, tree, idleAssets, state, cancel);
+
             return new SyncReport(SyncOutcome.NothingToDo, "neither side moved", state.Rev, 0, 0, [], null, idleAssets);
         }
 
@@ -298,11 +303,37 @@ public sealed class SyncEngine
 
         var delta = DocDiff.Between(far, merged);
 
+        // What this board stopped pointing at since its own ancestor, plus what the far
+        // ledger already remembers. Only this device can notice its own deletion, and only
+        // the ledger can tell the other ends afterwards — except for a deletion this device
+        // started and could not finish, which waits in its own account, because a round that
+        // finds the far side exactly where it left it never reads that ledger.
+        var dropped = AssetSync.Tombstones(
+            ancestor, merged, manifest?.DroppedAssets ?? state.PendingDeletions);
+
         var assets = await CarryAssetsAsync(merged, tree, cancel);
 
-        var round = delta.IsEmpty
-            ? await PullOnlyAsync(state, localText, merged, manifest, verdicts, cancel)
-            : await PushAsync(state, localDoc, localText, merged, manifest, verdicts, docToken, manifestToken, pending, delta.NodeCount, cancel);
+        var (round, published, toReap) = delta.IsEmpty
+            ? (await PullOnlyAsync(state, localText, merged, manifest, verdicts, cancel), merged, dropped)
+            : await PushAsync(
+                state, localDoc, localText, merged, manifest, verdicts,
+                docToken, manifestToken, pending, delta.NodeCount, dropped, cancel);
+
+        // Reaping waits for the board to be accepted, and works from what that accepted round
+        // finally merged: a retry inside the publish can revive a note along with its picture,
+        // and a tombstone must not fire against the board that is now up there.
+        //
+        // The ledger remembers a deletion until newer ones push it out, so the list stays
+        // non-empty long after the file is gone. Only paths that are actually still somewhere
+        // reach the far side: an idle round must not spend a second request because a round
+        // from last week deleted a picture.
+        // Reaping waits for the board to be accepted, and works from what that accepted round
+        // finally merged: a retry inside the publish can revive a note along with its picture,
+        // and a tombstone must not fire against the board that is now up there.
+        if (round.Outcome is SyncOutcome.Pushed or SyncOutcome.Pulled)
+        {
+            await ReapAsync(published, toReap, tree, assets, state, cancel);
+        }
 
         // Reported at the one place every non-idle path leaves through, rather than inside the
         // two branches: a round that carried pictures and then refused to publish the board
@@ -310,7 +341,12 @@ public sealed class SyncEngine
         return assets.DidAnything ? round with { Assets = assets } : round;
     }
 
-    private async Task<SyncReport> PushAsync(
+    /// <summary>
+    /// Publishes the merged board. Comes back with what it finally put up there, because a
+    /// refused attempt re-merges, and whoever reaps pictures afterwards has to work from the
+    /// board that was accepted rather than the one first proposed.
+    /// </summary>
+    private async Task<(SyncReport Report, CanvasDocument Merged, IReadOnlyList<string> Dropped)> PushAsync(
         SyncState state,
         CanvasDocument localDoc,
         string localText,
@@ -321,6 +357,7 @@ public sealed class SyncEngine
         string? manifestToken,
         int pending,
         int pushed,
+        IReadOnlyList<string> dropped,
         CancellationToken cancel)
     {
         var text = merged.ToJson();
@@ -350,7 +387,10 @@ public sealed class SyncEngine
             {
                 var (outcome, detail) = Describe(written.Outcome, written.Detail);
 
-                return Finish(state, new SyncReport(outcome, detail, state.Rev, pending, rounds, verdicts));
+                return (
+                    Finish(state, new SyncReport(outcome, detail, state.Rev, pending, rounds, verdicts)),
+                    merged,
+                    dropped);
             }
 
             // The far side is not what we merged against. Take its version of the truth and
@@ -364,13 +404,16 @@ public sealed class SyncEngine
 
             if (read.Unreadable)
             {
-                return Finish(state, new SyncReport(
-                    SyncOutcome.RemoteUnreadable,
-                    read.Detail ?? "the far document is not readable as a board",
-                    state.Rev,
-                    pending,
-                    rounds,
-                    verdicts));
+                return (
+                    Finish(state, new SyncReport(
+                        SyncOutcome.RemoteUnreadable,
+                        read.Detail ?? "the far document is not readable as a board",
+                        state.Rev,
+                        pending,
+                        rounds,
+                        verdicts)),
+                    merged,
+                    dropped);
             }
 
             var ancestor = _ledger.ReadBase(state) ?? CanvasDocument.CreateNew();
@@ -390,11 +433,15 @@ public sealed class SyncEngine
             text = merged.ToJson();
             bytes = Ledger.Encode(text);
 
+            // Re-derived against what this retry actually merged, not what the first attempt
+            // proposed: the far side may have brought a note back, and with it its picture.
+            dropped = AssetSync.Tombstones(ancestor, merged, read.Manifest?.DroppedAssets);
+
             if (DocDiff.Between(read.Doc, merged).IsEmpty)
             {
                 // What this end wanted to say is already on the far side. Nothing to push;
                 // the ancestor and the local file still have to be brought in line.
-                return await PullOnlyAsync(state, localText, merged, manifest, verdicts, cancel);
+                return (await PullOnlyAsync(state, localText, merged, manifest, verdicts, cancel), merged, dropped);
             }
         }
 
@@ -411,14 +458,17 @@ public sealed class SyncEngine
 
             Note($"挤了 {rounds} 轮都没进去，本地未动；要上传的那份整份留在 {Path.GetFileName(copy)}");
 
-            return new SyncReport(
-                SyncOutcome.GaveUpConflict,
-                "the far side kept changing under us; this file was not modified and the intended state was written out beside it",
-                state.Rev,
-                pending,
-                rounds,
-                verdicts,
-                copy);
+            return (
+                new SyncReport(
+                    SyncOutcome.GaveUpConflict,
+                    "the far side kept changing under us; this file was not modified and the intended state was written out beside it",
+                    state.Rev,
+                    pending,
+                    rounds,
+                    verdicts,
+                    copy),
+                merged,
+                []);
         }
 
         var clock = Math.Max(state.Clock, manifest?.Clock ?? 0) + 1;
@@ -432,6 +482,7 @@ public sealed class SyncEngine
             By = state.DeviceId,
             Clock = clock,
             At = DateTimeOffset.UtcNow.ToString("O"),
+            DroppedAssets = [.. dropped],
         };
 
         var ledgerWritten = await WriteLedgerEntryAsync(next, manifestToken, cancel);
@@ -470,22 +521,28 @@ public sealed class SyncEngine
         {
             Note("板子上去了，本地在这期间又被改了，所以没有覆盖它；下一轮并回来");
 
-            return Finish(state, new SyncReport(
-                SyncOutcome.DiskMovedUnderneath,
-                "this file changed while the round was in flight; it was not overwritten and will be merged next round",
-                state.Rev,
-                pending,
-                rounds,
-                verdicts));
+            return (
+                Finish(state, new SyncReport(
+                    SyncOutcome.DiskMovedUnderneath,
+                    "this file changed while the round was in flight; it was not overwritten and will be merged next round",
+                    state.Rev,
+                    pending,
+                    rounds,
+                    verdicts)),
+                merged,
+                dropped);
         }
 
-        return new SyncReport(
-            SyncOutcome.Pushed,
-            $"{pushed} 处改动上去了",
-            state.Rev,
-            0,
-            rounds,
-            verdicts);
+        return (
+            new SyncReport(
+                SyncOutcome.Pushed,
+                $"{pushed} 处改动上去了",
+                state.Rev,
+                0,
+                rounds,
+                verdicts),
+            merged,
+            dropped);
     }
 
     /// <summary>
@@ -495,27 +552,61 @@ public sealed class SyncEngine
     private async Task<AssetReport> CarryAssetsAsync(CanvasDocument document, RemoteTree tree, CancellationToken cancel)
     {
         var pulled = await AssetSync.PullAsync(_remote, _boardPath, document, tree, _paths, cancel);
-        var pushed = await AssetSync.PushAsync(_remote, _boardPath, document, tree, _paths, cancel);
 
-        foreach (var name in pushed.Uploaded)
-        {
-            pulled.Uploaded.Add(name);
-        }
+        pulled.Absorb(await AssetSync.PushAsync(_remote, _boardPath, document, tree, _paths, cancel));
 
-        foreach (var pair in pushed.Refused)
-        {
-            pulled.Refused.Add(pair);
-        }
+        return pulled;
+    }
 
-        foreach (var name in pushed.Absent)
+    /// <summary>
+    /// Takes away the pictures the board no longer names, and remembers the ones this round
+    /// could not finish so a later round tries them.
+    /// </summary>
+    /// <remarks>
+    /// The ledger keeps a deletion until newer ones push it out, so a candidate list is rarely
+    /// empty even long after the file is gone. Only paths that still exist somewhere reach the
+    /// far side: the tree already in hand answers that for free, which is what keeps a steady
+    /// round at one request.
+    /// </remarks>
+    private async Task ReapAsync(
+        CanvasDocument published,
+        IReadOnlyList<string> candidates,
+        RemoteTree tree,
+        AssetReport assets,
+        SyncState state,
+        CancellationToken cancel)
+    {
+        var prefix = AssetSync.RepoPrefix(_paths);
+
+        var live = candidates
+            .Where(relative => tree.TokenFor(prefix + relative) is not null
+                || AssetStore.ResolveExisting(_boardPath, relative) is not null)
+            .ToList();
+
+        var retry = live;
+
+        if (live.Count > 0)
         {
-            if (!pulled.Absent.Contains(name))
+            // Read fresh before deleting: a board another device published while this round
+            // ran may be the one still pointing at the picture, and a deletion is the one
+            // thing here the next round cannot undo.
+            var now = await _remote.ReadTreeAsync(cancel);
+
+            if (now is not null)
             {
-                pulled.Absent.Add(name);
+                var reaped = await AssetSync.ReapAsync(
+                    _remote, _boardPath, published, now, _paths, live, cancel);
+
+                assets.Absorb(reaped);
+                retry = reaped.Retry;
             }
         }
 
-        return pulled;
+        if (!retry.SequenceEqual(state.PendingDeletions))
+        {
+            state.PendingDeletions = [.. retry];
+            _ledger.Save(state);
+        }
     }
 
     private async Task<SyncReport> PullOnlyAsync(

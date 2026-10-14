@@ -232,6 +232,7 @@ internal static class SyncCommand
                 ["baseFile"] = state.BaseFile,
                 ["lastErrorKind"] = state.LastErrorKind,
                 ["lastError"] = state.LastError,
+                ["pendingDeletions"] = state.PendingDeletions,
                 ["conflictCopies"] = conflicts,
                 ["ledgerFolder"] = ledger.Folder,
                 ["hasToken"] = SyncCredentials.Read() is not null,
@@ -309,6 +310,16 @@ internal static class SyncCommand
             foreach (var name in assets.Absent)
             {
                 Console.WriteLine($"    图两头都没有 {name}：板子上那一格会空着");
+            }
+
+            foreach (var name in assets.Deleted)
+            {
+                Console.WriteLine($"    图已清掉 {name}：板子不再引用它，仓里和本地那份都拿掉了");
+            }
+
+            foreach (var pair in assets.Held)
+            {
+                Console.WriteLine($"    图没清 {pair.Path}：{pair.Reason}");
             }
         }
 

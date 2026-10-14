@@ -44,6 +44,14 @@ public sealed class SyncState
     public string? LastError { get; set; }
 
     public string? LastErrorKind { get; set; }
+
+    /// <summary>
+    /// Pictures this device tried to take away and could not finish — the far side refused, the
+    /// local file was locked, a board beside it was mid-write. The far ledger keeps the
+    /// deletion for everyone else, but a round that finds the far side unmoved never reads it,
+    /// so this is where this device's own unfinished business waits.
+    /// </summary>
+    public List<string> PendingDeletions { get; set; } = [];
 }
 
 /// <summary>
@@ -285,6 +293,14 @@ public sealed class SyncManifest
     public int Clock { get; set; }
 
     public string? At { get; set; }
+
+    /// <summary>
+    /// Pictures this board stopped pointing at, oldest first. A board file can only say what
+    /// it uses, never what it removed, so a deletion has to be written down somewhere the
+    /// other ends will read: this is that somewhere. An entry fires only while nothing
+    /// references the path — a picture that comes back into use moots its own tombstone.
+    /// </summary>
+    public List<string> DroppedAssets { get; set; } = [];
 
     public static byte[] ToBytes(SyncManifest manifest)
         => Ledger.Encode(JsonSerializer.SerializeToNode(manifest, Ledger.Options)!.ToJsonString(Ledger.Options));

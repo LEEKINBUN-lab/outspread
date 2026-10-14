@@ -637,4 +637,270 @@ public class SyncEngineTests
         Assert.StartsWith("未同步：离线", offline.StatusLine());
         Assert.Contains("待发 1", offline.StatusLine());
     }
+
+    private static void PutImage(Scratch scratch, string name, byte[] bytes)
+    {
+        var path = Path.Combine(AssetStore.AssetsDirectory(scratch.BoardPath), name);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, bytes);
+    }
+
+    private static CanvasDocument BoardWithImage(string relative)
+    {
+        var document = CanvasDocument.CreateNew();
+
+        document.Add(CanvasNodeKind.Text, 0, 0, 200, 60, id: "unote1").Text = "字";
+        document.Add(CanvasNodeKind.File, 0, 100, 200, 100, id: "ufile01").FilePath = relative;
+
+        return document;
+    }
+
+    private static SyncManifest? FarManifest(FakeRemote far, SyncPaths paths)
+    {
+        var text = far.Text(paths.ManifestPath);
+
+        return text is null ? null : SyncManifest.Parse(text);
+    }
+
+    [Fact]
+    public async Task Deleting_a_picture_card_takes_the_file_off_the_far_side_and_writes_it_into_the_ledger()
+    {
+        using var scratch = new Scratch("sync-reap");
+
+        var withImage = BoardWithImage("assets/img_aaa.png");
+        WriteBoard(scratch, withImage);
+        PutImage(scratch, "img_aaa.png", new byte[] { 1, 2, 3, 4 });
+
+        var far = new FakeRemote();
+        var (engine, _, _) = Build(scratch, far);
+        var paths = SyncPaths.ForBoard(scratch.BoardPath);
+
+        await engine.SynchronizeAsync();
+
+        Assert.True(far.Files.ContainsKey("boards/assets/img_aaa.png"));
+
+        var without = CanvasDocument.Parse(BoardText(scratch));
+        without.Remove("ufile01");
+        WriteBoard(scratch, without);
+
+        var report = await engine.SynchronizeAsync();
+
+        Assert.Equal(SyncOutcome.Pushed, report.Outcome);
+        Assert.NotNull(report.Assets);
+        Assert.Equal(new[] { "assets/img_aaa.png" }, report.Assets!.Deleted);
+        Assert.Empty(report.Assets.Held);
+
+        // Gone from the repository, off this machine, and written down where the other end
+        // will read it: the board file itself cannot say a picture was removed.
+        Assert.False(far.Files.ContainsKey("boards/assets/img_aaa.png"));
+        Assert.Null(AssetStore.ResolveExisting(scratch.BoardPath, "assets/img_aaa.png"));
+        Assert.Equal(new[] { "assets/img_aaa.png" }, FarManifest(far, paths)!.DroppedAssets);
+    }
+
+    [Fact]
+    public async Task The_other_end_reads_the_tombstone_and_loses_its_copy_without_one_verdict()
+    {
+        using var first = new Scratch("sync-reap-a");
+        using var second = new Scratch("sync-reap-b");
+
+        WriteBoard(first, BoardWithImage("assets/img_aaa.png"));
+        PutImage(first, "img_aaa.png", new byte[] { 1, 2, 3, 4 });
+
+        var far = new FakeRemote();
+        var paths = SyncPaths.ForBoard(first.BoardPath);
+
+        var (firstEngine, _, _) = Build(first, far);
+        await firstEngine.SynchronizeAsync();
+
+        // The second device has the same board and the same picture, and no idea yet that
+        // anything happened.
+        CanvasStore.Write(second.BoardPath, CanvasStore.ReadAllText(first.BoardPath));
+        PutImage(second, "img_aaa.png", new byte[] { 1, 2, 3, 4 });
+
+        var secondLedger = new SyncLedger(Path.Combine(second.Folder, "ledger"));
+        var secondEngine = new SyncEngine(far, secondLedger, second.BoardPath);
+
+        await secondEngine.SynchronizeAsync();
+
+        var without = CanvasDocument.Parse(CanvasStore.ReadAllText(first.BoardPath));
+        without.Remove("ufile01");
+        WriteBoard(first, without);
+
+        await firstEngine.SynchronizeAsync();
+
+        var applied = await secondEngine.SynchronizeAsync();
+
+        Assert.Equal(SyncOutcome.Pulled, applied.Outcome);
+        Assert.Empty(applied.Verdicts);
+        Assert.Equal(new[] { "assets/img_aaa.png" }, applied.Assets!.Deleted);
+        Assert.Null(AssetStore.ResolveExisting(second.BoardPath, "assets/img_aaa.png"));
+    }
+
+    [Fact]
+    public async Task A_picture_brought_back_by_a_racing_edit_is_not_eaten_by_its_own_tombstone()
+    {
+        using var first = new Scratch("sync-reap-race-a");
+        using var second = new Scratch("sync-reap-race-b");
+
+        WriteBoard(first, BoardWithImage("assets/img_aaa.png"));
+        PutImage(first, "img_aaa.png", new byte[] { 1, 2, 3, 4 });
+
+        var far = new FakeRemote();
+        var paths = SyncPaths.ForBoard(first.BoardPath);
+
+        var (firstEngine, _, _) = Build(first, far);
+        await firstEngine.SynchronizeAsync();
+
+        CanvasStore.Write(second.BoardPath, CanvasStore.ReadAllText(first.BoardPath));
+        PutImage(second, "img_aaa.png", new byte[] { 1, 2, 3, 4 });
+
+        var secondLedger = new SyncLedger(Path.Combine(second.Folder, "ledger"));
+        var secondEngine = new SyncEngine(far, secondLedger, second.BoardPath);
+
+        await secondEngine.SynchronizeAsync();
+
+        // One end deletes the card; the other end is still typing into it.
+        var without = CanvasDocument.Parse(CanvasStore.ReadAllText(first.BoardPath));
+        without.Remove("ufile01");
+        WriteBoard(first, without);
+
+        await firstEngine.SynchronizeAsync();
+
+        Assert.False(far.Files.ContainsKey("boards/assets/img_aaa.png"));
+
+        var edited = CanvasDocument.Parse(CanvasStore.ReadAllText(second.BoardPath));
+        edited.Find("ufile01")!.Text = "还在写";
+        WriteBoard(second, edited);
+
+        var revived = await secondEngine.SynchronizeAsync();
+
+        Assert.Contains(revived.Verdicts, verdict => verdict.Rule == MergeRule.Revived);
+
+        // The picture is on the board again, so the ledger's word that it was gone has to
+        // stop: an entry that outlives the reference it was about is a deletion waiting to
+        // break a card nobody deleted.
+        Assert.Equal(new byte[] { 1, 2, 3, 4 }, far.Files["boards/assets/img_aaa.png"]);
+        Assert.Empty(FarManifest(far, paths)!.DroppedAssets);
+        Assert.NotNull(AssetStore.ResolveExisting(second.BoardPath, "assets/img_aaa.png"));
+    }
+
+    [Fact]
+    public async Task A_round_that_could_not_publish_takes_no_picture_away()
+    {
+        using var scratch = new Scratch("sync-reap-refused");
+
+        WriteBoard(scratch, BoardWithImage("assets/img_aaa.png"));
+        PutImage(scratch, "img_aaa.png", new byte[] { 1, 2, 3, 4 });
+
+        var far = new FakeRemote();
+        var (engine, _, _) = Build(scratch, far);
+        var paths = SyncPaths.ForBoard(scratch.BoardPath);
+
+        await engine.SynchronizeAsync();
+
+        var without = CanvasDocument.Parse(BoardText(scratch));
+        without.Remove("ufile01");
+        WriteBoard(scratch, without);
+
+        far.FailNextWrite(paths.DocPath, WriteOutcome.Unauthorized);
+
+        var refused = await engine.SynchronizeAsync();
+
+        Assert.NotEqual(SyncOutcome.Pushed, refused.Outcome);
+        Assert.Equal(0, far.DeleteCalls);
+        Assert.True(far.Files.ContainsKey("boards/assets/img_aaa.png"));
+        Assert.NotNull(AssetStore.ResolveExisting(scratch.BoardPath, "assets/img_aaa.png"));
+    }
+
+    [Fact]
+    public async Task A_tombstone_with_nothing_left_to_delete_costs_no_extra_request()
+    {
+        using var first = new Scratch("sync-reap-cost-a");
+        using var second = new Scratch("sync-reap-cost-b");
+
+        WriteBoard(first, BoardWithImage("assets/img_aaa.png"));
+        PutImage(first, "img_aaa.png", new byte[] { 1, 2, 3, 4 });
+
+        var far = new FakeRemote();
+        var (firstEngine, _, _) = Build(first, far);
+        var paths = SyncPaths.ForBoard(first.BoardPath);
+
+        await firstEngine.SynchronizeAsync();
+
+        CanvasStore.Write(second.BoardPath, CanvasStore.ReadAllText(first.BoardPath));
+        PutImage(second, "img_aaa.png", new byte[] { 1, 2, 3, 4 });
+
+        var secondLedger = new SyncLedger(Path.Combine(second.Folder, "ledger"));
+        var secondEngine = new SyncEngine(far, secondLedger, second.BoardPath);
+
+        await secondEngine.SynchronizeAsync();
+
+        var without = CanvasDocument.Parse(CanvasStore.ReadAllText(first.BoardPath));
+        without.Remove("ufile01");
+        WriteBoard(first, without);
+
+        await firstEngine.SynchronizeAsync();
+
+        // The other end takes its own copy away and publishes. Its ledger keeps naming the
+        // picture — that is how a third device would learn — long after nothing has it.
+        var edited = CanvasDocument.Parse(CanvasStore.ReadAllText(second.BoardPath));
+        edited.Add(CanvasNodeKind.Text, 400, 0, 200, 60, id: "unote9").Text = "另一台写的";
+        WriteBoard(second, edited);
+
+        await secondEngine.SynchronizeAsync();
+
+        Assert.Equal(new[] { "assets/img_aaa.png" }, FarManifest(far, paths)!.DroppedAssets);
+
+        // So a round that reads a ledger naming a picture nobody has left must be able to tell
+        // that without asking the far side a second time.
+        var again = CanvasDocument.Parse(CanvasStore.ReadAllText(first.BoardPath));
+        again.Add(CanvasNodeKind.Text, 700, 0, 200, 60, id: "unote8").Text = "又一笔";
+        WriteBoard(first, again);
+
+        far.ResetCounters();
+
+        var later = await firstEngine.SynchronizeAsync();
+
+        Assert.Equal(SyncOutcome.Pushed, later.Outcome);
+        Assert.Equal(0, far.DeleteCalls);
+        Assert.Equal(1, far.TreeCalls);
+    }
+
+    [Fact]
+    public async Task A_deletion_the_far_side_refused_is_asked_again_by_a_round_with_nothing_else_to_do()
+    {
+        using var scratch = new Scratch("sync-reap-retry");
+
+        WriteBoard(scratch, BoardWithImage("assets/img_aaa.png"));
+        PutImage(scratch, "img_aaa.png", new byte[] { 1, 2, 3, 4 });
+
+        var far = new FakeRemote();
+        var (engine, ledger, _) = Build(scratch, far);
+
+        await engine.SynchronizeAsync();
+
+        var without = CanvasDocument.Parse(BoardText(scratch));
+        without.Remove("ufile01");
+        WriteBoard(scratch, without);
+
+        far.FailNextDelete();
+
+        var refused = await engine.SynchronizeAsync();
+
+        Assert.Equal(SyncOutcome.Pushed, refused.Outcome);
+        Assert.Single(refused.Assets!.Held);
+        Assert.True(far.Files.ContainsKey("boards/assets/img_aaa.png"));
+
+        // The board is perfectly still now, and so is the far side. A deletion this device
+        // started is still its own unfinished business, which is why it waits in this device's
+        // account rather than only in a ledger nobody reads twice.
+        var idle = await engine.SynchronizeAsync();
+
+        Assert.Equal(SyncOutcome.NothingToDo, idle.Outcome);
+        Assert.Equal(new[] { "assets/img_aaa.png" }, idle.Assets!.Deleted);
+        Assert.False(far.Files.ContainsKey("boards/assets/img_aaa.png"));
+        Assert.Null(AssetStore.ResolveExisting(scratch.BoardPath, "assets/img_aaa.png"));
+        Assert.Empty(ledger.Load().PendingDeletions);
+    }
 }

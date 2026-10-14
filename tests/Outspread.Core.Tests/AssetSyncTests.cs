@@ -192,4 +192,161 @@ public class AssetSyncTests
         Assert.Equal("boards/", AssetSync.RepoPrefix(paths));
         Assert.Equal("boards/scratch.canvas", paths.DocPath);
     }
+
+    [Fact]
+    public void A_tombstone_names_what_the_board_stopped_pointing_at_since_its_own_ancestor()
+    {
+        var ancestor = CanvasDocument.CreateNew();
+        ancestor.Add(CanvasNodeKind.File, 0, 0, 200, 100, id: "ufile01").FilePath = "assets/img_aaa.png";
+        ancestor.Add(CanvasNodeKind.File, 300, 0, 200, 100, id: "ufile02").FilePath = "assets/img_bbb.png";
+
+        var merged = WithImage("ufile02", "assets/img_bbb.png");
+
+        Assert.Equal(new[] { "assets/img_aaa.png" }, AssetSync.Tombstones(ancestor, merged, null));
+    }
+
+    [Fact]
+    public void A_picture_that_came_back_into_use_moots_its_own_tombstone()
+    {
+        // The name is a digest of the content, so re-adding the same picture lands on the very
+        // path the ledger says is gone. Without this rule the tombstone would eat the picture
+        // the board is currently showing.
+        var merged = WithImage("ufile01", "assets/img_aaa.png");
+
+        Assert.Empty(AssetSync.Tombstones(null, merged, new[] { "assets/img_aaa.png" }));
+    }
+
+    [Fact]
+    public void The_ledger_keeps_the_newest_deletions_and_lets_the_oldest_fall_off()
+    {
+        var far = Enumerable.Range(0, AssetSync.MaxTombstones)
+            .Select(index => $"assets/old{index:00}.png")
+            .ToList();
+
+        var ancestor = CanvasDocument.CreateNew();
+        ancestor.Add(CanvasNodeKind.File, 0, 0, 200, 100, id: "ufile09").FilePath = "assets/fresh.png";
+
+        var kept = AssetSync.Tombstones(ancestor, CanvasDocument.CreateNew(), far);
+
+        Assert.Equal(AssetSync.MaxTombstones, kept.Count);
+        Assert.DoesNotContain("assets/old00.png", kept);
+        Assert.Equal("assets/fresh.png", kept[^1]);
+    }
+
+    [Fact]
+    public async Task Reaping_takes_the_picture_off_the_far_side_and_off_this_machine()
+    {
+        using var scratch = new Scratch("asset-reap");
+
+        PutLocalImage(scratch, "img_aaa.png", new byte[] { 1, 2, 3 });
+
+        var document = CanvasDocument.CreateNew();
+        CanvasStore.Write(scratch.BoardPath, document.ToJson());
+
+        var far = new FakeRemote();
+        var paths = SyncPaths.ForBoard(scratch.BoardPath);
+
+        far.Publish(paths.DocPath, document.ToJson());
+        far.PublishRaw("boards/assets/img_aaa.png", new byte[] { 1, 2, 3 });
+
+        var report = await AssetSync.ReapAsync(
+            far, scratch.BoardPath, document, Tree(far), paths, new[] { "assets/img_aaa.png" }, default);
+
+        Assert.Equal(new[] { "assets/img_aaa.png" }, report.Deleted);
+        Assert.False(far.Files.ContainsKey("boards/assets/img_aaa.png"));
+        Assert.Null(AssetStore.ResolveExisting(scratch.BoardPath, "assets/img_aaa.png"));
+    }
+
+    [Fact]
+    public async Task A_picture_another_board_in_the_repository_still_uses_is_not_reaped()
+    {
+        using var scratch = new Scratch("asset-reap-shared");
+
+        PutLocalImage(scratch, "img_aaa.png", new byte[] { 1, 2, 3 });
+
+        var document = CanvasDocument.CreateNew();
+        var paths = SyncPaths.ForBoard(scratch.BoardPath);
+
+        var other = WithImage("ufile01", "assets/img_aaa.png");
+
+        var far = new FakeRemote();
+        far.Publish(paths.DocPath, document.ToJson());
+        far.Publish("boards/other.canvas", other.ToJson());
+        far.PublishRaw("boards/assets/img_aaa.png", new byte[] { 1, 2, 3 });
+
+        var report = await AssetSync.ReapAsync(
+            far, scratch.BoardPath, document, Tree(far), paths, new[] { "assets/img_aaa.png" }, default);
+
+        Assert.Empty(report.Deleted);
+        Assert.Single(report.Held);
+        Assert.Contains("另一块板", report.Held[0].Reason);
+        Assert.True(far.Files.ContainsKey("boards/assets/img_aaa.png"));
+    }
+
+    [Fact]
+    public async Task A_board_sitting_here_without_a_remote_copy_still_holds_its_picture()
+    {
+        using var scratch = new Scratch("asset-reap-local");
+
+        PutLocalImage(scratch, "img_aaa.png", new byte[] { 1, 2, 3 });
+
+        var document = CanvasDocument.CreateNew();
+        var paths = SyncPaths.ForBoard(scratch.BoardPath);
+
+        // A second board in this folder that was never pushed: nothing on the far side says it
+        // exists, so the far check alone would delete a picture this machine is displaying.
+        CanvasStore.Write(Path.Combine(scratch.Folder, "other.canvas"), WithImage("ufile01", "assets/img_aaa.png").ToJson());
+        CanvasStore.Write(scratch.BoardPath, document.ToJson());
+
+        var far = new FakeRemote();
+        far.Publish(paths.DocPath, document.ToJson());
+        far.PublishRaw("boards/assets/img_aaa.png", new byte[] { 1, 2, 3 });
+
+        var report = await AssetSync.ReapAsync(
+            far, scratch.BoardPath, document, Tree(far), paths, new[] { "assets/img_aaa.png" }, default);
+
+        Assert.Empty(report.Deleted);
+        Assert.Contains(report.Held, held => held.Reason.Contains("这台机器"));
+        Assert.True(far.Files.ContainsKey("boards/assets/img_aaa.png"));
+    }
+
+    [Fact]
+    public async Task An_unreadable_board_beside_this_one_holds_every_picture_that_round()
+    {
+        using var scratch = new Scratch("asset-reap-corrupt");
+
+        PutLocalImage(scratch, "img_aaa.png", new byte[] { 1, 2, 3 });
+
+        var document = CanvasDocument.CreateNew();
+        var paths = SyncPaths.ForBoard(scratch.BoardPath);
+
+        var far = new FakeRemote();
+        far.Publish(paths.DocPath, document.ToJson());
+        far.Publish("boards/other.canvas", "not a canvas at all, and not JSON");
+        far.PublishRaw("boards/assets/img_aaa.png", new byte[] { 1, 2, 3 });
+
+        var report = await AssetSync.ReapAsync(
+            far, scratch.BoardPath, document, Tree(far), paths, new[] { "assets/img_aaa.png" }, default);
+
+        Assert.Empty(report.Deleted);
+        Assert.Equal(0, far.DeleteCalls);
+        Assert.True(far.Files.ContainsKey("boards/assets/img_aaa.png"));
+    }
+
+    [Fact]
+    public async Task Reaping_an_empty_list_asks_the_far_side_for_nothing()
+    {
+        using var scratch = new Scratch("asset-reap-idle");
+
+        var document = CanvasDocument.CreateNew();
+        var paths = SyncPaths.ForBoard(scratch.BoardPath);
+
+        var far = new FakeRemote();
+
+        var report = await AssetSync.ReapAsync(
+            far, scratch.BoardPath, document, Tree(far), paths, [], default);
+
+        Assert.False(report.DidAnything);
+        Assert.Equal(0, far.DeleteCalls);
+    }
 }

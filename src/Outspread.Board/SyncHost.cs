@@ -220,6 +220,9 @@ internal sealed class SyncHost
             Diagnostics.Write);
     }
 
+    /// <summary>Deletions this window has already told the user about, so a retry loop is not a loop of toasts.</summary>
+    private readonly HashSet<string> _warnedRetries = new(StringComparer.Ordinal);
+
     private void Say(SyncReport report)
     {
         switch (report.Outcome)
@@ -262,5 +265,27 @@ internal sealed class SyncHost
             // that quietly picked a winner is exactly what this board cannot afford.
             Diagnostics.Write($"merge {verdict.Rule} {verdict.Id}/{verdict.Field} → {verdict.Chosen}: {verdict.Detail}");
         }
+
+        foreach (var (path, reason) in report.Assets?.Held ?? [])
+        {
+            if (report.Assets!.Deleted.Contains(path) || !report.Assets.Retry.Contains(path))
+            {
+                // Either it went away anyway, or nothing this end can do will finish it (a
+                // board beside this one is still showing it). That is not news every two minutes.
+                continue;
+            }
+
+            Diagnostics.Write($"asset not reaped {path}: {reason}");
+
+            if (_warnedRetries.Add(path))
+            {
+                // A picture the board no longer names and this round could not take away is a
+                // deletion that has not finished. Said nothing, it looks like the app kept it.
+                _say($"那张图没清掉，下次同步再试：{path}｜{reason}");
+            }
+        }
+
+        // A path that stopped being a problem is allowed to become one again, and say so.
+        _warnedRetries.IntersectWith(report.Assets?.Retry ?? []);
     }
 }

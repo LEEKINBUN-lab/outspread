@@ -188,10 +188,18 @@ public sealed partial class MainWindow
         _ => CanvasEdge.Bottom,
     };
 
-    /// <summary>叠在上面的先命中——和指针选中同一套规矩：看到的顺序就是点的顺序。</summary>
+    /// <summary>
+    /// 这一发落在哪一格上。叠在上面的先命中，但**组让给格子里面那一枚**：组的矩形盖住它框住的
+    /// 每一格，而双击组要做的两件事都成立不了——组不能编辑（BeginEdit 自己会这么说），
+    /// 也没人想从一块虚线框的边缘拉线。今天这块板子上第一个落点就同时命中一枚格子和一个组，
+    /// 于是"双击边缘起线"在带组的板子上整个失效（自检那两发报的就是这个）。
+    /// 选中的两层规矩（先组后格）在 Core 的 Grouping 里，不归这里管。
+    /// </summary>
     private CanvasNode? NodeAt(Point screen)
     {
         var world = new Point(_view.ToWorldX(screen.X), _view.ToWorldY(screen.Y));
+
+        CanvasNode? group = null;
 
         for (var index = _document.Nodes.Count - 1; index >= 0; index--)
         {
@@ -202,13 +210,22 @@ public sealed partial class MainWindow
                 continue;
             }
 
-            if (world.X >= node.X && world.X <= node.Right && world.Y >= node.Y && world.Y <= node.Bottom)
+            if (world.X < node.X || world.X > node.Right || world.Y < node.Y || world.Y > node.Bottom)
             {
-                return node;
+                continue;
             }
+
+            if (node.Kind == CanvasNodeKind.Group)
+            {
+                group ??= node;
+
+                continue;
+            }
+
+            return node;
         }
 
-        return null;
+        return group;
     }
 
     private static string SideWord(string side) => side switch

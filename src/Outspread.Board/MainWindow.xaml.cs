@@ -2375,14 +2375,6 @@ public sealed partial class MainWindow : Window
             menu.Items.Add(order);
         }
 
-        if (where == MenuWhere.OneNote && _selection.Count == 1)
-        {
-            var only = _selection.First();
-            var edit = new MenuFlyoutItem { Text = "改这格文字", KeyboardAcceleratorTextOverride = "双击" };
-            edit.Click += (_, _) => BeginEdit(only);
-            menu.Items.Add(edit);
-        }
-
         if (where == MenuWhere.Group)
         {
             var ungroup = new MenuFlyoutItem { Text = "拆组", KeyboardAcceleratorTextOverride = "Ctrl+Shift+G" };
@@ -2436,13 +2428,6 @@ public sealed partial class MainWindow : Window
         var pair = new MenuFlyoutItem { Text = "配对手机…" };
         pair.Click += (_, _) => OpenPairingPanel();
         menu.Items.Add(pair);
-
-        if (_history.CanUndo)
-        {
-            var undo = new MenuFlyoutItem { Text = $"撤销『{_history.NextUndoLabel}』", KeyboardAcceleratorTextOverride = "Ctrl+Z" };
-            undo.Click += (_, _) => Undo();
-            menu.Items.Add(undo);
-        }
 
         menu.ShowAt(BoardArea, new FlyoutShowOptions { Position = screenPosition });
     }

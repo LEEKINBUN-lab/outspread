@@ -82,6 +82,10 @@ public sealed partial class MainWindow : Window
 
     private string? _editingId;
 
+    // 组改名那枚就地小编辑器（组没有正文，改的是 label）——和便签正文编辑器分开，各管各的。
+    private TextBox? _groupRenameBox;
+    private string? _groupRenameId;
+
     private TextBlock? _measureProbe;
 
     /// <summary>The same block the card paints, measured instead of a single TextBlock, when the body
@@ -1128,6 +1132,9 @@ public sealed partial class MainWindow : Window
             _groupFocus = focus;
         }
 
+        // 谁后被点击谁在最上面：把这一枚提到最上层（不重铸、不清选中）。组本身不抬（它的框是派生的）。
+        RaiseToFront(id);
+
         var startGeometry = new Dictionary<string, (double X, double Y)>(StringComparer.Ordinal);
 
         foreach (var selectedId in _selection)
@@ -1400,7 +1407,9 @@ public sealed partial class MainWindow : Window
         var screenHeight = box.Height * _view.Zoom;
 
         SelectionOutline.Stroke = ChromeStyling.Ring;
-        SelectionOutline.Fill = ChromeStyling.SelectionFill;
+        // 选中只描边，不往格子里灌一层蓝——那层蓝会把便签本色染偏，看不清它到底是哪个预设色
+        // （10-22 他指着绿格发蓝那张说的）。内部那一圈 InnerContrast 是描边、不是填充，留着。
+        SelectionOutline.Fill = null;
         Canvas.SetLeft(SelectionOutline, screenLeft);
         Canvas.SetTop(SelectionOutline, screenTop);
         SelectionOutline.Width = screenWidth;
@@ -2024,9 +2033,9 @@ public sealed partial class MainWindow : Window
 
         BeginGesture("新建一格");
 
-        var node = CreateTextNote(string.Empty, e.GetPosition(BoardArea) is { } screen
+        var node = CreateTextNote(string.Empty, FreeOfGroups(e.GetPosition(BoardArea) is { } screen
             ? new Point(_view.ToWorldX(screen.X), _view.ToWorldY(screen.Y))
-            : PasteWorld());
+            : PasteWorld()));
 
         EndGesture();
 
@@ -2042,6 +2051,13 @@ public sealed partial class MainWindow : Window
 
         if (NodeOf(id) is not { } node)
         {
+            return;
+        }
+
+        if (node.Kind == CanvasNodeKind.Group)
+        {
+            // 组没有正文，可改的是它的描述（label）——双击名牌就地改名。
+            BeginRenameGroup(node);
             return;
         }
 
@@ -2295,6 +2311,115 @@ public sealed partial class MainWindow : Window
         SaveSoon();
 
         DrainPendingReload();
+    }
+
+    // ---------------------------------------------------------------------
+    // 组改名：双击名牌就地给这一组起个名（组没有正文，可改的是 label）
+    // ---------------------------------------------------------------------
+
+    private void BeginRenameGroup(CanvasNode group)
+    {
+        CloseRename();
+
+        if (group.Kind != CanvasNodeKind.Group)
+        {
+            return;
+        }
+
+        _groupRenameId = group.Id;
+
+        var paper = NoteStyling.SurfaceFor(null);
+
+        var box = new TextBox
+        {
+            Text = group.Label ?? string.Empty,
+            AcceptsReturn = false,
+            FontFamily = NoteStyling.NoteFont,
+            FontSize = Math.Max(11, 14 * _view.Zoom),
+            Foreground = new SolidColorBrush(NoteStyling.InkFor(paper)),
+            Background = new SolidColorBrush(paper),
+            BorderBrush = ChromeStyling.Ring,
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(5, 2, 5, 2),
+            PlaceholderText = "组名",
+        };
+
+        box.KeyDown += (_, e) =>
+        {
+            if (e.Key == Windows.System.VirtualKey.Enter)
+            {
+                CommitRename();
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.Escape)
+            {
+                CloseRename();
+                Say("没改名");
+                e.Handled = true;
+            }
+        };
+
+        box.LostFocus += (_, _) => CommitRename();
+
+        _groupRenameBox = box;
+
+        EditorLayer.Children.Add(box);
+        PlaceRename(group);
+
+        box.Focus(FocusState.Programmatic);
+        box.Select(box.Text.Length, 0);
+
+        Say("给这一组起个名：回车或点到别处定名，Esc 不改");
+    }
+
+    private void PlaceRename(CanvasNode group)
+    {
+        if (_groupRenameBox is null)
+        {
+            return;
+        }
+
+        // 贴在名牌那一行（框顶上方），宽度跟着框走但不超过一屏。
+        Canvas.SetLeft(_groupRenameBox, _view.ToScreenX(group.X));
+        Canvas.SetTop(_groupRenameBox, _view.ToScreenY(group.Y) - 32 * _view.Zoom);
+        _groupRenameBox.Width = Math.Clamp(group.Width * _view.Zoom, 120, 360);
+    }
+
+    private void CommitRename()
+    {
+        if (_groupRenameBox is null || _groupRenameId is not { } id)
+        {
+            return;
+        }
+
+        var group = NodeOf(id);
+        var text = _groupRenameBox.Text.Trim();
+
+        CloseRename();
+
+        if (group is null || string.Equals(group.Label ?? string.Empty, text, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        BeginGesture(text.Length == 0 ? "抹掉了组名" : "给组起了名");
+
+        group.Label = text.Length == 0 ? null : text;
+
+        EndGesture();
+        Rebuild();
+        SaveSoon();
+    }
+
+    private void CloseRename()
+    {
+        if (_groupRenameBox is not null)
+        {
+            EditorLayer.Children.Remove(_groupRenameBox);
+            _groupRenameBox = null;
+        }
+
+        _groupRenameId = null;
     }
 
     private void SelectOnly(string id)
@@ -2683,6 +2808,34 @@ public sealed partial class MainWindow : Window
         EndGesture();
 
         Rebuild();
+        SaveSoon();
+    }
+
+    /// <summary>
+    /// 谁后被点击谁在最上面（10-22 他：新建的总压在旧的上面，不对）。把这一枚提到最前，
+    /// 但<b>不重铸整层</b>——Rebuild 会清掉选中，而这一发正要点中它。只把那张卡片挪到
+    /// ItemLayer 末尾（z 序＝数组顺序），文档顺序跟着改、落盘，但不占一条撤销步（点一下不该刷一条撤回）。
+    /// </summary>
+    private void RaiseToFront(string id)
+    {
+        if (_document is null || NodeOf(id) is not { } node || node.Kind == CanvasNodeKind.Group)
+        {
+            return;
+        }
+
+        if (_document.Nodes.LastOrDefault()?.Id == id)
+        {
+            return; // 已经在最前，别白改一次盘
+        }
+
+        _document.BringToFront(id);
+
+        if (_realized.TryGetValue(id, out var visual))
+        {
+            ItemLayer.Children.Remove(visual);
+            ItemLayer.Children.Add(visual);
+        }
+
         SaveSoon();
     }
 
@@ -3745,6 +3898,19 @@ public sealed partial class MainWindow : Window
             // ＝那格出组、框缩，撤销归位；普通拖动把成员甩出框 ⇒ 框必须跟着长（sticky）。
             // 负对照：只擦肩 1% 的两枚不许浮提议。
             {
+                // 这块测的是"合成的一堆散格成组"，不该被板上原有的组干扰：他刚用『创建分组』造的组
+                // 正好可能压在合成堆附近，会把 JoinByGrowingFrame 引到错的框上（自检因此假红）。
+                // 自检跑在临时副本上，测完这份就丢——先把原有组清掉，基线只跟合成堆比。
+                foreach (var seedGroup in _document.Nodes
+                             .Where(n => n.Kind == CanvasNodeKind.Group)
+                             .Select(n => n.Id)
+                             .ToList())
+                {
+                    _document.Remove(seedGroup);
+                }
+
+                Rebuild();
+
                 var untouched = _document.ToJson();
 
                 // 临时堆放在 (900,520) 一带：那块在演示板上是空的，不会和 u0a/u48 的框
@@ -3819,19 +3985,31 @@ public sealed partial class MainWindow : Window
                     else
                     {
                         var frameBefore = madeFrame;
+                        var detachStart = NodeOf(stackB.Id)!;
+                        var detachStartPos = (detachStart.X, detachStart.Y);
 
                         DetachFromGroup(stackB.Id); // 组钮菜单「移出分组」的落点
 
-                        if (frameBefore.Holds(RectOf(NodeOf(stackB.Id)!)))
-                        {
-                            problems.Add("走过『移出分组』以后那格还在框里");
-                        }
-
                         var frameNow = GroupRects().First(candidate => candidate.Id == frameBefore.Id);
+
+                        // 移出后：框按剩下的成员缩了一圈，那格已经不在（缩小的）框里。
+                        if (frameNow.Holds(RectOf(NodeOf(stackB.Id)!)))
+                        {
+                            problems.Add("走过『移出分组』以后那格还在（缩小的）框里");
+                        }
 
                         if (frameNow.Width >= frameBefore.Width)
                         {
                             problems.Add($"移出以后框没缩：宽 {frameBefore.Width:0.#} → {frameNow.Width:0.#}");
+                        }
+
+                        // 而且它不该被甩到整组之外那种远跳——最多挪出最近那条边、约等于它自己那一格的尺寸。
+                        var nudged = Math.Abs(NodeOf(stackB.Id)!.X - detachStartPos.X)
+                            + Math.Abs(NodeOf(stackB.Id)!.Y - detachStartPos.Y);
+
+                        if (nudged > detachStart.Width + 40)
+                        {
+                            problems.Add($"移出把便签甩太远了：位移 {nudged:0.#} 超过它自己那格宽 {detachStart.Width:0.#}＋余量");
                         }
 
                         Undo();

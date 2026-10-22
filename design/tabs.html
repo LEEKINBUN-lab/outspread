@@ -1,0 +1,1250 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>标签条 · 浏览器式（2026-10-22 定档）</title><style>:root{--seed-fg:#1f2328;--seed-muted:#59636e;--border-subtle:rgba(0,0,0,.12);--inset-bg:#f6f8fa;--card-bg:#fff;--font-sans:"Segoe UI","Microsoft YaHei UI",sans-serif}body{margin:0;padding:24px;background:#fff;color:#1f2328;font-family:var(--font-sans);max-width:1060px}h1{font-size:18px;font-weight:500;margin:0 0 4px}p{font-size:13px;line-height:1.6;color:#59636e;margin:6px 0 16px}h2{font-size:15px;font-weight:500;margin:32px 0 8px}table{border-collapse:collapse;width:100%;font-size:12px}th,td{border-top:1px solid rgba(0,0,0,.12);padding:8px 10px;text-align:left;vertical-align:top;line-height:1.5}th{font-weight:500;color:#59636e}td:first-child{white-space:nowrap}code{font-family:ui-monospace,Consolas,monospace;font-size:11px}</style></head><body><h1>标签条 · 浏览器式</h1><p>2026-10-22 他看着这一版说「就这版」。上面是可点原型：点 + 直接建、右键标签改名/关闭（第五轮已撤掉“打开盘上的板子”，原型保留的是当时的对照形状）。下面是把这批数落到 WinUI 3 的配方。</p><div id="osp-tabs-proto">
+  <style>
+    #osp-tabs-proto {
+      --font-product: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+      font-family: var(--font-sans);
+      color: var(--seed-fg);
+    }
+    #osp-tabs-proto *,
+    #osp-tabs-proto *::before,
+    #osp-tabs-proto *::after { box-sizing: border-box; }
+    #osp-tabs-proto button,
+    #osp-tabs-proto input { font-family: inherit; }
+
+    .proto-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 12px;
+      margin: 0 0 12px;
+      font-size: 13px;
+      color: var(--seed-muted);
+    }
+    .proto-bar .proto-hint { flex: 1 1 260px; min-width: 180px; }
+    .proto-bar .group {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 2px;
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      background: var(--inset-bg);
+      flex: none;
+    }
+    .proto-bar button {
+      border: 0;
+      background: transparent;
+      color: var(--seed-fg);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      line-height: 20px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .proto-bar button[aria-pressed="true"] {
+      background: var(--card-bg);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+    }
+
+    .sp-window {
+      --board: #f9fafb;
+      --strip: #eceef2;
+      --strip-line: rgba(0, 0, 0, 0.11);
+      --tab-active: #f9fafb;
+      --tab-hover: rgba(0, 0, 0, 0.055);
+      --tab-edge: rgba(0, 0, 0, 0.09);
+      --tab-sep: rgba(0, 0, 0, 0.09);
+      --ink: #1b1b1b;
+      --muted: #5a6068;
+      --quiet: #a1a1a2;
+      --dot: rgba(110, 110, 110, 0.28);
+      --panel: #fbfcfd;
+      --panel-line: rgba(0, 0, 0, 0.14);
+      --menu-bg: #fbfcfd;
+      --menu-line: rgba(0, 0, 0, 0.13);
+      --menu-hover: rgba(0, 0, 0, 0.055);
+      --close-hover: rgba(0, 0, 0, 0.09);
+      --cap-hover: rgba(0, 0, 0, 0.06);
+      --focus: #2f6fd0;
+      --note-ink: #1b1b1b;
+      --note-ring: rgba(0, 0, 0, 0.11);
+      --note-a: #fdf3c9;
+      --note-b: #dfeefc;
+      --note-c: #e7f5e8;
+      --win-line: rgba(0, 0, 0, 0.16);
+      position: relative;
+      width: 100%;
+      max-width: 980px;
+      margin: 0 auto;
+      overflow: hidden;
+      border: 1px solid var(--win-line);
+      border-radius: 10px;
+      background: var(--board);
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.13), 0 2px 7px rgba(0, 0, 0, 0.07);
+      color-scheme: light;
+      transition: background-color 160ms ease;
+    }
+    .sp-window[data-theme="dark"] {
+      --board: #101011;
+      --strip: #17191c;
+      --strip-line: rgba(255, 255, 255, 0.11);
+      --tab-active: #101011;
+      --tab-hover: rgba(255, 255, 255, 0.075);
+      --tab-edge: rgba(255, 255, 255, 0.13);
+      --tab-sep: rgba(255, 255, 255, 0.10);
+      --ink: #f5f6f7;
+      --muted: #b9bec5;
+      --quiet: #8b929a;
+      --dot: rgba(255, 255, 255, 0.20);
+      --panel: #1b1e22;
+      --panel-line: rgba(255, 255, 255, 0.16);
+      --menu-bg: #1b1e22;
+      --menu-line: rgba(255, 255, 255, 0.15);
+      --menu-hover: rgba(255, 255, 255, 0.075);
+      --close-hover: rgba(255, 255, 255, 0.13);
+      --cap-hover: rgba(255, 255, 255, 0.09);
+      --focus: #6aa7ff;
+      --note-ink: #1b1b1b;
+      --note-ring: rgba(0, 0, 0, 0.32);
+      --note-a: #d9c98b;
+      --note-b: #a9c4d8;
+      --note-c: #b6d2b1;
+      --win-line: rgba(255, 255, 255, 0.16);
+      box-shadow: 0 22px 52px rgba(0, 0, 0, 0.52), 0 2px 8px rgba(0, 0, 0, 0.34);
+      color-scheme: dark;
+    }
+
+    /* ── 标题条 ─────────────────────────────────────── */
+    .sp-strip {
+      position: relative;
+      display: flex;
+      align-items: flex-end;
+      height: 38px;
+      padding: 0 0 0 8px;
+      background: var(--strip);
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .sp-strip::after {
+      content: "";
+      position: absolute;
+      z-index: 1;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 1px;
+      background: var(--strip-line);
+    }
+    .sp-tabs {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      align-items: flex-end;
+      height: 100%;
+      min-width: 0;
+      flex: 0 1 auto;
+    }
+    .sp-tab {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      align-items: stretch;
+      height: 34px;
+      min-width: 82px;
+      max-width: 220px;
+      flex: 0 1 auto;
+      border-radius: 8px 8px 0 0;
+      transition: background-color 120ms ease,
+                  max-width 160ms ease,
+                  min-width 160ms ease,
+                  opacity 120ms ease;
+    }
+    .sp-tab:not([data-active="true"]):hover { background: var(--tab-hover); }
+    .sp-tab[data-active="true"] {
+      z-index: 3;
+      background: var(--tab-active);
+      border: 1px solid var(--tab-edge);
+      border-bottom: 0;
+    }
+    .sp-tab[data-renaming="true"] {
+      z-index: 4;
+      min-width: 200px;
+      max-width: 300px;
+      background: var(--tab-active);
+      border: 1px solid var(--tab-edge);
+      border-bottom: 0;
+    }
+    /* 两个非活动标签之间的发丝分隔线；悬停与相邻活动时消失 */
+    .sp-tab:not([data-active="true"]):not(:first-child)::before {
+      content: "";
+      position: absolute;
+      right: 0;
+      top: 9px;
+      bottom: 9px;
+      width: 1px;
+      background: var(--tab-sep);
+      transition: opacity 120ms ease;
+    }
+    .sp-tab:hover::before,
+    .sp-tab:hover + .sp-tab::before,
+    .sp-tab[data-active="true"] + .sp-tab::before { opacity: 0; }
+
+    .sp-tab-hit {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      width: 100%;
+      min-width: 0;
+      height: 100%;
+      padding: 0 30px 0 12px;
+      border: 0;
+      border-radius: inherit;
+      background: transparent;
+      color: var(--muted);
+      font-family: var(--font-product);
+      font-size: 13px;
+      font-weight: 400;
+      line-height: 20px;
+      text-align: left;
+      cursor: default;
+      transition: color 120ms ease;
+    }
+    .sp-tab:hover .sp-tab-hit,
+    .sp-tab[data-active="true"] .sp-tab-hit { color: var(--ink); }
+    .sp-tab[data-active="true"] .sp-tab-hit { font-weight: 500; }
+    .sp-tab-title {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .sp-close {
+      position: absolute;
+      z-index: 3;
+      right: 4px;
+      top: 50%;
+      width: 20px;
+      height: 20px;
+      margin-top: -10px;
+      padding: 0;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      font-family: var(--font-product);
+      font-size: 10px;
+      line-height: 20px;
+      text-align: center;
+      opacity: 0;
+      pointer-events: none;
+      cursor: pointer;
+      transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
+    }
+    .sp-tab:hover .sp-close,
+    .sp-tab[data-active="true"] .sp-close,
+    .sp-tab:focus-within .sp-close {
+      opacity: 0.72;
+      pointer-events: auto;
+    }
+    .sp-close:hover {
+      opacity: 1;
+      background: var(--close-hover);
+      color: var(--ink);
+    }
+    .sp-rename {
+      position: absolute;
+      z-index: 3;
+      left: 11px;
+      right: 30px;
+      top: 50%;
+      height: 24px;
+      margin-top: -12px;
+      padding: 0 0 1px;
+      border: 0;
+      border-bottom: 1px solid var(--focus);
+      border-radius: 0;
+      background: transparent;
+      color: var(--ink);
+      font-family: var(--font-product);
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 22px;
+      outline: none;
+      min-width: 0;
+    }
+
+    .sp-add {
+      order: 1;
+      z-index: 3;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+      width: 28px;
+      height: 28px;
+      margin: 5px 4px;
+      padding: 0;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      font-family: var(--font-product);
+      font-size: 17px;
+      font-weight: 400;
+      line-height: 1;
+      cursor: pointer;
+      transition: background-color 120ms ease, color 120ms ease, transform 80ms ease;
+    }
+    .sp-add:hover { background: var(--tab-hover); color: var(--ink); }
+    .sp-add:active { transform: scale(0.92); }
+    .sp-space {
+      order: 2;
+      flex: 1 1 auto;
+      min-width: 8px;
+      align-self: stretch;
+    }
+    .sp-caption {
+      order: 5;
+      z-index: 3;
+      display: flex;
+      flex: none;
+      align-self: flex-start;
+      align-items: flex-start;
+      height: 32px;
+    }
+    .sp-caption button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 46px;
+      height: 32px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-family: "Segoe UI Symbol", var(--font-product);
+      font-size: 10px;
+      cursor: default;
+      transition: background-color 100ms ease, color 100ms ease;
+    }
+    .sp-caption button:hover { background: var(--cap-hover); color: var(--ink); }
+    .sp-caption button.sp-caption-close:hover { background: #c42b1c; color: #ffffff; }
+
+    /* ── 板面 ───────────────────────────────────────── */
+    .sp-board {
+      position: relative;
+      height: 258px;
+      overflow: hidden;
+      background-color: var(--board);
+      background-image: radial-gradient(circle at 1px 1px, var(--dot) 1.1px, transparent 1.2px);
+      background-size: 22px 22px;
+      transition: background-color 160ms ease;
+    }
+    .sp-note {
+      position: absolute;
+      width: 196px;
+      min-height: 82px;
+      padding: 12px 14px;
+      border-radius: 2px;
+      color: var(--note-ink);
+      font-family: var(--font-product);
+      font-size: 13px;
+      font-weight: 400;
+      line-height: 1.55;
+      white-space: pre-line;
+      box-shadow: 0 0 0 1px var(--note-ring),
+                  0 1px 1px rgba(0, 0, 0, 0.05),
+                  0 10px 22px rgba(0, 0, 0, 0.08);
+    }
+
+    /* ── 旧版新建浮窗（只在“现在”里出现）─────────────── */
+    .sp-oldpanel {
+      position: absolute;
+      z-index: 30;
+      top: 44px;
+      left: 50%;
+      width: min(460px, calc(100% - 32px));
+      padding: 4px;
+      transform: translateX(-50%);
+      border: 1px solid var(--panel-line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 20px 48px rgba(0, 0, 0, 0.20), 0 2px 8px rgba(0, 0, 0, 0.09);
+    }
+    .sp-oldpanel[hidden] { display: none; }
+    .sp-oldinput {
+      display: block;
+      width: 100%;
+      height: 40px;
+      padding: 0 12px;
+      border: 0;
+      border-bottom: 2px solid #2f6fd0;
+      background: transparent;
+      color: var(--ink);
+      font-family: var(--font-product);
+      font-size: 14px;
+      outline: none;
+    }
+    .sp-oldinput::placeholder { color: var(--quiet); }
+    .sp-oldnote {
+      display: flex;
+      align-items: center;
+      height: 40px;
+      padding: 0 12px;
+      color: var(--muted);
+      font-family: var(--font-product);
+      font-size: 14px;
+    }
+
+    /* ── 菜单 ───────────────────────────────────────── */
+    .sp-menu {
+      position: absolute;
+      z-index: 40;
+      min-width: 196px;
+      max-width: 300px;
+      padding: 4px;
+      border: 1px solid var(--menu-line);
+      border-radius: 8px;
+      background: var(--menu-bg);
+      box-shadow: 0 18px 42px rgba(0, 0, 0, 0.19), 0 2px 7px rgba(0, 0, 0, 0.10);
+      animation: sp-menu-in 120ms ease-out;
+      transform-origin: top left;
+    }
+    .sp-menu[hidden] { display: none; }
+    @keyframes sp-menu-in {
+      from { opacity: 0; transform: translateY(-3px) scale(0.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .sp-menu-row {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      width: 100%;
+      height: 32px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--ink);
+      font-family: var(--font-product);
+      font-size: 13px;
+      font-weight: 400;
+      line-height: 20px;
+      text-align: left;
+      cursor: default;
+      white-space: nowrap;
+    }
+    .sp-menu-row:hover { background: var(--menu-hover); }
+    .sp-menu-hint {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .sp-menu-sep { height: 1px; margin: 4px 0; background: var(--menu-line); }
+    .sp-menu-note {
+      padding: 8px 12px;
+      color: var(--muted);
+      font-family: var(--font-product);
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .sp-menu-title {
+      padding: 6px 12px 4px;
+      color: var(--muted);
+      font-family: var(--font-product);
+      font-size: 12px;
+      line-height: 18px;
+    }
+
+    /* ── 回执 ───────────────────────────────────────── */
+    .sp-toast {
+      position: absolute;
+      z-index: 50;
+      left: 50%;
+      bottom: 16px;
+      max-width: calc(100% - 32px);
+      padding: 8px 12px;
+      transform: translateX(-50%);
+      border: 1px solid var(--panel-line);
+      border-radius: 6px;
+      background: var(--panel);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.14);
+      color: var(--ink);
+      font-family: var(--font-product);
+      font-size: 13px;
+      line-height: 20px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      animation: sp-toast-in 140ms ease-out;
+    }
+    .sp-toast[hidden] { display: none; }
+    @keyframes sp-toast-in {
+      from { opacity: 0; transform: translate(-50%, 4px); }
+      to { opacity: 1; transform: translate(-50%, 0); }
+    }
+
+    /* 焦点：只画在可键盘到达的控件上，不抢产品自己的视觉 */
+    .sp-tab-hit:focus-visible,
+    .sp-close:focus-visible,
+    .sp-add:focus-visible,
+    .sp-menu-row:focus-visible,
+    .sp-caption button:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: -2px;
+    }
+    .sp-rename:focus-visible { outline: none; }
+
+    /* 新标签进入 / 关闭 */
+    .sp-tab[data-entering="true"] { animation: sp-tab-in 180ms ease-out; }
+    @keyframes sp-tab-in {
+      from { min-width: 0; max-width: 0; opacity: 0; }
+      to { min-width: 82px; max-width: 220px; opacity: 1; }
+    }
+    .sp-tab[data-leaving="true"] {
+      min-width: 0 !important;
+      max-width: 0 !important;
+      flex-basis: 0 !important;
+      opacity: 0;
+      overflow: hidden;
+      border-width: 0;
+    }
+
+    /* ── 现在的样子：照着截图复刻 ────────────────────── */
+    .sp-window[data-mode="old"] { --strip: #f3f3f3; --tab-active: #ffffff; --tab-edge: transparent; --tab-sep: transparent; }
+    .sp-window[data-mode="old"] .sp-strip { height: 32px; padding-left: 0; }
+    .sp-window[data-mode="old"] .sp-tab {
+      height: 32px;
+      min-width: 120px;
+      max-width: 180px;
+      border-radius: 0;
+    }
+    .sp-window[data-mode="old"] .sp-tab[data-active="true"],
+    .sp-window[data-mode="old"] .sp-tab[data-renaming="true"] { border: 0; }
+    .sp-window[data-mode="old"] .sp-tab-hit {
+      padding: 0 38px 0 12px;
+      color: #5f6368;
+      font-size: 12px;
+    }
+    .sp-window[data-mode="old"] .sp-tab[data-active="true"] .sp-tab-hit {
+      color: #1b1b1b;
+      font-weight: 400;
+    }
+    .sp-window[data-mode="old"] .sp-close {
+      right: 0;
+      width: 32px;
+      height: 24px;
+      margin-top: -12px;
+      border-radius: 4px;
+      color: #1b1b1b;
+      font-size: 12px;
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .sp-window[data-mode="old"] .sp-add {
+      order: 3;
+      width: 32px;
+      height: 24px;
+      margin: 4px 4px 4px 0;
+      border-radius: 0;
+      color: #1b1b1b;
+      font-size: 14px;
+    }
+    .sp-window[data-mode="old"] .sp-add:hover { background: transparent; }
+    .sp-window[data-mode="old"] .sp-add:active { transform: none; }
+    .sp-window[data-theme="dark"][data-mode="old"] { --strip: #202020; --tab-active: #2b2b2b; }
+    .sp-window[data-theme="dark"][data-mode="old"] .sp-tab-hit { color: #b9b9b9; }
+    .sp-window[data-theme="dark"][data-mode="old"] .sp-tab[data-active="true"] .sp-tab-hit,
+    .sp-window[data-theme="dark"][data-mode="old"] .sp-close,
+    .sp-window[data-theme="dark"][data-mode="old"] .sp-add { color: #f0f0f0; }
+
+    .sp-window[data-motion="off"] .sp-tab,
+    .sp-window[data-motion="off"] .sp-tab-hit,
+    .sp-window[data-motion="off"] .sp-close,
+    .sp-window[data-motion="off"] .sp-add,
+    .sp-window[data-motion="off"] .sp-menu,
+    .sp-window[data-motion="off"] .sp-toast { animation: none !important; transition: none !important; }
+    .sp-window[data-motion="off"] .sp-tab[data-entering="true"],
+    .sp-window[data-motion="off"] .sp-tab[data-leaving="true"] { animation: none !important; }
+
+    @media (max-width: 560px) {
+      .sp-caption { display: none; }
+      .sp-tab { min-width: 56px; max-width: 160px; }
+      .sp-tab-hit { padding: 0 22px 0 8px; font-size: 12px; }
+      .sp-close { right: 2px; }
+      .sp-add { margin-left: 2px; margin-right: 2px; }
+      .sp-board { height: 220px; }
+      .sp-note {
+        width: 42% !important;
+        font-size: 12px;
+      }
+      .sp-note:nth-child(1) { left: 12px !important; top: 18px !important; }
+      .sp-note:nth-child(2) { left: auto !important; right: 12px !important; top: 96px !important; }
+      .sp-note:nth-child(3) { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .sp-window *,
+      .sp-window *::before,
+      .sp-window *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+
+  <div class="proto-bar">
+    <span class="proto-hint">点 <strong>＋</strong> 新建 · 右键标签改名 / 关闭</span>
+    <span class="group" role="group" aria-label="对照">
+      <button type="button" id="ospModeNew" aria-pressed="true">新版</button>
+      <button type="button" id="ospModeOld" aria-pressed="false">现在</button>
+    </span>
+    <span class="group" role="group" aria-label="动效">
+      <button type="button" id="ospMotion" aria-pressed="true">动效 开</button>
+    </span>
+    <span class="group" role="group" aria-label="主题">
+      <button type="button" id="ospTheme" aria-pressed="false">深色</button>
+    </span>
+  </div>
+
+  <div class="sp-window" id="ospWindow" data-theme="light" data-mode="new" data-motion="on">
+    <div class="sp-strip" id="ospStrip">
+      <div class="sp-tabs" id="ospTabs" role="tablist" aria-label="开着的板子"></div>
+      <button type="button" class="sp-add" id="ospAdd" aria-label="新板块" title="新板块 · Ctrl+T">＋</button>
+      <div class="sp-space" id="ospSpace" aria-hidden="true"></div>
+      <div class="sp-caption" aria-hidden="true">
+        <button type="button" tabindex="-1" title="最小化">&#x2013;</button>
+        <button type="button" tabindex="-1" title="最大化">&#x25A1;</button>
+        <button type="button" tabindex="-1" class="sp-caption-close" title="关闭">&#x2715;</button>
+      </div>
+    </div>
+
+    <div class="sp-board" id="ospBoard" role="tabpanel" aria-label="板面"></div>
+
+    <div class="sp-oldpanel" id="ospOldPanel" hidden>
+      <input class="sp-oldinput" id="ospOldInput" type="text"
+             placeholder="这块板管哪件事？比如「周会」，Enter 建出来" aria-label="新板块名字">
+      <div class="sp-oldnote" id="ospOldNote">盘上的板子都开着呢</div>
+    </div>
+
+    <div class="sp-menu" id="ospMenu" role="menu" hidden></div>
+    <div class="sp-toast" id="ospToast" role="status" aria-live="polite" hidden></div>
+  </div>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var root = document.getElementById("osp-tabs-proto");
+      if (!root) { return; }
+
+      var win = document.getElementById("ospWindow");
+      var strip = document.getElementById("ospStrip");
+      var tabsEl = document.getElementById("ospTabs");
+      var addBtn = document.getElementById("ospAdd");
+      var boardEl = document.getElementById("ospBoard");
+      var menuEl = document.getElementById("ospMenu");
+      var toastEl = document.getElementById("ospToast");
+      var oldPanel = document.getElementById("ospOldPanel");
+      var oldInput = document.getElementById("ospOldInput");
+      var oldNote = document.getElementById("ospOldNote");
+      var modeNew = document.getElementById("ospModeNew");
+      var modeOld = document.getElementById("ospModeOld");
+      var motionBtn = document.getElementById("ospMotion");
+      var themeBtn = document.getElementById("ospTheme");
+
+      if (!win || !strip || !tabsEl || !addBtn || !boardEl || !menuEl || !toastEl ||
+          !oldPanel || !oldInput || !oldNote || !modeNew || !modeOld || !motionBtn || !themeBtn) {
+        return;
+      }
+
+      var state = {
+        mode: "new",
+        motion: true,
+        theme: "light",
+        tabs: [
+          { id: "t1", title: "scratch" },
+          { id: "t2", title: "周会" },
+          { id: "t3", title: "灵感" },
+          { id: "t4", title: "10-22 复盘" }
+        ],
+        active: "t1",
+        renaming: null,
+        closed: ["复盘归档", "读书"],
+        untitled: 1
+      };
+
+      var notesByTab = {
+        t1: [
+          { x: 48, y: 58, w: 210, bg: "var(--note-a)", text: "周四 15:00 周会\n过一遍标签条的三种状态" },
+          { x: 292, y: 106, w: 196, bg: "var(--note-b)", text: "把 ＋ 挪到最后一枚标签后面" }
+        ],
+        t2: [
+          { x: 70, y: 60, w: 232, bg: "var(--note-b)", text: "议程：\n1. 标签条手感\n2. 新板一步建出来" },
+          { x: 342, y: 124, w: 180, bg: "var(--note-c)", text: "右键标签：重命名 / 关闭 / 关闭其他" }
+        ],
+        t3: [
+          { x: 58, y: 46, w: 174, bg: "var(--note-a)", text: "活动标签与板面同色\n上沿圆角 8" },
+          { x: 268, y: 86, w: 190, bg: "var(--note-b)", text: "静音区只写名字\n悬停才长出 ×" },
+          { x: 484, y: 52, w: 166, bg: "var(--note-c)", text: "＋ 紧跟最后一枚\n不再漂到右边" }
+        ],
+        t4: [
+          { x: 76, y: 72, w: 250, bg: "var(--note-c)", text: "今天只动他点名的四格：\n区分、动效、加号、新建路径" }
+        ]
+      };
+
+      function esc(value) {
+        return String(value).replace(/[&<>"']/g, function (ch) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch];
+        });
+      }
+
+      function tabHtml(tab) {
+        var active = tab.id === state.active;
+        var renaming = tab.id === state.renaming;
+        var title = esc(tab.title);
+
+        if (renaming) {
+          return '<div class="sp-tab" data-id="' + esc(tab.id) + '" data-active="' + active +
+            '" data-renaming="true" role="presentation">' +
+            '<input class="sp-rename" id="ospRename" type="text" value="' + title +
+            '" aria-label="重命名 ' + title + '">' +
+            "</div>";
+        }
+
+        return '<div class="sp-tab" data-id="' + esc(tab.id) + '" data-active="' + active +
+          '" role="presentation">' +
+          '<button type="button" class="sp-tab-hit" role="tab" aria-selected="' + active +
+          '" aria-controls="ospBoard"><span class="sp-tab-title">' + title + "</span></button>" +
+          '<button type="button" class="sp-close" aria-label="关闭 ' + title +
+          '" title="关闭">&#x2715;</button>' +
+          "</div>";
+      }
+
+      function renderTabs() {
+        tabsEl.innerHTML = state.tabs.map(tabHtml).join("");
+        if (state.renaming) {
+          var input = document.getElementById("ospRename");
+          if (input) {
+            input.focus();
+            input.select();
+          }
+        }
+      }
+
+      function syncTabs() {
+        var kids = tabsEl.children;
+        for (var i = 0; i < kids.length; i++) {
+          var el = kids[i];
+          var id = el.getAttribute("data-id");
+          var active = id === state.active;
+          el.setAttribute("data-active", active ? "true" : "false");
+          var hit = el.querySelector(".sp-tab-hit");
+          if (hit) { hit.setAttribute("aria-selected", active ? "true" : "false"); }
+        }
+      }
+
+      function renderBoard() {
+        var notes = notesByTab[state.active];
+        if (!notes) {
+          boardEl.innerHTML = "";
+          return;
+        }
+        var parts = [];
+        for (var i = 0; i < notes.length; i++) {
+          var n = notes[i];
+          parts.push('<div class="sp-note" style="left:' + n.x + "px;top:" + n.y +
+            "px;width:" + n.w + "px;background:" + n.bg + '">' + esc(n.text) + "</div>");
+        }
+        boardEl.innerHTML = parts.join("");
+      }
+
+      function toast(text) {
+        toastEl.textContent = text;
+        toastEl.hidden = false;
+        window.clearTimeout(toast._timer);
+        toast._timer = window.setTimeout(function () {
+          toastEl.hidden = true;
+        }, 2600);
+      }
+
+      function tabById(id) {
+        for (var i = 0; i < state.tabs.length; i++) {
+          if (state.tabs[i].id === id) { return state.tabs[i]; }
+        }
+        return null;
+      }
+
+      function tabNode(id) {
+        var kids = tabsEl.children;
+        for (var i = 0; i < kids.length; i++) {
+          if (kids[i].getAttribute("data-id") === id) { return kids[i]; }
+        }
+        return null;
+      }
+
+      function activate(id) {
+        if (state.renaming) { commitRename(false); }
+        if (!tabById(id)) { return; }
+        state.active = id;
+        syncTabs();
+        renderBoard();
+      }
+
+      function uniqueUntitled() {
+        var n = state.untitled;
+        var name = n <= 1 ? "未命名板" : "未命名板 " + n;
+        var guard = 0;
+        while (nameTaken(name, null) && guard < 200) {
+          n += 1;
+          name = "未命名板 " + n;
+          guard += 1;
+        }
+        state.untitled = n + 1;
+        return name;
+      }
+
+      function createBoard(name) {
+        var tab = { id: "n" + Date.now().toString(36) + Math.floor(Math.random() * 1000), title: name };
+        state.tabs.push(tab);
+        state.active = tab.id;
+        state.renaming = null;
+
+        tabsEl.insertAdjacentHTML("beforeend", tabHtml(tab));
+        var el = tabsEl.lastElementChild;
+        if (el && state.motion) {
+          el.setAttribute("data-entering", "true");
+          window.setTimeout(function () { el.removeAttribute("data-entering"); }, 200);
+        }
+        syncTabs();
+        renderBoard();
+        return tab;
+      }
+
+      function addBoard() {
+        if (state.mode === "old") {
+          openOldPanel();
+          return;
+        }
+        createBoard(uniqueUntitled());
+      }
+
+      function closeTab(id) {
+        if (state.tabs.length <= 1) {
+          toast("最后一块板不给关：要收这个窗口，按右上角那枚 ×");
+          return;
+        }
+        if (state.renaming === id) { state.renaming = null; }
+
+        var idx = -1;
+        for (var i = 0; i < state.tabs.length; i++) {
+          if (state.tabs[i].id === id) { idx = i; break; }
+        }
+        if (idx < 0) { return; }
+
+        var el = tabNode(id);
+        var wasActive = state.active === id;
+        var finish = function () {
+          state.tabs.splice(idx, 1);
+          if (wasActive) {
+            var next = state.tabs[Math.min(idx, state.tabs.length - 1)];
+            if (next) { state.active = next.id; }
+          }
+          if (el && el.parentNode) { el.parentNode.removeChild(el); }
+          syncTabs();
+          renderBoard();
+        };
+
+        if (state.motion && el) {
+          el.setAttribute("data-leaving", "true");
+          window.setTimeout(finish, 165);
+        } else {
+          finish();
+        }
+      }
+
+      function closeOthers(id) {
+        var keep = tabById(id);
+        if (!keep) { return; }
+        var closedTitles = [];
+        for (var i = 0; i < state.tabs.length; i++) {
+          if (state.tabs[i].id !== id) { closedTitles.push(state.tabs[i].title); }
+        }
+        state.tabs = [keep];
+        state.active = keep.id;
+        state.renaming = null;
+        state.closed = state.closed.concat(closedTitles);
+        renderTabs();
+        renderBoard();
+      }
+
+      function nameTaken(name, exceptId) {
+        var lower = name.toLowerCase();
+        for (var i = 0; i < state.tabs.length; i++) {
+          var t = state.tabs[i];
+          if (t.id !== exceptId && t.title.toLowerCase() === lower) { return true; }
+        }
+        for (var j = 0; j < state.closed.length; j++) {
+          if (state.closed[j].toLowerCase() === lower) { return true; }
+        }
+        return false;
+      }
+
+      function validateName(value, oldTitle, id) {
+        var trimmed = value.trim();
+        if (trimmed.length === 0) {
+          return "名字是空的：给这块板写一件事，比如「周会」";
+        }
+        if (trimmed.length > 40) {
+          return "名字 " + trimmed.length + " 个字符，上限 40：标签条上放不下，也说不清一件要做的事";
+        }
+        if (trimmed.charAt(0) === ".") {
+          return "名字不许以句点开头（那是给 .sync 这类目录留的）";
+        }
+        if (trimmed.charAt(trimmed.length - 1) === ".") {
+          return "名字不许以句点结尾（Windows 会把它吃掉，落盘的就是另一个名字）";
+        }
+        if (/[\\/:*?"<>|]/.test(trimmed)) {
+          return "名字里有不能当文件名的字符";
+        }
+        if (trimmed.indexOf("..") >= 0) {
+          return "名字里不许有 ..（板子只能建在这块板旁边的目录里）";
+        }
+        if (trimmed !== oldTitle && nameTaken(trimmed, id)) {
+          return "这块板已经在了：" + trimmed;
+        }
+        return null;
+      }
+
+      function startRename(id) {
+        if (state.mode === "old") { return; }
+        closeMenu();
+        if (!tabById(id)) { return; }
+        state.renaming = id;
+        renderTabs();
+      }
+
+      var renameBusy = false;
+
+      function commitRename(cancel) {
+        if (!state.renaming || renameBusy) { return; }
+        var id = state.renaming;
+        var tab = tabById(id);
+        if (!tab) { state.renaming = null; renderTabs(); return; }
+
+        if (cancel) {
+          state.renaming = null;
+          renderTabs();
+          return;
+        }
+
+        var input = document.getElementById("ospRename");
+        if (!input) { state.renaming = null; renderTabs(); return; }
+
+        var value = input.value;
+        var problem = validateName(value, tab.title, id);
+        if (problem) {
+          toast(problem);
+          input.setAttribute("aria-invalid", "true");
+          input.focus();
+          return;
+        }
+
+        renameBusy = true;
+        tab.title = value.trim();
+        state.renaming = null;
+        renderTabs();
+        renameBusy = false;
+      }
+
+      /* ── 菜单 ─────────────────────────────────────── */
+
+      var menuState = { kind: null, id: null };
+
+      function closeMenu() {
+        menuEl.hidden = true;
+        menuEl.innerHTML = "";
+        menuState.kind = null;
+        menuState.id = null;
+      }
+
+      function openMenuAt(kind, id, clientX, clientY) {
+        menuState.kind = kind;
+        menuState.id = id;
+        renderMenuContent();
+        menuEl.hidden = false;
+
+        var wr = win.getBoundingClientRect();
+        var mr = menuEl.getBoundingClientRect();
+        var left = clientX - wr.left;
+        var top = clientY - wr.top;
+        if (left + mr.width > win.clientWidth - 8) { left = Math.max(8, clientX - wr.left - mr.width); }
+        if (top + mr.height > win.clientHeight - 8) { top = Math.max(8, clientY - wr.top - mr.height); }
+        menuEl.style.left = left + "px";
+        menuEl.style.top = top + "px";
+      }
+
+      function renderMenuContent() {
+        var kind = menuState.kind;
+        var id = menuState.id;
+        var html = "";
+
+        if (kind === "tab") {
+          var tab = tabById(id);
+          if (!tab) { closeMenu(); return; }
+          html += '<button type="button" class="sp-menu-row" data-action="rename" role="menuitem">重命名<span class="sp-menu-hint">F2</span></button>';
+          html += '<button type="button" class="sp-menu-row" data-action="close" role="menuitem">关闭<span class="sp-menu-hint">Ctrl+W</span></button>';
+          if (state.tabs.length > 1) {
+            html += '<button type="button" class="sp-menu-row" data-action="closeOthers" role="menuitem">关闭其他</button>';
+          }
+        } else if (kind === "strip") {
+          html += '<button type="button" class="sp-menu-row" data-action="new" role="menuitem">新板块<span class="sp-menu-hint">Ctrl+T</span></button>';
+        } else if (kind === "open") {
+          html += '<div class="sp-menu-title">盘上的板子</div>';
+          if (state.closed.length === 0) {
+            html += '<div class="sp-menu-note">盘上的板子都开着呢</div>';
+          } else {
+            for (var i = 0; i < state.closed.length; i++) {
+              html += '<button type="button" class="sp-menu-row" data-action="openBoard" data-name="' +
+                esc(state.closed[i]) + '" role="menuitem">' + esc(state.closed[i]) + "</button>";
+            }
+          }
+        }
+
+        menuEl.innerHTML = html;
+      }
+
+      function runMenuAction(action, row) {
+        var id = menuState.id;
+        if (action === "rename") { closeMenu(); startRename(id); return; }
+        if (action === "close") { closeMenu(); closeTab(id); return; }
+        if (action === "closeOthers") { closeMenu(); closeOthers(id); return; }
+        if (action === "new") { closeMenu(); addBoard(); return; }
+        if (action === "openList") {
+          menuState.kind = "open";
+          renderMenuContent();
+          var wr = win.getBoundingClientRect();
+          var mr = menuEl.getBoundingClientRect();
+          var left = parseFloat(menuEl.style.left) || 8;
+          var top = parseFloat(menuEl.style.top) || 8;
+          if (left + mr.width > win.clientWidth - 8) { left = Math.max(8, win.clientWidth - mr.width - 8); }
+          if (top + mr.height > win.clientHeight - 8) { top = Math.max(8, win.clientHeight - mr.height - 8); }
+          menuEl.style.left = left + "px";
+          menuEl.style.top = top + "px";
+          return;
+        }
+        if (action === "openBoard") {
+          var name = row.getAttribute("data-name");
+          if (!name) { return; }
+          closeMenu();
+          var idx = state.closed.indexOf(name);
+          if (idx >= 0) { state.closed.splice(idx, 1); }
+          var existing = state.tabs.filter(function (t) { return t.title === name; })[0];
+          if (existing) { activate(existing.id); return; }
+          createBoard(name);
+          return;
+        }
+      }
+
+      /* ── 旧版新建浮窗 ──────────────────────────────── */
+
+      function openOldPanel() {
+        closeMenu();
+        oldPanel.hidden = false;
+        oldNote.textContent = "盘上的板子都开着呢";
+        oldInput.value = "";
+        oldInput.focus();
+      }
+
+      function closeOldPanel() {
+        oldPanel.hidden = true;
+        oldInput.value = "";
+      }
+
+      function submitOldPanel() {
+        var value = oldInput.value;
+        var problem = validateName(value, "", null);
+        if (problem) {
+          toast(problem);
+          oldInput.focus();
+          return;
+        }
+        var name = value.trim();
+        closeOldPanel();
+        createBoard(name);
+      }
+
+      /* ── 控件 ─────────────────────────────────────── */
+
+      function syncControls() {
+        modeNew.setAttribute("aria-pressed", state.mode === "new" ? "true" : "false");
+        modeOld.setAttribute("aria-pressed", state.mode === "old" ? "true" : "false");
+        motionBtn.setAttribute("aria-pressed", state.motion ? "true" : "false");
+        motionBtn.textContent = state.motion ? "动效 开" : "动效 关";
+        themeBtn.setAttribute("aria-pressed", state.theme === "dark" ? "true" : "false");
+        themeBtn.textContent = state.theme === "dark" ? "浅色" : "深色";
+      }
+
+      function setMode(mode) {
+        if (state.mode === mode) { return; }
+        if (state.renaming) { state.renaming = null; }
+        closeMenu();
+        closeOldPanel();
+        state.mode = mode;
+        win.setAttribute("data-mode", mode);
+        renderTabs();
+        renderBoard();
+        syncControls();
+      }
+
+      /* ── 事件 ─────────────────────────────────────── */
+
+      tabsEl.addEventListener("click", function (e) {
+        var target = e.target;
+        if (!(target instanceof Element)) { return; }
+        var close = target.closest(".sp-close");
+        if (close) {
+          var tabEl = close.closest(".sp-tab");
+          if (tabEl) { closeTab(tabEl.getAttribute("data-id")); }
+          return;
+        }
+        var hit = target.closest(".sp-tab-hit");
+        if (hit) {
+          var node = hit.closest(".sp-tab");
+          if (node) { activate(node.getAttribute("data-id")); }
+        }
+      });
+
+      tabsEl.addEventListener("dblclick", function (e) {
+        var target = e.target;
+        if (!(target instanceof Element)) { return; }
+        var hit = target.closest(".sp-tab-hit");
+        if (hit) {
+          var node = hit.closest(".sp-tab");
+          if (node) { startRename(node.getAttribute("data-id")); }
+        }
+      });
+
+      tabsEl.addEventListener("keydown", function (e) {
+        var target = e.target;
+        if (!(target instanceof Element)) { return; }
+        if (target.id === "ospRename") {
+          if (e.key === "Enter") { e.preventDefault(); commitRename(false); }
+          else if (e.key === "Escape") { e.preventDefault(); commitRename(true); }
+          return;
+        }
+        var hit = target.closest(".sp-tab-hit");
+        if (!hit) { return; }
+        if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+          var node = hit.closest(".sp-tab");
+          if (!node) { return; }
+          var idx = state.tabs.findIndex(function (t) { return t.id === node.getAttribute("data-id"); });
+          if (idx < 0) { return; }
+          var next = (idx + (e.key === "ArrowRight" ? 1 : -1) + state.tabs.length) % state.tabs.length;
+          e.preventDefault();
+          activate(state.tabs[next].id);
+          var nextNode = tabNode(state.tabs[next].id);
+          var nextHit = nextNode ? nextNode.querySelector(".sp-tab-hit") : null;
+          if (nextHit) { nextHit.focus(); }
+        }
+      });
+
+      tabsEl.addEventListener("focusout", function (e) {
+        if (!state.renaming) { return; }
+        if (e.target && e.target.id === "ospRename") {
+          window.setTimeout(function () {
+            if (state.renaming) { commitRename(false); }
+          }, 0);
+        }
+      });
+
+      tabsEl.addEventListener("contextmenu", function (e) {
+        var target = e.target;
+        if (!(target instanceof Element)) { return; }
+        var node = target.closest(".sp-tab");
+        e.preventDefault();
+        if (state.mode === "old") { return; }
+        if (state.renaming) { commitRename(false); }
+        if (node) {
+          openMenuAt("tab", node.getAttribute("data-id"), e.clientX, e.clientY);
+        } else {
+          openMenuAt("strip", null, e.clientX, e.clientY);
+        }
+      });
+
+      strip.addEventListener("contextmenu", function (e) {
+        if (e.target instanceof Element && e.target.closest(".sp-tab")) { return; }
+        e.preventDefault();
+        if (state.mode === "old") { return; }
+        openMenuAt("strip", null, e.clientX, e.clientY);
+      });
+
+      strip.addEventListener("pointerdown", function (e) {
+        if (!(e.target instanceof Element)) { return; }
+        if (e.target.closest(".sp-tab") || e.target.closest(".sp-add") || e.target.closest(".sp-caption")) { return; }
+        if (oldPanel.hidden) { closeMenu(); }
+      });
+
+      addBtn.addEventListener("click", addBoard);
+
+      addBtn.addEventListener("contextmenu", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (state.mode === "old") { return; }
+        openMenuAt("strip", null, e.clientX, e.clientY);
+      });
+
+      menuEl.addEventListener("click", function (e) {
+        var target = e.target;
+        if (!(target instanceof Element)) { return; }
+        var row = target.closest(".sp-menu-row");
+        if (!row) { return; }
+        runMenuAction(row.getAttribute("data-action"), row);
+      });
+
+      oldInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); submitOldPanel(); }
+        else if (e.key === "Escape") { e.preventDefault(); closeOldPanel(); }
+      });
+
+      win.addEventListener("pointerdown", function (e) {
+        var target = e.target;
+        if (!(target instanceof Element)) { return; }
+        if (!oldPanel.hidden && !oldPanel.contains(target)) {
+          closeOldPanel();
+        }
+        if (!menuEl.hidden && !menuEl.contains(target)) {
+          closeMenu();
+        }
+      }, true);
+
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") {
+          if (!menuEl.hidden) { closeMenu(); return; }
+          if (state.renaming) { commitRename(true); return; }
+          if (!oldPanel.hidden) { closeOldPanel(); }
+        }
+      });
+
+      modeNew.addEventListener("click", function () { setMode("new"); });
+      modeOld.addEventListener("click", function () { setMode("old"); });
+
+      motionBtn.addEventListener("click", function () {
+        state.motion = !state.motion;
+        win.setAttribute("data-motion", state.motion ? "on" : "off");
+        syncControls();
+      });
+
+      themeBtn.addEventListener("click", function () {
+        state.theme = state.theme === "dark" ? "light" : "dark";
+        win.setAttribute("data-theme", state.theme);
+        syncControls();
+      });
+
+      renderTabs();
+      renderBoard();
+      syncControls();
+    })();
+  </script>
+</div>
+<h2>配方（以本页 getComputedStyle 为源，界面侧落在 Core/Chrome.cs 的 TabStrip）</h2><table><tr><th>格</th><th>值</th><th>WinUI 3 落点</th><th>状态</th></tr><tr><td>标题条</td><td>38 高；条底 <code>#ECEEF2</code> / <code>#17191C</code>；底发丝 11%</td><td>TitleBarHost 背景 + 1px Rectangle；TabView Background 透明</td><td>已移植</td></tr><tr><td>标签</td><td>34 高；上沿 8；13px；左内缩 12；最小 82 / 最大 220；活动填充＝板底</td><td>TabViewItem.CornerRadius + 主题资源 + Header TextBlock trimming</td><td>已移植</td></tr><tr><td>非活动 / 悬停</td><td>墨 <code>#5A6068</code> / <code>#B9BEC5</code>；悬停 5.5% / 7.5%；分隔 9% / 10%</td><td>TabViewItemHeaderForeground / PointerOver / Separator 主题资源</td><td>已移植</td></tr><tr><td>关闭</td><td>视觉 20 / 命中 24 / 圆角 6 / 字 10；活动与悬停才出现</td><td>CloseButtonOverlayMode=OnPointerOver；每次重建后强制拨一次属性，平台才会推给后加的项</td><td>已移植；非活动 × 已收起；命中区 24 是界面侧补的</td></tr><tr><td>加号</td><td>28 / 圆角 6 / 字 17；紧跟最后一枚</td><td>TabView 铺满宿主、隐藏原生加号；自绘 28px 按钮按最后一枚 TabContainer 的右缘定位</td><td>已移植；chrome 截图量到差 4px</td></tr><tr><td>动效</td><td>悬停 120ms；标签增删不做延迟入场（名字必须与标签同帧）</td><td>TabContainer.BackgroundTransition 挂 BrushTransition；清空内部 TabListView.ItemContainerTransitions（AddDeleteThemeTransition 曾让新标签空 170–400ms）</td><td>已挂 120ms（自检读回）；新标签探针无空白帧</td></tr><tr><td>新建</td><td>点 + 直接建 <code>未命名板1</code>（被占才 2、3 顺延），不弹名字</td><td>BoardLocator.NewUntitledBoard(avoid=开着的板) + CanvasStore.Write + SwitchToBoard</td><td>已定档；第五轮改成关掉即删（最后一块拒关）</td></tr><tr><td>改名</td><td>右键标签 → 行内输入；Enter 提交，Esc 取消</td><td>TabViewItem.Header 换 TextBox；文件与 sidecar 移动；watcher/shot/sync 重绑</td><td>已定档；同步远端不迁</td></tr></table><p>未证：悬停/增删动画的实际观感，以及标签多到溢出后加号与滚动按钮的相对位置。这两格是真手/后续一轮的视觉债，不记作已证。</p><h2>第二轮真机修正（2026-10-22）</h2><ul><li><strong>双击/右键</strong>：标题栏整条被 <code>SetTitleBar</code> 标成 Caption，双击被系统读成最大化、右键弹系统菜单。标签与加号现在用 <code>InputNonClientPointerSource</code> 标成 <code>Passthrough</code>（物理像素，<code>TransformToVisual(null) × RasterizationScale</code>）；双击进行内改名。真机合成鼠标：窗口 rect 不变、chrome 图里输入框选中；右键弹「重命名／关闭／关闭其他／打开盘上的板子」。</li><li><strong>接缝</strong>：底发丝与顶边线用负右内缩补到窗口右缘（系统按钮下面也有线）；活动标签仍盖住自己那一段。</li><li><strong>窗外框（已否）</strong>：补顶边那版被他判"黑线 + 白带更丑"；第三轮改成无系统框 + 自绘三枚标题按钮，见下。</li><li><strong>组框</strong>：开板时把有成员的组框贴回 <code>Enclose</code> 并保存；空组不画、不接鼠标、也不进 Ctrl+A/框选（仍留在文件里，等便签挪进去会复活）。</li></ul><p>真机证据：<code>D:\Temp\osp-r2-frame.png</code>、<code>osp-r2-dblclick.png</code>、<code>osp-r2-context.png</code>。</p><h2>第三轮真机修正（2026-10-22）</h2><ul><li><strong>拖动残影</strong>：视口剔除原来只把 <code>Width/Height</code> 置零，三枚纸影 band 在卡盒子外，于是只剩阴影；改为 <code>Visibility.Collapsed</code>，自检 <code>16 格已 Collapsed</code>。</li><li><strong>窗框定案</strong>：Win10 上 <code>DWMWA_BORDER_COLOR</code> 返回 <code>0x80070057</code>、<code>DwmExtendFrameIntoClientArea</code> 无视觉变化 ⇒ <code>SetBorderAndTitleBar(false,false)</code> + 自绘 3×46 标题按钮；最大化按 <code>DisplayArea.WorkArea</code> 补 8px 非客户带，client 实测 <code>1852×1080@68,0</code>；拖拽、左右/右下缩放、最大化还原关闭、双击空白均实测。</li><li>菜单/纸影/控件等其余视觉面另开一轮审计，不借这一轮一拍脑门。</li></ul><p>证据：<code>D:\Temp\osp-chrome-custom.png</code>、<code>D:\Temp\osp-maxfit-top.png</code>；最终 <code>check.cmd</code> 全过，自检 <code>selftest 剔除: 16 格已 Collapsed</code>、<code>交互区 6 块（应 6）</code>。</p><h2>第四轮真机修正（2026-10-22）</h2><ul><li><strong>白条</strong>：无框窗口仍留着 8px 非客户 resize 带，客户区从 <code>y=8</code> 开始，露出窗后内容。WndProc 处理 <code>WM_NCCALCSIZE</code> 让客户区铺满外框；<code>WM_NCHITTEST</code> 4 DIP 返回缩放码，并给 <code>InputNonClientPointerSource</code> 补四边 border 区。实测 client=outer <code>1100×700@100,100</code>，最大化 client <code>1852×1080@68,0</code>，右边拖拽 <code>1100→1182</code>。</li><li><strong>未命名板</strong>：从 <code>未命名板1</code> 起，跳过开着的/非空的，复用零节点空壳；关掉本轮 + 建出的未命名板＝清正文、删相机 sidecar、留空壳（第五轮改成关掉即删，见下）。</li><li><strong>空白标签帧</strong>：内部 <code>TabListView</code> 的 <code>AddDeleteThemeTransition</code> 让整枚新标签先不可见 170–400ms；清空 <code>ItemContainerTransitions</code>，并去掉建板路径里多余的 <code>UpdateLayout</code>（98.7→71ms）。探针里名字与标签同帧（+143ms），没有"有标签没名字"的帧。</li></ul><p>证据：<code>D:\Temp\osp-chrome-final.png</code>、<code>D:\Temp\plus-frames2\final.png</code>；界面自检新增未命名板生死链（创建→放格→关闭清空→再建复用 1），核心测试 472 项。</p><h2>第五轮真机修正（2026-10-22）</h2><ul><li><strong>白条</strong>：默认启动 outer <code>1320×840</code>、client 只有 <code>1304×824</code>、原点内缩 8px——第一次 <code>WM_NCCALCSIZE</code> 发生在装 WndProc 之前，只有最大化/外部 <code>SetWindowPos</code> 才重算（我的探针一直摆窗口，恰好替产品做了这次重算）。修法是 Loaded 后一拍与首次 Activated 调 <code>ForceClientFill()</code>：client≠outer 就 <code>SWP_FRAMECHANGED</code> 重算，不移动/不缩放/不抢焦点。<code>run-board.cmd</code> 默认启动实测 outer=client <code>1320×840@146,78</code>，四态顶行都是 <code>236,238,242</code>；自检新增 <code>ClientSize==Size</code>。另把 WinUI 的 1px 标题栏条（<code>ExtendsContentIntoTitleBar</code>/<code>SetTitleBar</code>）也去掉，标题拖动/双击由 WndProc 的 <code>HTCAPTION</code> + <code>Caption</code> 区承担。</li><li><strong>关掉即删</strong>：<code>Ctrl＋W</code>/×、关闭、关闭其他都删本机 <code>.canvas</code>、sidecar 与这块板的历史快照（命名板也一样）；最后一块拒关；“打开盘上的板子”子菜单撤掉；同步账本保留、远端那份不删。</li><li><strong>键位清单</strong>：宽窗口三栏（30 行 → 每栏 10 行、栏距 44），窄窗口退回两栏；面板高度从约 600 降到约 400，不再压住回执。</li></ul><p>证据：<code>D:\Templt12-tabs\*.png</code>、<code>D:\Temp\cheat-before.png</code>。</p><h2>第六轮：自绘轻投影（2026-10-22）</h2><ul><li>他在描边/投影两个预览里选投影，并说预览太重。实物改成约 18px 软边、峰值约 13% 黑（两层高斯 σ=10/2.5，下移 2px），由独立的 owned tool window（<code>WS_EX_LAYERED|TRANSPARENT|NOACTIVATE|TOOLWINDOW</code>）用 <code>UpdateLayeredWindow</code> 画；最大化/最小化隐藏，移动/缩放跟随，关闭销毁。</li><li>阴影窗口一开始没 owner，<code>Get-Process.MainWindowHandle</code> 把它认成主窗口（1356×876）；设 <code>GWLP_HWNDPARENT=主窗口</code> 后主窗口恢复 1320×840，阴影用 <code>SetWindowPos(shadow, owner, …)</code> 放在后面。</li><li>白底实测 window 外左侧 214→254、上侧 235→255、下侧 224→254；最大化不画、还原回来。默认 run-board 启动 outer=client 1320×840，顶行条底色。</li></ul><p>证据：<code>D:\Temp\std-shadow-start\start.png</code>、<code>D:\Temp\shadow-alt15\*.png</code>；<code>check.cmd</code> 全过。</p></body></html>

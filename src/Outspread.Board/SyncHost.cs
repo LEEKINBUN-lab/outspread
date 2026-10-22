@@ -36,8 +36,10 @@ internal sealed class SyncHost
     private SyncEngine? _engine;
     private SyncConfig? _engineConfig;
     private GitHubContents? _transport;
+    private CancellationTokenSource _cancel = new();
     private bool _running;
     private bool _wantedAgain;
+    private bool _stopped;
 
     public SyncHost(string boardPath, Action<string> say, DispatcherQueue queue)
     {
@@ -80,6 +82,9 @@ internal sealed class SyncHost
             return;
         }
 
+        _stopped = false;
+        _cancel.Dispose();
+        _cancel = new CancellationTokenSource();
         _timer.Start();
 
         _ = RoundAsync();
@@ -123,6 +128,8 @@ internal sealed class SyncHost
 
     public void Stop()
     {
+        _stopped = true;
+        _cancel.Cancel();
         _timer.Stop();
 
         _transport?.Dispose();
@@ -145,6 +152,11 @@ internal sealed class SyncHost
     /// </summary>
     private async Task RoundAsync()
     {
+        if (_stopped)
+        {
+            return;
+        }
+
         if (_running)
         {
             _wantedAgain = true;
@@ -164,13 +176,36 @@ internal sealed class SyncHost
         ReportMigrations();
 
         _running = true;
+        var cancel = _cancel.Token;
 
         try
         {
-            Say(await EngineFor(config).SynchronizeAsync());
+            var report = await EngineFor(config).SynchronizeAsync(cancel);
+
+            // A round that was still in flight when this board was closed must not narrate
+            // the file it can no longer read. Closing deletes the file; that is not a sync error.
+            if (_stopped || cancel.IsCancellationRequested)
+            {
+                Diagnostics.Write("sync round dropped: board closed");
+
+                return;
+            }
+
+            Say(report);
+        }
+        catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+        {
+            Diagnostics.Write("sync round canceled: board closed");
         }
         catch (Exception ex) when (ex is SyncSetupException or HttpRequestException or IOException or InvalidOperationException)
         {
+            if (_stopped || cancel.IsCancellationRequested)
+            {
+                Diagnostics.Write("sync round dropped after stop");
+
+                return;
+            }
+
             // A configuration or transport problem gets the same one sentence as a refused
             // round. Neither of them is allowed to become a retry loop nobody can see.
             _say($"同步没走：{ex.Message}");
@@ -181,7 +216,7 @@ internal sealed class SyncHost
         {
             _running = false;
 
-            if (_wantedAgain)
+            if (_wantedAgain && !_stopped)
             {
                 _wantedAgain = false;
 
@@ -250,6 +285,14 @@ internal sealed class SyncHost
                 {
                     _say($"还没传上去 · 本地 {report.PendingNodes} 处等着（{report.Detail}）");
                 }
+
+                break;
+
+            case SyncOutcome.LocalUnreadable:
+                // The raw exception can be a long path; keep it in the log and say the one
+                // actionable sentence on screen. A deleted board is handled by the stop guard above.
+                Diagnostics.Write($"sync local unreadable: {report.Detail}");
+                _say("同步未执行：本地文件不可读（详情见日志）");
 
                 break;
 

@@ -264,7 +264,13 @@ public sealed partial class MainWindow
                 ? $"只看{DueLabel(state)}的格子"
                 : "没有筛选";
 
-        _bannerRow.Text = $"{what} · {notes.Count} 格中的 {shown} 格 · 点这清除";
+        // 折进组里的那几格必须有一句，否则筛选看起来像删了便签。框上那行标签会被卡片盖住
+        // （框贴着成员收，没给标题留边），所以这句话由这条一直在屏幕上的横幅来说。
+        var folded = FoldedAwayCount;
+
+        _bannerRow.Text = $"{what} · {notes.Count} 格中的 {shown} 格"
+            + (folded > 0 ? $" · {folded} 格折进了组" : string.Empty)
+            + " · 点这清除";
         FilterBanner.Visibility = Visibility.Visible;
     }
 

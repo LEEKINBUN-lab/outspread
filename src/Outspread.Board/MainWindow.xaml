@@ -27,15 +27,88 @@
         </Grid.Resources>
 
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- 原来这里有一栏页眉：左边"铺陈"、右边"板子 · scratch"。删了——板子就是要占满，
-             而名字和文件名该说话的时候在底下那行说（打开时报一次，之后让位给操作回执）。 -->
+        <!--
+            标题栏＝一条浏览器式标签。2026-10-22 他把 10-21 的"皮全交给平台"覆盖掉了：
+            原生 TabView 的默认样子里活动标签和条底几乎同色、加号被推到标题条右侧、切换没有
+            过渡，他点名的"难区分/加号奇怪/不流畅"就是这三格。骨架仍是原生 TabView（键盘、
+            溢出滚动、关闭请求、标题栏拖拽都还由平台管），只换皮与几何。
+
+            宿主这层 Grid 是 SetTitleBar 的目标：标签和加号左对齐、宽度按内容走，剩下的空白
+            才是拖窗口的热区。条底与那条发丝由宿主画，TabView 自己透明——活动标签填成板底色，
+            刚好盖住发丝和板面接上，非活动区才看得见那条线。
+
+            这块放在 Root 而不是 BoardArea 里，是有意的：BoardArea 是"板面"的取证框（shot 渲染
+            的就是它，见 CaptureAsync）。shot 多了一档 mode=chrome 渲染 Root——标签条要有自己的
+            读数，不能像当年的 Popup 那样变成一个拍不到的断言。
+        -->
+        <Grid
+            x:Name="TitleBarHost"
+            Grid.Row="0"
+            UseLayoutRounding="False"
+            Background="#FFF3F3F3">
+            <Rectangle
+                x:Name="TabStripLine"
+                Height="1"
+                VerticalAlignment="Bottom"
+                Fill="#1C000000"
+                IsHitTestVisible="False" />
+
+            <!-- TabView 必须铺满宿主：它在内容宽下面只报加号那 42px，标签项会被 ScrollViewer
+                 量成 0（自检第一发就是这么红的）。所以原生加号关掉，加号由下面这枚自己的
+                 Button 按"最后一枚标签的右缘 + 4"定位——位置归我们，键盘与命中区归真按钮。 -->
+            <TabView
+                x:Name="BoardTabs"
+                UseLayoutRounding="False"
+                VerticalAlignment="Top"
+                IsAddTabButtonVisible="False"
+                CloseButtonOverlayMode="OnPointerOver"
+                TabWidthMode="SizeToContent"
+                CanDragTabs="False"
+                CanReorderTabs="False"
+                SelectionChanged="OnBoardTabSelected"
+                TabCloseRequested="OnBoardTabClosed" />
+
+            <Button
+                x:Name="AddBoardButton"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                Width="28"
+                Height="28"
+                MinWidth="0"
+                Padding="0"
+                BorderThickness="0"
+                Background="Transparent"
+                FontSize="15"
+                Content="＋"
+                ToolTipService.ToolTip="新板块 · Ctrl+T"
+                AutomationProperties.Name="新板块" />
+
+            <!-- 自绘标题按钮。系统框整条去掉之后，这三枚是我们自己的客户区控件；
+                 右边的 -138 让它们落回宿主内缩让出的窗口右缘。 -->
+            <StackPanel
+                x:Name="CaptionButtons"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Height="38"
+                Margin="0,0,-138,0">
+                <Button x:Name="MinimizeButton" Width="46" Height="38" IsTabStop="False" />
+                <Button x:Name="MaximizeButton" Width="46" Height="38" IsTabStop="False" />
+                <Button x:Name="CloseButton" Width="46" Height="38" IsTabStop="False" />
+            </StackPanel>
+        </Grid>
+
+        <!-- 原来这里有一栏页眉：左边"铺陈"、右边"板子 · scratch"。删了——板子就是要占满。
+             现在顶上这条是标签栏，它说的事和那栏页眉不同：页眉复读文件名，标签栏是在回答
+             "这块屏幕现在处理哪件事"。名字仍然同时在底下那行回执里说一次。 -->
         <Grid
             x:Name="BoardArea"
-            Grid.Row="0"
+            Grid.Row="1"
             UseLayoutRounding="False"
             AllowDrop="True"
             IsTabStop="True"

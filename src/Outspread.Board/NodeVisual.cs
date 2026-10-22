@@ -74,6 +74,55 @@ public sealed class NodeVisual : ContentControl
     private readonly TextBlock _label;
 
     /// <summary>
+    /// 组框的"将移入/将移出"警示环：组钮拖便签的那一拍，目标框亮蓝、被离开的框亮红
+    /// （实线＋一圈柔光，150ms 淡入淡出）。反馈画在框上而不是便签上——分组这件事是框的。
+    /// </summary>
+    private readonly Microsoft.UI.Xaml.Shapes.Rectangle _groupHalo = new()
+    {
+        StrokeThickness = 7,
+        IsHitTestVisible = false,
+        Opacity = 0,
+        Margin = new Thickness(-5),
+        RadiusX = 4,
+        RadiusY = 4,
+    };
+
+    private string? _groupAlert;
+
+    /// <summary>
+    /// 组的名牌：画在框顶边<b>上方</b>，压着边线一角。画在框内就会和成员便签的字重合
+    /// （他 10-22 报的第二条），而"点名字＝选中组里所有便签"需要一个货真价实的可点区。
+    /// </summary>
+    private readonly Border _namePlate = new()
+    {
+        HorizontalAlignment = HorizontalAlignment.Left,
+        VerticalAlignment = VerticalAlignment.Top,
+        CornerRadius = new CornerRadius(6),
+        BorderThickness = new Thickness(1),
+        Padding = new Thickness(5, 1, 6, 3),
+    };
+
+    private readonly TranslateTransform _nameLift = new();
+
+    /// <summary>
+    /// 组的"整组门"：一条盖住虚线的环带（框外 7 屏幕像素、框内 7），点它＝选中组里所有便签。
+    /// 框内其余地方<b>不接鼠标</b>——单击必须落在里面的那枚便签上，这是这版语义的全部要点。
+    /// </summary>
+    private readonly Microsoft.UI.Xaml.Shapes.Path _grab = new()
+    {
+        Fill = new SolidColorBrush(Colors.Transparent),
+        Visibility = Visibility.Collapsed,
+    };
+
+    private string _grabKey = string.Empty;
+
+    /// <summary>上下还有没露出来的行时，卡片角上一枚"更多"牌子；比句末三个点更明确。</summary>
+    private readonly TextBlock _moreAboveText = new();
+    private readonly TextBlock _moreBelowText = new();
+    private readonly Border _moreAbove;
+    private readonly Border _moreBelow;
+
+    /// <summary>
     /// The same body, painted as blocks, when it carries markdown: one element per line so a heading
     /// can be taller without the rest of the card inheriting its leading. Only one of
     /// <see cref="_label"/> and this is visible at a time — a note with no markup in it paints exactly
@@ -184,6 +233,11 @@ public sealed class NodeVisual : ContentControl
 
         UseLayoutRounding = false;
         IsHitTestVisible = true;
+
+        // 折叠走平移，不走 Canvas 位置：那条"不用 render transform"的规矩针对的是缩放（字形会糊），
+        // 平移不改缩放，PanLayer 自己就是靠一枚 TranslateTransform 走的。
+        RenderTransform = _fold;
+
         HorizontalContentAlignment = HorizontalAlignment.Stretch;
         VerticalContentAlignment = VerticalAlignment.Stretch;
 
@@ -193,15 +247,35 @@ public sealed class NodeVisual : ContentControl
             FontFamily = NoteStyling.NoteFont,
         };
 
+        _moreAbove = MoreBadge(_moreAboveText, VerticalAlignment.Top, new Thickness(0, 4, 6, 0));
+        _moreBelow = MoreBadge(_moreBelowText, VerticalAlignment.Bottom, new Thickness(0, 0, 6, 4));
+        _moreAbove.Name = "MoreAbove";
+        _moreBelow.Name = "MoreBelow";
+
         _textHost.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         _textHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-        Grid.SetRow(_label, 0);
         Grid.SetRow(_md, 0);
         Grid.SetRow(_chips, 1);
-        _textHost.Children.Add(_label);
         _textHost.Children.Add(_md);
         _textHost.Children.Add(_chips);
+
+        if (Kind == CanvasNodeKind.Group)
+        {
+            // 组的整片区域不吃命中：单击要落在里面的那枚便签上。名字戴上顶边上方的名牌，
+            // 环带接"点边＝选整组"——这两样才是组的可点部。
+            _surface.IsHitTestVisible = false;
+            _label.TextWrapping = TextWrapping.NoWrap;
+            _label.TextTrimming = TextTrimming.CharacterEllipsis;
+            _namePlate.Child = _label;
+            _namePlate.RenderTransform = _nameLift;
+            _namePlate.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            Grid.SetRow(_label, 0);
+            _textHost.Children.Add(_label);
+        }
 
         _image = new Image
         {
@@ -216,8 +290,13 @@ public sealed class NodeVisual : ContentControl
         var paint = new Grid();
         paint.Children.Add(_bands);
         paint.Children.Add(_surface);
+        paint.Children.Add(_moreAbove);
+        paint.Children.Add(_moreBelow);
         paint.Children.Add(_press);
+        paint.Children.Add(_groupHalo);
         paint.Children.Add(_frame);
+        paint.Children.Add(_grab);
+        paint.Children.Add(_namePlate);
         // Once, here. It used to hang off Update behind a `!_dueBar.IsLoaded` guard, which is not a
         // membership test: a card updated twice before the tree has loaded — which is what a rebuild
         // inside one synchronous pass does — took IsLoaded as false and added a rectangle that was
@@ -323,6 +402,78 @@ public sealed class NodeVisual : ContentControl
     internal (int Total, int Visible, int First, bool HasMore, bool Blocks) WindowState()
         => (_totalLines, _visibleLines, _firstLine, _hasMore, _md.Visibility == Visibility.Visible);
 
+    /// <summary>
+    /// 自检那一发读的组的门形：框内还吃不吃鼠标、环带与名牌开没开、名牌抬到了顶边上方几像素。
+    /// </summary>
+    internal (bool SurfaceHittable, Visibility Grab, Visibility Plate, double PlateLift, string? Alert) GroupChrome()
+        => (_surface.IsHitTestVisible, _grab.Visibility, _namePlate.Visibility, _nameLift.Y, _groupAlert);
+
+    /// <summary>组钮拖便签那一拍的反馈：in＝将进这一框（蓝）、out＝将离开这一框（红）、null＝回到虚线。</summary>
+    internal void SetGroupAlert(string? kind)
+    {
+        if (string.Equals(_groupAlert, kind, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _groupAlert = kind;
+        ApplyGroupAlert(fade: true);
+    }
+
+    private void ApplyGroupAlert(bool fade = false)
+    {
+        if (_groupAlert is null)
+        {
+            _frame.Stroke = new SolidColorBrush(NoteStyling.FallbackLine());
+            _frame.StrokeDashArray = [4, 3];
+            _frame.StrokeThickness = 1;
+
+            if (fade && _groupHalo.Opacity > 0)
+            {
+                FadeHalo(0);
+            }
+            else
+            {
+                _groupHalo.Opacity = 0;
+            }
+
+            return;
+        }
+
+        var brush = _groupAlert == "in" ? ChromeStyling.Ring : ChromeStyling.Snap;
+        var colour = ((Microsoft.UI.Xaml.Media.SolidColorBrush)brush).Color;
+
+        _frame.Stroke = brush;
+        _frame.StrokeDashArray = null;
+        _frame.StrokeThickness = 1.5;
+        _groupHalo.Stroke = new SolidColorBrush(Windows.UI.Color.FromArgb(56, colour.R, colour.G, colour.B));
+
+        if (fade)
+        {
+            FadeHalo(1);
+        }
+        else
+        {
+            _groupHalo.Opacity = 1;
+        }
+    }
+
+    private void FadeHalo(double to)
+    {
+        var animation = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+        {
+            To = to,
+            Duration = TimeSpan.FromMilliseconds(Motion.BaseMs),
+        };
+
+        var board = new Microsoft.UI.Xaml.Media.Animation.Storyboard { FillBehavior = Microsoft.UI.Xaml.Media.Animation.FillBehavior.HoldEnd };
+
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(animation, _groupHalo);
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(animation, "Opacity");
+        board.Children.Add(animation);
+        board.Begin();
+    }
+
     public string NodeId { get; }
 
     public CanvasNodeKind Kind { get; }
@@ -365,8 +516,32 @@ public sealed class NodeVisual : ContentControl
         _ => string.Empty,
     }));
 
-    public void Update(CanvasNode node, BoardViewState view, double rasterizationScale)
+    /// <summary>
+    /// 筛选这一发额外画在画面上的三样东西：折进锚点的位移（屏幕像素）、组框该画在哪、框上的后缀。
+    /// </summary>
+    /// <remarks>
+    /// 全是渲染层的事，一个字节都不进文档：筛选把三格并到一处的样子要是被写回文件，
+    /// 一次筛选就把便签的"真位置"同步给了手机。<see cref="FoldDX"/> 为 null 表示这一格正在播
+    /// 展开／折回的动画，位移交给 Storyboard，布局代码不许插手。
+    /// </remarks>
+    public sealed record Display(
+        double? FoldDX,
+        double? FoldDY,
+        bool FoldedAway,
+        Grouping.Rect? ShownFrame,
+        string? Suffix,
+        bool Revealed = false)
     {
+        public static readonly Display None = new(null, null, false, null, null);
+    }
+
+    /// <summary>折叠的位移走这一枚变换：它不改 Canvas 上的位置，所以撤销一次筛选就是把它归零。</summary>
+    private readonly TranslateTransform _fold = new();
+
+    public void Update(CanvasNode node, BoardViewState view, double rasterizationScale, Display? display = null)
+    {
+        display ??= Display.None;
+
         _windowNode = node;
         _windowView = view;
         _windowScale = rasterizationScale;
@@ -399,13 +574,25 @@ public sealed class NodeVisual : ContentControl
         }
 
         // 筛选是视图层的事：被滤掉的格子压暗但仍在原处，绝不移动、也不改文档（所以不进撤销栈）。
-        Opacity = !view.Filtering || NoteMarks.Shows(due, marks.Tags, view.TagFilter, view.DueFilter) ? 1d : 0.22d;
+        // 组里那些没命中的是唯一的例外——它们被**折进**命中的那一格背后，但那也只是这一枚变换。
+        var shows = display.Revealed || !view.Filtering || NoteMarks.Shows(due, marks.Tags, view.TagFilter, view.DueFilter);
+
+        Opacity = display.FoldedAway ? 0d : shows ? 1d : 0.22d;
         _label.Foreground = new SolidColorBrush(isGroup ? NoteStyling.InkFor(null, NoteStyling.SurfaceFor(null)) : ink);
 
-        Canvas.SetLeft(this, view.ToScreenX(node.X));
-        Canvas.SetTop(this, view.ToScreenY(node.Y));
-        Width = Math.Max(2, node.Width * view.Zoom);
-        Height = Math.Max(2, node.Height * view.Zoom);
+        // 组框在筛选时画在"看得见的那几格"的包围盒上——框跟着便签走，而文档里那份一个字节不动。
+        var shown = display.ShownFrame ?? new Grouping.Rect(node.Id, node.X, node.Y, node.Width, node.Height);
+
+        Canvas.SetLeft(this, view.ToScreenX(shown.X));
+        Canvas.SetTop(this, view.ToScreenY(shown.Y));
+        Width = Math.Max(2, shown.Width * view.Zoom);
+        Height = Math.Max(2, shown.Height * view.Zoom);
+
+        if (display.FoldDX is { } foldX && display.FoldDY is { } foldY)
+        {
+            _fold.X = foldX;
+            _fold.Y = foldY;
+        }
 
         // The clip lives on the card now, so the shadow band below it can be painted; text that
         // no longer fits still stays inside the card instead of spilling over a neighbour.
@@ -420,7 +607,11 @@ public sealed class NodeVisual : ContentControl
 
         UpdateEdge(node, view);
 
-        if (ShowText)
+        if (isGroup)
+        {
+            PaintGroupPlate(node, view, type, display);
+        }
+        else if (ShowText)
         {
             var leading = Math.Max(4, type.Leading * view.Zoom);
             var inset = Math.Clamp(type.Padding * view.Zoom, 0, 60);
@@ -430,6 +621,13 @@ public sealed class NodeVisual : ContentControl
             _label.LineHeight = leading;
 
             var body = Kind == CanvasNodeKind.Text ? marks.Body : DisplayText(node);
+
+            // 折进去的东西必须有一句"这里藏着几格"，否则筛选看起来像把便签删了。这句话长在框自己的
+            // 标题那一格里，不新发明一种控件：同一件东西（组的标题）多说一句，而不是多一枚牌子。
+            if (display.Suffix is { Length: > 0 } suffix)
+            {
+                body += suffix;
+            }
 
 
             // 不许出现"半行字被横切"。卡片高度可能是在网页那侧量出来的——同一串字在
@@ -469,14 +667,45 @@ public sealed class NodeVisual : ContentControl
 
             _firstLine = Math.Clamp(_firstLine, 0, Math.Max(0, _totalLines - 1));
 
-            _label.Text = _firstLine == 0 ? body : string.Join('\n', sourceLines.Skip(_firstLine));
-
             var innerWidth = Math.Max(20, (node.Width * view.Zoom) - (inset * 2));
+
+            var blocks = Kind == CanvasNodeKind.Text && Markdown.LooksLikeMarkdown(marks.Body);
+
+            // 手动拉高以后窗口必须说实话：整段现在放得下了，就回到第一行——"↑ 更多"亮着
+            // 而下面全是空白，比句末三个点更糟（他 10-22 报的第四条）。放不下但底下露着
+            // 空档时，窗口贴住底：不许留"显示不完也滚不动"的半屏空白。
+            if (_firstLine > 0)
+            {
+                if (blocks)
+                {
+                    var allLines = Markdown.Lines(marks.Body);
+
+                    if (MarkdownPaint.Count(type, view.Zoom, allLines, roomText) >= allLines.Count)
+                    {
+                        _firstLine = 0;
+                    }
+                }
+                else
+                {
+                    var need = Math.Max(
+                        sourceLines.Length,
+                        NaturalVisualLines(body, innerWidth, _label.FontSize, leading));
+
+                    if (need <= _visibleLines)
+                    {
+                        _firstLine = 0;
+                    }
+                    else if (_totalLines - _firstLine < _visibleLines)
+                    {
+                        _firstLine = Math.Max(0, _totalLines - _visibleLines);
+                    }
+                }
+            }
+
+            _label.Text = _firstLine == 0 ? body : string.Join('\n', sourceLines.Skip(_firstLine));
 
             _hasMore = HiddenBelow(_label.Text, innerWidth, _label.FontSize, leading)
                        || _totalLines - _firstLine > _visibleLines;
-
-            var blocks = Kind == CanvasNodeKind.Text && Markdown.LooksLikeMarkdown(marks.Body);
 
             _label.Visibility = blocks ? Visibility.Collapsed : Visibility.Visible;
             _md.Visibility = blocks ? Visibility.Visible : Visibility.Collapsed;
@@ -525,6 +754,142 @@ public sealed class NodeVisual : ContentControl
                 _decodeTier = tier;
                 LoadImage(node);
             }
+        }
+
+        UpdateMoreBadges(node, view);
+
+        // Update 每拍都把 _frame 的描边按默认虚线铺回去；警示态（组钮拖那一拍）要压过它。
+        ApplyGroupAlert();
+    }
+
+    /// <summary>
+    /// 组只画两样东西：压住顶边左上角的<b>名牌</b>，和沿虚线铺开的<b>环带</b>。框内不接鼠标，
+    /// 所以单击组里的便签落在那枚便签上（他 10-22 定的语义）；点名牌或环带才＝选中整组。
+    /// </summary>
+    private void PaintGroupPlate(CanvasNode node, BoardViewState view, NoteType type, Display display)
+    {
+        var zoom = view.Zoom;
+
+        _label.FontSize = Math.Max(10, type.Size * zoom);
+        _label.LineHeight = Math.Max(12, type.Leading * zoom);
+
+        var text = DisplayText(node);
+
+        // 折进去的那几格要有一句"藏着几格"，这句话长在名牌上——它本来就是组的标题行。
+        if (display.Suffix is { Length: > 0 } suffix)
+        {
+            text += suffix;
+        }
+
+        _label.Text = text;
+        _label.MaxLines = 1;
+        _label.MaxWidth = Math.Max(60, Width - 12);
+
+        _namePlate.Background = new SolidColorBrush(NoteStyling.SurfaceFor(null));
+        _namePlate.BorderBrush = new SolidColorBrush(NoteStyling.LineFor(null, NoteStyling.SurfaceFor(null)));
+
+        // 抬到框顶边上方：负移走 RenderTransform，不碰布局——命中区跟着变换走，
+        // 所以"点名字"和"看见名字"落在同一块像素上。
+        _namePlate.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        _nameLift.Y = -(_namePlate.DesiredSize.Height + 3);
+
+        _namePlate.Visibility = Visibility.Visible;
+
+        var band = 7;
+        var key = $"{Width:0.#}|{Height:0.#}";
+
+        if (key != _grabKey)
+        {
+            _grabKey = key;
+            _grab.Data = new GeometryGroup
+            {
+                FillRule = FillRule.EvenOdd,
+                Children =
+                {
+                    new RectangleGeometry { Rect = new Windows.Foundation.Rect(-band, -band, Width + band * 2, Height + band * 2) },
+                    new RectangleGeometry { Rect = new Windows.Foundation.Rect(band, band, Math.Max(0, Width - band * 2), Math.Max(0, Height - band * 2)) },
+                },
+            };
+        }
+
+        _grab.Visibility = Visibility.Visible;
+
+        // 组没有行窗口这回事：滚轮在这一格上永远该交回板子去缩放。
+        _hasMore = false;
+        _firstLine = 0;
+        _totalLines = 1;
+        _visibleLines = 1;
+
+        _md.Visibility = Visibility.Collapsed;
+        _chips.Visibility = Visibility.Collapsed;
+    }
+
+    private static Border MoreBadge(TextBlock text, VerticalAlignment align, Thickness margin)
+    {
+        text.IsHitTestVisible = false;
+        text.FontFamily = NoteStyling.NoteFont;
+        text.FontWeight = Microsoft.UI.Text.FontWeights.Medium;
+        text.VerticalAlignment = VerticalAlignment.Center;
+
+        return new Border
+        {
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = align,
+            Margin = margin,
+            Padding = new Thickness(5, 1, 5, 2),
+            CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(1),
+            IsHitTestVisible = false,
+            Visibility = Visibility.Collapsed,
+            Child = text,
+        };
+    }
+
+    /// <summary>
+    /// 卡片只画得下几行时，角上给一枚"更多 ↓ / ↑ 更多"：句末省略号说的是"断了"，
+    /// 这枚牌子说的是"剩下的在下面，滚轮能翻到"。
+    /// </summary>
+    private void UpdateMoreBadges(CanvasNode node, BoardViewState view)
+    {
+        var textCard = Kind == CanvasNodeKind.Text;
+        var above = textCard && _firstLine > 0;
+        var below = textCard && _hasMore;
+
+        if (view.Zoom < 0.5)
+        {
+            above = false;
+            below = false;
+        }
+
+        _moreAbove.Visibility = above ? Visibility.Visible : Visibility.Collapsed;
+        _moreBelow.Visibility = below ? Visibility.Visible : Visibility.Collapsed;
+
+        if (!above && !below)
+        {
+            return;
+        }
+
+        var surface = NoteStyling.SurfaceFor(node.Color);
+        var ink = NoteStyling.InkFor(node.Color, surface);
+        var line = NoteStyling.LineFor(node.Color, surface);
+        var fontSize = Math.Clamp(11 * view.Zoom, 9, 14);
+        var padX = Math.Clamp(6 * view.Zoom, 4, 9);
+        var padY = Math.Clamp(2 * view.Zoom, 1, 3);
+
+        foreach (var (badge, text, label) in new[]
+                 {
+                     (_moreAbove, _moreAboveText, "↑ 更多"),
+                     (_moreBelow, _moreBelowText, "更多 ↓"),
+                 })
+        {
+            text.Text = label;
+            text.FontSize = fontSize;
+            text.Foreground = new SolidColorBrush(ink);
+            text.IsHitTestVisible = false;
+            badge.Background = new SolidColorBrush(surface);
+            badge.BorderBrush = new SolidColorBrush(line);
+            badge.Padding = new Thickness(padX, padY, padX, padY);
+            badge.IsHitTestVisible = false;
         }
     }
 

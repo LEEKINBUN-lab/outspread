@@ -189,17 +189,15 @@ public sealed partial class MainWindow
     };
 
     /// <summary>
-    /// 这一发落在哪一格上。叠在上面的先命中，但**组让给格子里面那一枚**：组的矩形盖住它框住的
-    /// 每一格，而双击组要做的两件事都成立不了——组不能编辑（BeginEdit 自己会这么说），
-    /// 也没人想从一块虚线框的边缘拉线。今天这块板子上第一个落点就同时命中一枚格子和一个组，
-    /// 于是"双击边缘起线"在带组的板子上整个失效（自检那两发报的就是这个）。
-    /// 选中的两层规矩（先组后格）在 Core 的 Grouping 里，不归这里管。
+    /// 这一发落在哪一格上。叠在上面的先命中，但<b>组整体不算落点</b>：10-22 起组是一个关系，
+    /// 不是一块场地——双击框内空白＝在那儿新建一格（落在框里就自动进组），拉线落到框内空白
+    /// ＝没接上任何一格。"点名牌/虚线边＝选整组"是单击的事，长在 NodeVisual 的环带与
+    /// OnNodePressed 里，不归这里管。早期"组让给格子里面那一枚、剩下再兜底给组"的形状会让
+    /// 双击框内走进"编辑一个不能编辑的东西"，那正是他这次报的语义错位。
     /// </summary>
     private CanvasNode? NodeAt(Point screen)
     {
         var world = new Point(_view.ToWorldX(screen.X), _view.ToWorldY(screen.Y));
-
-        CanvasNode? group = null;
 
         for (var index = _document.Nodes.Count - 1; index >= 0; index--)
         {
@@ -217,15 +215,13 @@ public sealed partial class MainWindow
 
             if (node.Kind == CanvasNodeKind.Group)
             {
-                group ??= node;
-
                 continue;
             }
 
             return node;
         }
 
-        return group;
+        return null;
     }
 
     private static string SideWord(string side) => side switch

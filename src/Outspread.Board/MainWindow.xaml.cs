@@ -77,6 +77,9 @@ public sealed partial class MainWindow : Window
 
     private TextBox? _editor;
 
+    /// <summary>编辑中内容需要的高度（世界像素）：只长不缩，提交时再按卡片规则落定。</summary>
+    private double _editorGrownWorld;
+
     private string? _editingId;
 
     private TextBlock? _measureProbe;
@@ -116,6 +119,10 @@ public sealed partial class MainWindow : Window
         Title = "铺陈";
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1320, 840));
 
+        // 不再用 ExtendsContentIntoTitleBar/SetTitleBar 把整条宿主交给 WinUI：它会在客户区
+        // 顶端留 1px 标题栏条（正常态的白线），最大化时又悄悄消失。标题条的拖动/双击改由
+        // WindowChrome 的 WndProc + InputNonClient 的 Caption 区承担；标签/加号/按钮仍是客户区。
+
         // 标题栏左上角那枚图标：无包工程不会自己带上 csproj 的 ApplicationIcon，运行时拿到的是
         // 系统默认那枚彩色方块。要显式喂一个 .ico 的路径给 AppWindow（任务栏跟着它走）。
         var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "outspread.ico");
@@ -142,6 +149,11 @@ public sealed partial class MainWindow : Window
 
         NoteStyling.IsDark = forced == "dark";
 
+        // 系统框整条去掉，标题按钮自绘。这台 Win10 上 DWMWA_BORDER_COLOR 不支持、
+        // DwmExtendFrameIntoClientArea 也不改那条白/黑边，所以走这一档
+        // （调研与实测见 docs/research-chrome-and-properties.md 的 10-22 第二轮）。
+        BuildWindowChrome();
+
         _saveTimer = DispatcherQueue.CreateTimer();
         _saveTimer.Interval = TimeSpan.FromMilliseconds(400);
         _saveTimer.IsRepeating = false;
@@ -149,6 +161,11 @@ public sealed partial class MainWindow : Window
 
         // 浮层的影落在板子自己身上：ThemeShadow 只往 receivers 上画，没有这一句它就是贴上去的一块白。
         ChromeStyling.ShadowReceiver = BoardArea;
+
+        // 系统那三枚按钮（最小化／最大化／关闭）画在客户端区右上，标签条必须给它们让出宽度，
+        // 否则最后一枚标签会被盖住。让多少不能拍脑袋：读 AppWindow.TitleBar.RightInset（设备像素）
+        // 再除以这扇窗的缩放。要等 XamlRoot 有缩放才量得到，所以挂在第一次布局之后。
+        Root.Loaded += (_, _) => ReserveCaptionButtons();
 
         // 两块"只有一行"的浮层：筛选横幅与回执那一句话。行就是菜单那一枚控件，文字由各自的事件改，
         // 所以建窗时搭一次、以后只换字——换字不改结构，就不会长成第三、第四种组件。
@@ -159,6 +176,7 @@ public sealed partial class MainWindow : Window
         SayHost.Child = PanelKit.Host(_sayRow);
 
         BuildSearchSurface();
+        BuildBoardTabs();
 
         // 浮层出现/收起那一下走平台的"弹出层"transition：右键菜单用的就是这一族，
         // 板子上这四块浮层以前是"啪"地出现——同一套皮配两种动法，正是"不是一个组件"的读法。
@@ -191,6 +209,9 @@ public sealed partial class MainWindow : Window
                 CloseFilterPanel();
                 CloseSearchPanel();
                 CloseRestorePanel();
+                CollapseExpandedGroup();
+
+                // 手不见了，摊开的那一层也不能留着：它是 hover 叫出来的，只有这只手知道它为什么开着。
                 return;
             }
 
@@ -203,6 +224,8 @@ public sealed partial class MainWindow : Window
         Root.ActualThemeChanged += (_, _) =>
         {
             NoteStyling.IsDark = Root.ActualTheme == ElementTheme.Dark;
+            StyleCaptionButtons();
+            StyleTabStripChrome();
             Rebuild();
         };
 
@@ -231,33 +254,51 @@ public sealed partial class MainWindow : Window
         // 启动→窗口句柄 1091ms（改前）对 980/1213ms（改后），因为 Activate() 自己就是那
         // 270ms 的第一帧合成。白多一屏空板子的闪，所以撤。
         LoadBoard();
+
+        // 命令行可以一次点几块板：第一块是启动那块，后面的开成标签。这一条不只是入口——
+        // 三枚标签的标签条只有真开着三块板才拍得到，取证要走的也是它。
+        foreach (var extra in Environment.GetCommandLineArgs()
+                     .Skip(1)
+                     .Where(argument => argument.EndsWith(CanvasStore.Extension, StringComparison.OrdinalIgnoreCase))
+                     .Skip(1))
+        {
+            SwitchToBoard(extra);
+        }
     }
 
     // -------------------------------------------------------------------------
     // Loading and saving
     // -------------------------------------------------------------------------
 
-    private void LoadBoard()
+    /// <param name="explicitPath">
+    /// 切板时传进来的那块板。不给就走原来的搜索规则（命令行 → 环境变量 → 向上找 boards/scratch.canvas）——
+    /// 那条路只在启动时走一次，切板不许掉回它，否则会跳回启动那块板。
+    /// </param>
+    private void LoadBoard(string? explicitPath = null)
     {
         try
         {
-            var requested = Environment.GetCommandLineArgs()
+            var requested = explicitPath ?? Environment.GetCommandLineArgs()
                 .Skip(1)
                 .FirstOrDefault(argument => argument.EndsWith(CanvasStore.Extension, StringComparison.OrdinalIgnoreCase));
 
             var resolution = BoardLocator.Resolve(requested, AppContext.BaseDirectory);
 
-            _boardPath = resolution.BoardPath;
+            var path = resolution.BoardPath;
 
             if (resolution.CreatedIfMissing)
             {
-                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_boardPath)!);
-                CanvasStore.Write(_boardPath, CanvasDocument.CreateNew().ToJson());
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+                CanvasStore.Write(path, CanvasDocument.CreateNew().ToJson());
             }
 
-            var text = CanvasStore.ReadAllText(_boardPath);
+            var text = CanvasStore.ReadAllText(path);
+            var document = CanvasDocument.Parse(text, path);
 
-            _document = CanvasDocument.Parse(text, _boardPath);
+            // 到这一行之前一个字段都没动：一块读不懂的板子不该把窗口切过去——那等于让人以为
+            // 自己在改这块板，而屏幕上还是上一块。
+            _boardPath = path;
+            _document = document;
             _baseJson = text;
 
             var sidecar = BoardViewState.TryLoad(CanvasStore.SidecarPath(_boardPath));
@@ -271,6 +312,14 @@ public sealed partial class MainWindow : Window
             }
 
             NoteStyling.IsDark = Root.ActualTheme == ElementTheme.Dark;
+            StyleTabStripChrome();
+
+            if (!_openBoards.Exists(open => SameBoard(open, _boardPath)))
+            {
+                _openBoards.Add(_boardPath);
+            }
+
+            ResetPerBoardRuntime();
 
             // 页眉那一栏删了（板子该占满）。名字改在这行说一次，同时把两条入口一并交代清楚。
             Say($"板子 · {System.IO.Path.GetFileNameWithoutExtension(_boardPath)}｜双击空白记一件事，按住 Tab 看全部键位");
@@ -289,9 +338,17 @@ public sealed partial class MainWindow : Window
                 ? $"{_document.Nodes.Count} 个节点 · {errors} 处不合格式（详情在日志） · 缩放 {Percent()}"
                 : $"{_document.Nodes.Count} 个节点 · 缩放 {Percent()}");
 
+            // 组框是派生的：开板时先把有成员的组框贴回成员包围盒。旧板/外部改动留下的
+            // 旧框只在这一处归位一次，空组保持原样（渲染层会把它藏起来）。
+            if (RefitLoadedGroups())
+            {
+                SaveSoon();
+            }
+
             Rebuild();
             StartWatching();
             StartShotServer();
+            RebuildTabs();
 
             // 同步要的是"这块板"，不是"这个窗口"：换板（--board 指过去）之后账本目录也跟着走，
             // 所以每个板子建一个，旧的先停表。没定远端仓库时它自己一声不响。
@@ -304,6 +361,9 @@ public sealed partial class MainWindow : Window
         {
             Say($"打不开板面：{ex.Message}");
             Diagnostics.Write($"load failed: {ex}");
+
+            // 开不成也要让标签条说真话：切板失败时它已经指到那块板上了。
+            RebuildTabs();
         }
     }
 
@@ -387,6 +447,12 @@ public sealed partial class MainWindow : Window
         ItemLayer.Children.Clear();
         _realized.Clear();
 
+        // 卡片是重铸的，摊开那一层也就没了宿主：状态跟着清，别留一个指向旧格子的组名。
+        ResetFolding();
+
+        // 先算一次画面状态：紧接着的读数行与横幅要说"折进了几格"，而那件事只有这里知道。
+        BuildDisplays();
+
         // 读数行和格子是同一次重建的产物：文字一改，逾期/标签的计数与横幅就得跟着变，
         // 否则它变成另一份"只在打开时算一次"的说明书。
         RebuildFilterPanel();
@@ -410,6 +476,12 @@ public sealed partial class MainWindow : Window
             _boardPath is null ? null : AssetStore.ResolveExisting(_boardPath, relative));
 
         visual.PointerPressed += OnNodePressed;
+
+        // 悬停摊开折叠那一层：每一格都挂，谁算"这一组的门"由 BuildDisplays 那张表说
+        // （框本身＋接住东西的那一格）。挂在格子上而不是只挂在框上，是因为门要够大，
+        // 而精确地瞄一条 10 像素的边正是他不肯要的那种操作。
+        visual.PointerEntered += OnVisualEntered;
+        visual.PointerExited += OnVisualExited;
 
         // 卡片左下角那排牌子的删除路径走这里：它删的是正文里那一枚 token，所以是一步可撤销的文档改动，
         // 不是视图状态。
@@ -447,6 +519,11 @@ public sealed partial class MainWindow : Window
         var visible = 0;
         var started = Stopwatch.GetTimestamp();
 
+        // 筛选折起来的那几格：它们画在锚点上，所以剔除要按"画在哪儿"判，不按文档里的真位置判——
+        // 否则锚点在屏内、真位置在屏外的那一格会在摊开时是空的。
+        var displays = BuildDisplays();
+        var emptyGroups = EmptyGroupIds();
+
         foreach (var node in _document.Nodes)
         {
             if (!_realized.TryGetValue(node.Id, out var visual))
@@ -454,25 +531,45 @@ public sealed partial class MainWindow : Window
                 continue;
             }
 
-            var intersects = node.X + node.Width >= window.X
-                && node.X <= window.X + window.Width
-                && node.Y + node.Height >= window.Y
-                && node.Y <= window.Y + window.Height;
+            // 空组没有成员可框：不画、不接鼠标，别拿一个旧的大虚线框压着旁边的便签。
+            // 一旦有便签挪进它的矩形，EmptyGroupIds 不再含它，这里会把它恢复可见。
+            if (node.Kind == CanvasNodeKind.Group && emptyGroups.Contains(node.Id))
+            {
+                visual.Visibility = Visibility.Collapsed;
+                visual.IsHitTestVisible = false;
+
+                continue;
+            }
+
+            visual.Visibility = Visibility.Visible;
+
+            var display = displays.TryGetValue(node.Id, out var planned) ? planned : NodeVisual.Display.None;
+
+            var box = display.ShownFrame ?? RectOf(node);
+            var drawnX = box.X + ((display.FoldDX ?? 0) / _view.Zoom);
+            var drawnY = box.Y + ((display.FoldDY ?? 0) / _view.Zoom);
+
+            var intersects = drawnX + box.Width >= window.X
+                && drawnX <= window.X + window.Width
+                && drawnY + box.Height >= window.Y
+                && drawnY <= window.Y + window.Height;
 
             if (intersects)
             {
-                if (!visual.IsHitTestVisible)
-                {
-                    visual.IsHitTestVisible = true;
-                }
+                // 折进去的那一格不能点：它不在那儿，只是滑过去的那一下让人看见了。
+                visual.IsHitTestVisible = !display.FoldedAway;
 
-                visual.Update(node, _view, scale);
+                visual.Update(node, _view, scale, display);
                 visible++;
             }
             else
             {
                 // Hidden, not discarded: an element that is thrown away has to be
                 // decoded again on the next pan back over a board of screenshots.
+                // Visibility is the part that was missing: the card's three shadow bands are
+                // separate rectangles outside its zero-sized box, so Width=0 alone left them
+                // painted at the old place — the "拖完还留着一排阴影" he sent on 10-22.
+                visual.Visibility = Visibility.Collapsed;
                 visual.IsHitTestVisible = false;
                 visual.Width = 0;
                 visual.Height = 0;
@@ -518,6 +615,8 @@ public sealed partial class MainWindow : Window
         CloseCheatsheet();
         CloseSearchPanel();
         CloseRestorePanel();
+        ClearGroupHint();
+        CloseColorPopover();
 
         var point = e.GetCurrentPoint(BoardArea);
 
@@ -648,41 +747,14 @@ public sealed partial class MainWindow : Window
 
         if (_nodeGesture is { } gesture)
         {
-            var worldX = _view.ToWorldX(screen.X);
-            var worldY = _view.ToWorldY(screen.Y);
+            ApplyNodeDrag(screen);
 
-            var deltaX = worldX - gesture.StartPointerX;
-            var deltaY = worldY - gesture.StartPointerY;
-
-            var (adjustedX, adjustedY, guides) = SnapDrag(gesture, deltaX, deltaY);
-
-            deltaX = adjustedX;
-            deltaY = adjustedY;
-
-            foreach (var (id, start) in gesture.StartGeometry)
+            // 组钮那一路的拖动也走同一条位移；多出来的只有框上的蓝/红与光标那枚淡环。
+            if (gesture.GroupMode)
             {
-                if (NodeOf(id) is { } node)
-                {
-                    node.X = start.X + deltaX;
-                    node.Y = start.Y + deltaY;
-                }
+                UpdateGroupAlerts(screen);
             }
 
-            // 帧预算：拖一格时只有被拖的那几格换了位置，其余格子的尺寸、裁切、行数都没变——
-            // 逐格 Update 一次要 16–60ms（日志 "arrange took"），所以这里只搬被拖的格子，
-            // 松手再结算成完整的排布（补剔除、补别的格子）。
-            foreach (var id in gesture.StartGeometry.Keys)
-            {
-                if (NodeOf(id) is { } moved && _realized.TryGetValue(id, out var visual))
-                {
-                    Canvas.SetLeft(visual, _view.ToScreenX(moved.X));
-                    Canvas.SetTop(visual, _view.ToScreenY(moved.Y));
-                }
-            }
-
-            DrawGuides(guides);
-            PaintLinks();
-            ProjectSelection();
             e.Handled = true;
             return;
         }
@@ -692,6 +764,54 @@ public sealed partial class MainWindow : Window
             ApplyResize(screen, resize);
             e.Handled = true;
         }
+    }
+
+    /// <summary>
+    /// 一格（或一组）跟着指针走的那段位移：板面拖动和组钮拖动共用——帧预算的规矩在同一条上
+    /// （只搬被拖的格子，松手再结算完整排布）。
+    /// </summary>
+    private void ApplyNodeDrag(Point screen)
+    {
+        if (_nodeGesture is not { } gesture)
+        {
+            return;
+        }
+
+        var worldX = _view.ToWorldX(screen.X);
+        var worldY = _view.ToWorldY(screen.Y);
+
+        var deltaX = worldX - gesture.StartPointerX;
+        var deltaY = worldY - gesture.StartPointerY;
+
+        var (adjustedX, adjustedY, guides) = SnapDrag(gesture, deltaX, deltaY);
+
+        deltaX = adjustedX;
+        deltaY = adjustedY;
+
+        foreach (var (id, start) in gesture.StartGeometry)
+        {
+            if (NodeOf(id) is { } node)
+            {
+                node.X = start.X + deltaX;
+                node.Y = start.Y + deltaY;
+            }
+        }
+
+        // 帧预算：拖一格时只有被拖的那几格换了位置，其余格子的尺寸、裁切、行数都没变——
+        // 逐格 Update 一次要 16–60ms（日志 "arrange took"），所以这里只搬被拖的格子，
+        // 松手再结算成完整的排布（补剔除、补别的格子）。
+        foreach (var id in gesture.StartGeometry.Keys)
+        {
+            if (NodeOf(id) is { } moved && _realized.TryGetValue(id, out var visual))
+            {
+                Canvas.SetLeft(visual, _view.ToScreenX(moved.X));
+                Canvas.SetTop(visual, _view.ToScreenY(moved.Y));
+            }
+        }
+
+        DrawGuides(guides);
+        PaintLinks();
+        ProjectSelection();
     }
 
     private void OnSurfaceReleased(object sender, PointerRoutedEventArgs e)
@@ -801,15 +921,36 @@ public sealed partial class MainWindow : Window
             DrawGuides([]);
 
             Diagnostics.Write($"drag ended: {gesture.StartGeometry.Count} node(s), {moved:0.0} world px");
+
+            // 普通拖动不许把成员甩出组：先按开手那一刻的成员集合把框 hug 回去，再收这一步。
+            KeepDraggedMemberInFrame(gesture);
+
             EndGesture();
             SaveSoon();
 
             // 结算：把拖中省下的那一次完整排布补回来（剔除视口外的格子、重算别的格子）。
             ArrangeAll();
+
+            // C 那一拍：挪的是一枚散格（不是组钮那一路）、松手时它压着另两枚以上 ⇒ 格下浮「编成组？」。
+            if (gesture.StartGeometry.Count == 1 && moved > 0 && !gesture.GroupMode)
+            {
+                OfferGroupHint(NodeOf(gesture.PrimaryId));
+                PlaceGroupHint(); // 浮出之后还贴着：胶囊要落在松手的终点，不是拖中途经的某一帧
+            }
         }
 
-        if (_resizeGesture is not null)
+        if (_resizeGesture is { } resize)
         {
+            // 手动拖过大小的文字格：以后回车不再改它的框；这是他自己定下的尺寸。
+            foreach (var (node, _, _, startWidth, startHeight) in resize.Start.Values)
+            {
+                if (node.Kind == CanvasNodeKind.Text
+                    && (Math.Abs(node.Width - startWidth) > 0.5 || Math.Abs(node.Height - startHeight) > 0.5))
+                {
+                    _view.MarkManualSize(node.Id);
+                }
+            }
+
             _resizeGesture = null;
             EndGesture();
             SaveSoon();
@@ -859,6 +1000,15 @@ public sealed partial class MainWindow : Window
     // Nodes: select, drag
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// 这一发按下该选中什么、组这一层归谁：按在组上（名牌或环带）＝组里所有便签，框自己不进
+    /// 选中；按在别处＝那一枚。界面只问这一次，规则本体在 <see cref="Grouping.OnFramePressed"/>。
+    /// </summary>
+    private (List<string> Ids, string? Focus) PressTarget(CanvasNode pressed)
+        => pressed.Kind == CanvasNodeKind.Group
+            ? (Grouping.OnFramePressed(RectOf(pressed), BoardNotes().ConvertAll(RectOf)).ToList(), pressed.Id)
+            : ([pressed.Id], null);
+
     private void OnNodePressed(object sender, PointerRoutedEventArgs e)
     {
         if (sender is not NodeVisual visual)
@@ -889,16 +1039,32 @@ public sealed partial class MainWindow : Window
 
         CloseSearchPanel();
         CloseRestorePanel();
+        ClearGroupHint();
 
         var pointOnSurface = e.GetCurrentPoint(BoardArea).Position;
 
         if (point.Properties.IsRightButtonPressed)
         {
-            if (!_selection.Contains(id))
+            var rightNode = NodeOf(id);
+
+            if (rightNode is not null)
             {
-                ClearSelection();
-                _selection.Add(id);
-                ProjectSelection();
+                var already = rightNode.Kind == CanvasNodeKind.Group ? _groupFocus == id : _selection.Contains(id);
+
+                if (!already)
+                {
+                    var (ids, focus) = PressTarget(rightNode);
+
+                    ClearSelection();
+
+                    foreach (var selected in ids)
+                    {
+                        _selection.Add(selected);
+                    }
+
+                    _groupFocus = focus;
+                    ProjectSelection();
+                }
             }
 
             ShowBoardMenu(pointOnSurface);
@@ -915,13 +1081,30 @@ public sealed partial class MainWindow : Window
 
         if (additive)
         {
-            if (!_selection.Remove(id))
+            if (pressedNode.Kind == CanvasNodeKind.Group)
+            {
+                // Ctrl 点在名牌／环带上＝整组加进选出、再点一次整组退出。
+                var memberIds = Grouping.OnFramePressed(RectOf(pressedNode), BoardNotes().ConvertAll(RectOf));
+                var allIn = memberIds.All(_selection.Contains);
+
+                foreach (var member in memberIds)
+                {
+                    if (allIn)
+                    {
+                        _selection.Remove(member);
+                    }
+                    else
+                    {
+                        _selection.Add(member);
+                    }
+                }
+
+                _groupFocus = allIn ? null : pressedNode.Id;
+            }
+            else if (!_selection.Remove(id))
             {
                 _selection.Add(id);
             }
-
-            // 加选／减选永远走「单枚」这一层：精确操作再要求点两次，是白付的代价。
-            _groupFocus = Grouping.GroupOf(RectOf(pressedNode), GroupRects())?.Id;
 
             ProjectSelection();
             e.Handled = true;
@@ -930,23 +1113,19 @@ public sealed partial class MainWindow : Window
 
         if (!_selection.Contains(id))
         {
-            // 两层选中（他给这版定的语义）：第一次点组里的格子＝整组进选中，所以拖它就是拖整组；
-            // 已经停在组这一层时再点一次＝只留这一枚。判定在 Core 的 Grouping，界面只负责问。
-            var decision = Grouping.OnNotePressed(
-                RectOf(pressedNode),
-                BoardNotes().ConvertAll(RectOf),
-                GroupRects(),
-                _groupFocus,
-                additive: false);
+            // 单击的落点（他 10-22 定的语义）：点便签＝只选中那一枚，**包括组里的**；点组的
+            // 名牌或边缘虚线＝选中组里所有便签。组是一个关系，不是一块场地：框自己从不进
+            // 选中，所以不会再出现"整个组的范围变蓝"。判定抽在 PressTarget，自检直接问它。
+            var (ids, focus) = PressTarget(pressedNode);
 
             ClearSelection();
 
-            foreach (var selected in decision.Ids)
+            foreach (var selected in ids)
             {
                 _selection.Add(selected);
             }
 
-            _groupFocus = decision.FocusedGroup;
+            _groupFocus = focus;
         }
 
         var startGeometry = new Dictionary<string, (double X, double Y)>(StringComparer.Ordinal);
@@ -975,7 +1154,8 @@ public sealed partial class MainWindow : Window
 
         // 压边＝缩放：离某条边 6 屏幕像素以内，这一发归那条边。网页那一侧同一格就是这个语义，
         // 而"抓哪儿都是移动"会让人以为边缘拖缩放没做——它做了，只是被移动抢走了。
-        if (_selection.Count == 1 && NodeOf(id) is { } pressed && EdgeOf(pressed, screen) is { } edge)
+        // 组框不吃这一发：它的边是"点边＝选整组"的门，缩放一个派生出来的框也没有意义。
+        if (_selection.Count == 1 && NodeOf(id) is { Kind: not CanvasNodeKind.Group } pressed && EdgeOf(pressed, screen) is { } edge)
         {
             BeginResize(edge, screen);
 
@@ -986,11 +1166,27 @@ public sealed partial class MainWindow : Window
 
         BeginGesture(startGeometry.Count > 1 ? $"移动 {startGeometry.Count} 格" : "移动一格");
 
+        // 普通拖动要记住"这一格此刻在谁的框里、那框此刻都有谁"：松手时如果它被甩出了框，
+        // 框跟着长（sticky）而不是把它踢出去——拆组只归组钮那一条路（NoteActionRail.cs）。
+        var startRect = RectOf(pressedNode);
+        var startGroup = pressedNode.Kind == CanvasNodeKind.Group
+            ? null
+            : Grouping.GroupOf(startRect, GroupRects());
+        IReadOnlyList<string>? startMembers = null;
+
+        if (startGroup is { } sg)
+        {
+            startMembers = [.. Grouping.Members(sg, BoardNotes().ConvertAll(RectOf)).Select(member => member.Id)];
+        }
+
         _nodeGesture = new NodeGesture(
             _view.ToWorldX(screen.X),
             _view.ToWorldY(screen.Y),
             startGeometry,
-            id);
+            id,
+            GroupMode: false,
+            StartGroupId: startGroup?.Id,
+            StartMembers: startMembers);
 
         ProjectSelection();
 
@@ -1007,8 +1203,15 @@ public sealed partial class MainWindow : Window
             ClearSelection();
         }
 
+        var emptyGroups = EmptyGroupIds();
+
         foreach (var node in _document.Nodes)
         {
+            if (node.Kind == CanvasNodeKind.Group && emptyGroups.Contains(node.Id))
+            {
+                continue;
+            }
+
             var intersects = node.X + node.Width >= worldRect.X
                 && node.X <= worldRect.X + worldRect.Width
                 && node.Y + node.Height >= worldRect.Y
@@ -1173,6 +1376,11 @@ public sealed partial class MainWindow : Window
         }
 
         _handles.Clear();
+
+        // 这一拍在拖动中也会被叫到（OnSurfaceMoved 结算选中框时）：操作条与提议胶囊若在场就跟着
+        // 那一格走——不然它们停在拖中途经的旧位置，画面上的它就指错了格。
+        EnsureRail();
+        PlaceGroupHint();
 
         if (SelectionBox() is not { } box || _selection.Count == 0)
         {
@@ -1709,7 +1917,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void FitNoteHeight(CanvasNode node)
     {
-        if (_view.NoteSize == NoteSizeMode.Fixed)
+        if (_view.NoteSize == NoteSizeMode.Fixed || _view.IsManualSize(node.Id))
         {
             return;
         }
@@ -1895,6 +2103,10 @@ public sealed partial class MainWindow : Window
         };
 
         _editor = editor;
+        _editorGrownWorld = 0;
+
+        // 回车换行时编辑框立刻长到装得下，不等到提交才补高度；手动拖过大小的格子不参与。
+        editor.TextChanged += (_, _) => GrowEditorToFit();
 
         // 编辑器里也挂着同一排牌子：按下回车的那一瞬间它就该从文本栏消失、出现在左下角，
         // 而不是等这次编辑提交完才变。
@@ -1922,12 +2134,49 @@ public sealed partial class MainWindow : Window
         Canvas.SetLeft(_editor, _view.ToScreenX(node.X));
         Canvas.SetTop(_editor, _view.ToScreenY(node.Y));
         _editor.Width = node.Width * _view.Zoom;
-        _editor.Height = node.Height * _view.Zoom;
+        _editor.Height = Math.Max(node.Height, _editorGrownWorld) * _view.Zoom;
         var editorType = NoteTypography.For(_view.FontSizeFor(node.Id));
         // TextBox carries no LineHeight (it is a TextBlock property), so the editor wraps at the
         // platform default while the card itself uses the frozen leading. Recorded as a gap, not fixed here.
         _editor.FontSize = Math.Max(4, editorType.Size * _view.Zoom);
         _editor.Padding = new Thickness(Math.Clamp(editorType.Padding * _view.Zoom, 0, 60));
+    }
+
+    /// <summary>
+    /// 打字/回车时把编辑框长到能装下正文。只改屏幕上的编辑框，不动文档；提交时
+    /// <see cref="FitNoteHeight"/> 再按同一把尺落定。用户手动定过大小的格子保持原框。
+    /// </summary>
+    private void GrowEditorToFit()
+    {
+        if (_editor is null || _editingId is null || NodeOf(_editingId) is not { } node)
+        {
+            return;
+        }
+
+        if (_view.NoteSize == NoteSizeMode.Fixed || _view.IsManualSize(node.Id))
+        {
+            return;
+        }
+
+        var text = NoteProperties.WithProps(_editorProps, JsonText.NormalizeTextNewlines(_editor.Text));
+        var fontSize = _view.FontSizeFor(node.Id);
+        var type = NoteTypography.For(fontSize);
+
+        // 多留一行给 TextBox 的平台行高：卡片按冻结的 leading 量，编辑框并不吃这个属性。
+        var needed = Math.Ceiling(MeasureTextHeight(text, node.Width, fontSize, paintsChips: true) + type.Leading);
+
+        if (needed <= _editorGrownWorld + 0.5)
+        {
+            return;
+        }
+
+        Diagnostics.Write(
+            $"editor grew {_editorGrownWorld:0.#}→{needed:0.#} world px for {node.Id} " +
+            $"({_editor.Text.Length} chars, node {node.Height:0.#})");
+
+        _editorGrownWorld = needed;
+        _editor.Height = Math.Max(node.Height, _editorGrownWorld) * _view.Zoom;
+        PaintEditorChips();
     }
 
     private void OnEditorKeyDown(object sender, KeyRoutedEventArgs e)
@@ -1953,6 +2202,12 @@ public sealed partial class MainWindow : Window
         {
             CloseEditor(commit: true);
             e.Handled = true;
+        }
+
+        if (e.Key == Windows.System.VirtualKey.Enter)
+        {
+            // TextBox 的 TextChanged 不在这一次键事件里同步到；换行插进去之后再量一次。
+            DispatcherQueue.TryEnqueue(GrowEditorToFit);
         }
     }
 
@@ -2129,6 +2384,10 @@ public sealed partial class MainWindow : Window
     {
         _pendingSnapshot = _document.ToJson();
         _pendingLabel = label;
+
+        // 框是派生的：先记下这一步开始时每个框"应该是多大"，EndGesture 才分得清
+        // 是这一步把它挪了，还是本来就该重算（不该顺手写与这一步无关的框）。
+        _derivedFramesAtBegin = DerivedFrames();
     }
 
     private void EndGesture()
@@ -2143,6 +2402,10 @@ public sealed partial class MainWindow : Window
 
         _pendingSnapshot = null;
         _pendingLabel = null;
+
+        // 贴回去再记这一步：撤销一发的结果必须是"格子和框一起回去"。
+        RefitFrames();
+        _derivedFramesAtBegin = null;
 
         _history.Record(label, before, _document.ToJson());
     }
@@ -2222,59 +2485,23 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Run one arranging command over the selection — or say out loud why it cannot.
+    /// Run one arranging command over the selection — or say out loud why it cannot. The command
+    /// sees <b>units</b>: one note is one unit, one group is one unit (see GroupArrange.cs).
     /// </summary>
     /// <remarks>
-    /// Three exits, and none of them is silence: refused (not enough notes), already-there (the
+    /// Three exits, and none of them is silence: refused (not enough units), already-there (the
     /// command ran but nothing moved, so no transaction and no undo step), and done. A user who
     /// presses 对齐 twice must not find a no-op in their undo history.
     /// </remarks>
     private void Arrange(string label, Func<IReadOnlyList<Aligning.Placed>, Aligning.Outcome> command)
-        => ApplyMoves(label, command(SelectedInOrder()));
-
-    /// <summary>Apply a computed set of moves as one transaction, or say why nothing happened.</summary>
-    private void ApplyMoves(string label, Aligning.Outcome outcome)
     {
-        if (!outcome.Ok)
-        {
-            Say($"『{label}』要至少 {outcome.Needed} 格，现在选了 {outcome.Have} 格");
-            return;
-        }
+        var units = SelectedUnits();
 
-        var moved = outcome.Moves.Count(move => NodeOf(move.Id) is { } node
-            && (Math.Abs(node.X - move.X) > 0.001 || Math.Abs(node.Y - move.Y) > 0.001));
-
-        if (moved == 0)
-        {
-            Say($"{label}：这些格子已经在位子上，没动任何东西");
-            return;
-        }
-
-        BeginGesture(label);
-
-        foreach (var move in outcome.Moves)
-        {
-            if (NodeOf(move.Id) is { } node)
-            {
-                node.X = move.X;
-                node.Y = move.Y;
-            }
-        }
-
-        EndGesture();
-
-        Rebuild();
-        SaveSoon();
-
-        Say($"{label}：搬了 {moved} 格（Ctrl＋Z 可回退）");
+        ApplyUnitMoves(label, units, command([.. units.Select(PlacedOf)]));
     }
 
-    /// <summary>The selection in document (z) order — stacking and distributing both read it.</summary>
-    private List<Aligning.Placed> SelectedInOrder()
-        => _document.Nodes
-            .Where(node => _selection.Contains(node.Id))
-            .Select(PlacedOf)
-            .ToList();
+    private static Aligning.Placed PlacedOf(Grouping.Unit unit)
+        => new(unit.Id, unit.Box.X, unit.Box.Y, unit.Box.Width, unit.Box.Height);
 
     /// <summary>What the right-click landed on. The menu is built from this, so an empty board does not
     /// offer "change the colour of nothing" and one card does not offer "distribute".</summary>
@@ -2343,26 +2570,8 @@ public sealed partial class MainWindow : Window
         }
         else
         {
-            var colors = new MenuFlyoutSubItem { Text = "颜色" };
-
-            foreach (var (label, preset) in new[]
-            {
-                ("玫红", "1"), ("琥珀", "2"), ("苔绿", "3"), ("湖蓝", "4"), ("藕紫", "5"), ("砂褐", "6"),
-            })
-            {
-                var item = new MenuFlyoutItem { Text = label };
-
-                item.Click += (_, _) => ApplyColor(preset);
-
-                colors.Items.Add(item);
-            }
-
-            var none = new MenuFlyoutItem { Text = "无色" };
-            none.Click += (_, _) => ApplyColor(null);
-            colors.Items.Add(none);
-
-            menu.Items.Add(colors);
-
+            // 换色不再走右键菜单——它长在便签操作条的色板弹层上（NoteActionRail.cs），
+            // 一处入口比两处各摆一份更好维护，也避免"菜单里能选、条上不能选"这种两套语义。
             var order = new MenuFlyoutSubItem { Text = "叠放" };
 
             var front = new MenuFlyoutItem { Text = "提到最前" };
@@ -2511,6 +2720,11 @@ public sealed partial class MainWindow : Window
         ArrangeAll();
         ProjectSelection();
 
+        // 组框与空组的读数要取在这一拍：后面的排布/拖拽会真的改动成员。
+        SelfTestGroups(problems);
+        SelfTestCulledVisuals(problems);
+        SelfTestFreshNoteIsFree(problems);
+
         var driftX = Math.Abs(_view.ToScreenX(worldUnderAnchor.Item1) - anchor.X);
         var driftY = Math.Abs(_view.ToScreenY(worldUnderAnchor.Item2) - anchor.Y);
 
@@ -2594,8 +2808,14 @@ public sealed partial class MainWindow : Window
         // 排布命令走真路径，而不是只测 Core 的算术：一格时必须明着拒绝并且**不留下撤销步**，
         // 两格时必须真的搬动、并且能一步还原。少了这一发，"命令在 Core 里对、界面上没接线"
         // 这种红是量不出来的。
-        // 取前两格时跳过组：排布命令本来就不作用于组，若按文档顺序碰运气，演示板一改就红一次。
-        var arrangePair = _document.Nodes.Where(node => node.Kind != CanvasNodeKind.Group).Take(2).ToList();
+        // 挑的是**散格**：一个组在排布眼里只算一件（GroupArrange.cs），拿同组两枚来测"两格对齐"
+        // 量的会是拒绝那一路——那一路下面单独有一发。
+        var framesForPair = GroupRects();
+        var arrangePair = _document.Nodes
+            .Where(node => node.Kind != CanvasNodeKind.Group)
+            .Where(node => Grouping.GroupOf(RectOf(node), framesForPair) is null)
+            .Take(2)
+            .ToList();
 
         if (arrangePair.Count == 2)
         {
@@ -2605,7 +2825,7 @@ public sealed partial class MainWindow : Window
             _selection.Add(arrangePair[0].Id);
             Arrange("左对齐", items => Aligning.Align(items, Aligning.Side.Left));
 
-            if (_history.UndoCount != undoBefore || !_sayRow.Text.Contains("要至少 2 格"))
+            if (_history.UndoCount != undoBefore || !_sayRow.Text.Contains("要至少 2 件"))
             {
                 problems.Add($"一格排布没有明着拒绝：status『{_sayRow.Text}』undo {_history.UndoCount} vs {undoBefore}");
             }
@@ -2616,11 +2836,10 @@ public sealed partial class MainWindow : Window
             _selection.Add(arrangePair[1].Id);
             Arrange("左对齐", items => Aligning.Align(items, Aligning.Side.Left));
 
-            var after = _document.Nodes.Where(node => node.Kind != CanvasNodeKind.Group).Take(2).ToList();
-
-            if (Math.Abs(after[0].X - after[1].X) > 0.001)
+            if (Math.Abs(NodeOf(arrangePair[0].Id)!.X - NodeOf(arrangePair[1].Id)!.X) > 0.001)
             {
-                problems.Add($"两格左对齐后还差 {Math.Abs(after[0].X - after[1].X):0.###} px");
+                problems.Add(
+                    $"两格左对齐后还差 {Math.Abs(NodeOf(arrangePair[0].Id)!.X - NodeOf(arrangePair[1].Id)!.X):0.###} px");
             }
 
             if (_history.UndoCount != undoBefore + 1)
@@ -2630,14 +2849,271 @@ public sealed partial class MainWindow : Window
 
             Undo();
 
-            var restored = _document.Nodes.Where(node => node.Kind != CanvasNodeKind.Group).Take(2).ToList();
-
+            // 撤销是整份文档换掉，所以这里必须按 id 重新查——手上那枚节点对象属于撤销前那份文档。
             for (var i = 0; i < 2; i++)
             {
-                if (Math.Abs(restored[i].X - originalX[i]) > 0.001 || Math.Abs(restored[i].Y - originalY[i]) > 0.001)
+                var restored = NodeOf(arrangePair[i].Id)!;
+
+                if (Math.Abs(restored.X - originalX[i]) > 0.001 || Math.Abs(restored.Y - originalY[i]) > 0.001)
                 {
-                    problems.Add($"撤销排布没回到原位：{restored[i].Id} 在 {restored[i].X},{restored[i].Y}，应在 {originalX[i]},{originalY[i]}");
+                    problems.Add($"撤销排布没回到原位：{restored.Id} 在 {restored.X},{restored.Y}，应在 {originalX[i]},{originalY[i]}");
                 }
+            }
+        }
+        else
+        {
+            Diagnostics.Write($"selftest 排布: 板上凑不出两格散格（找到 {arrangePair.Count} 格），这一发不适用");
+        }
+
+        // 同组的两枚：只剩一件东西可排，所以退到排组内那两枚；排完框必须 hug 全组（包括没选中的
+        // 那枚），这一步挡的是"把组劈开"——以前那一发会把组里两格拉到同一列，框留在原地。
+        {
+            var grouped = _document.Nodes
+                .Where(node => node.Kind != CanvasNodeKind.Group)
+                .Select(node => (node, frame: Grouping.GroupOf(RectOf(node), framesForPair)))
+                .Where(item => item.frame is not null)
+                .GroupBy(item => item.frame!.Value.Id)
+                .FirstOrDefault();
+
+            if (grouped is null || grouped.Count() < 2)
+            {
+                Diagnostics.Write("selftest 排组内: 没有哪个组里有两格可挑，这一发不适用");
+            }
+            else
+            {
+                var members = grouped.Select(item => item.node).ToList();
+                var groupId = grouped.Key;
+                var undoBefore = _history.UndoCount;
+                var frameBefore = RectOf(NodeOf(groupId)!);
+
+                ClearSelection();
+
+                foreach (var member in members.Take(2))
+                {
+                    _selection.Add(member.Id);
+                }
+
+                Arrange("左对齐", items => Aligning.Align(items, Aligning.Side.Left));
+
+                var alignedX = NodeOf(members[0].Id)!.X;
+
+                if (Math.Abs(alignedX - NodeOf(members[1].Id)!.X) > 0.001)
+                {
+                    problems.Add($"排组内那两枚没对齐：还差 {Math.Abs(alignedX - NodeOf(members[1].Id)!.X):0.###} px");
+                }
+
+                var frameNow = RectOf(NodeOf(groupId)!);
+                var hug = DerivedFrames()[groupId];
+
+                if (Math.Abs(frameNow.X - hug.X) > 0.001 || Math.Abs(frameNow.Width - hug.Width) > 0.001
+                    || Math.Abs(frameNow.Y - hug.Y) > 0.001 || Math.Abs(frameNow.Height - hug.Height) > 0.001)
+                {
+                    problems.Add(
+                        $"排完组内，{groupId} 的框在 {frameNow.X:0.#},{frameNow.Y:0.#} {frameNow.Width:0.#}×{frameNow.Height:0.#}，" +
+                        $"全组 {members.Count} 格要的是 {hug.X:0.#},{hug.Y:0.#} {hug.Width:0.#}×{hug.Height:0.#}");
+                }
+
+                Undo();
+
+                var back = RectOf(NodeOf(groupId)!);
+
+                if (_history.UndoCount != undoBefore || Math.Abs(back.X - frameBefore.X) > 0.001
+                    || Math.Abs(back.Width - frameBefore.Width) > 0.001)
+                {
+                    problems.Add($"撤销排组内没把框带回 {frameBefore.X:0.#},{frameBefore.Y:0.#}：读到 {back.X:0.#},{back.Y:0.#}");
+                }
+                else
+                {
+                    Diagnostics.Write(
+                        $"selftest 排组内: {groupId} 里两枚对齐到 X={alignedX:0.#}，框跟着全组 {members.Count} 格重算，撤销一发框和格子一起回去");
+                }
+
+                Rebuild();
+            }
+        }
+
+        // 排布与组：上面那段注释写着"排布命令本来就不作用于组"，可 SelectedInOrder() 并没有过滤组框，
+        // 而那一发是**躲开组**挑的格子——所以它量不到那句话是假的。这一发走用户真会走的路：
+        // Ctrl+A（所有节点都进选中，含组框）→ 左对齐 → 每个框必须等于它现在那批成员的包围盒；
+        // 再撤销一发，格子和框必须一起回去。
+        {
+            static bool SameBox(Grouping.Rect left, Grouping.Rect right)
+                => Math.Abs(left.X - right.X) <= 0.001 && Math.Abs(left.Y - right.Y) <= 0.001
+                    && Math.Abs(left.Width - right.Width) <= 0.001 && Math.Abs(left.Height - right.Height) <= 0.001;
+
+            var frames = GroupRects();
+
+            if (frames.Count == 0)
+            {
+                Diagnostics.Write("selftest 排布与组: 板上没有组，这一发不适用（不是跳过，是没有可测的框）");
+            }
+            else
+            {
+                var undoBefore = _history.UndoCount;
+
+                // "整块走"要在这里量：命令前记下每组成员的位置，命令后它们彼此的差必须一模一样。
+                var membersBefore = frames.ToDictionary(
+                    frame => frame.Id,
+                    frame => BoardNotes()
+                        .Where(node => frame.Holds(RectOf(node)))
+                        .Select(node => (node.Id, node.X, node.Y))
+                        .ToList());
+
+                SelectAll();
+                Arrange("左对齐", items => Aligning.Align(items, Aligning.Side.Left));
+
+                var split = new List<string>();
+
+                foreach (var (groupId, members) in membersBefore)
+                {
+                    if (members.Count < 2)
+                    {
+                        continue;
+                    }
+
+                    var offsets = members
+                        .Select(member =>
+                        {
+                            var node = NodeOf(member.Id)!;
+
+                            return (member.Id, DX: node.X - member.X, DY: node.Y - member.Y);
+                        })
+                        .ToList();
+
+                    var offenders = offsets
+                        .Where(offset => Math.Abs(offset.DX - offsets[0].DX) > 0.001
+                            || Math.Abs(offset.DY - offsets[0].DY) > 0.001)
+                        .ToList();
+
+                    if (offenders.Count > 0)
+                    {
+                        split.Add($"{groupId} 里 {offenders.Count}/{offsets.Count} 格位移不同（首格 {offsets[0].DX:0.#},{offsets[0].DY:0.#}）");
+                    }
+                }
+
+                if (split.Count > 0)
+                {
+                    problems.Add($"左对齐把一个组劈开了：{string.Join("；", split)}");
+                }
+
+                var derived = DerivedFrames();
+                var strays = new List<string>();
+
+                foreach (var frame in frames)
+                {
+                    var node = NodeOf(frame.Id);
+
+                    if (node is null || !derived.TryGetValue(frame.Id, out var hug))
+                    {
+                        continue;
+                    }
+
+                    var now = RectOf(node);
+
+                    if (!SameBox(now, hug))
+                    {
+                        var nowMembers = BoardNotes()
+                            .Where(note => now.Holds(RectOf(note)))
+                            .Select(note => $"{note.Id}({note.X:0.#},{note.Y:0.#} {note.Width:0.#}×{note.Height:0.#})");
+
+                        strays.Add(
+                            $"{frame.Id} 框在 {now.X:0.#},{now.Y:0.#} {now.Width:0.#}×{now.Height:0.#}，"
+                            + $"成员要的是 {hug.X:0.#},{hug.Y:0.#} {hug.Width:0.#}×{hug.Height:0.#}；"
+                            + $"对齐前 {string.Join("、", membersBefore[frame.Id].Select(m => m.Id))}，现在 {string.Join("、", nowMembers)}");
+                    }
+                }
+
+                if (strays.Count > 0)
+                {
+                    problems.Add($"左对齐以后有 {strays.Count} 个组框没跟着成员走：{string.Join("；", strays)}");
+                }
+
+                Undo();
+
+                var leftBehind = new List<string>();
+
+                foreach (var frame in frames)
+                {
+                    if (NodeOf(frame.Id) is { } node && !SameBox(RectOf(node), frame))
+                    {
+                        var now = RectOf(node);
+
+                        leftBehind.Add($"{frame.Id} 在 {now.X:0.#},{now.Y:0.#}，应在 {frame.X:0.#},{frame.Y:0.#}");
+                    }
+                }
+
+                if (leftBehind.Count > 0)
+                {
+                    problems.Add($"撤销排布没把框带回去：{string.Join("；", leftBehind)}");
+                }
+
+                if (_history.UndoCount != undoBefore)
+                {
+                    problems.Add($"排布与组那一发撤销以后步数不对：{_history.UndoCount} vs {undoBefore}");
+                }
+
+                Diagnostics.Write(
+                    $"selftest 排布与组: Ctrl+A＋左对齐以后 {frames.Count} 个框都等于成员包围盒、组内每格位移一致（整块走），撤销一发把格子和框一起带回原位");
+
+                Rebuild();
+            }
+        }
+
+        // 框是派生的，所以"把一枚挪出框"必须让框缩回来——这一发走的是 BeginGesture/EndGesture
+        // 那对外壳（拖拽用的就是它），测的是"松手以后框还罩不罩着已经出去的那格"。
+        {
+            var roomy = GroupRects()
+                .Select(frame => (frame, members: BoardNotes().Where(node => frame.Holds(RectOf(node))).ToList()))
+                .FirstOrDefault(candidate => candidate.members.Count >= 2);
+
+            if (roomy.frame.Id is null)
+            {
+                Diagnostics.Write("selftest 拖出组: 没有哪个组里有两格可挪，这一发不适用");
+            }
+            else
+            {
+                var escaped = roomy.members
+                    .OrderByDescending(node => node.X + node.Width)
+                    .First();
+
+                var before = RectOf(NodeOf(roomy.frame.Id)!);
+                var undoBefore = _history.UndoCount;
+
+                BeginGesture("自检挪出一格");
+
+                escaped.X = roomy.frame.Right + 400;
+
+                EndGesture();
+
+                var after = RectOf(NodeOf(roomy.frame.Id)!);
+
+                if (after.Width >= before.Width)
+                {
+                    problems.Add($"挪出一格以后框没缩回来：宽 {before.Width:0.#} → {after.Width:0.#}");
+                }
+
+                if (after.Holds(RectOf(NodeOf(escaped.Id)!)))
+                {
+                    problems.Add("挪出去那一格还被框罩着：框没有跟着成员走");
+                }
+
+                Undo();
+
+                var back = RectOf(NodeOf(roomy.frame.Id)!);
+
+                if (_history.UndoCount != undoBefore || Math.Abs(back.Width - before.Width) > 0.001
+                    || Math.Abs(back.X - before.X) > 0.001)
+                {
+                    problems.Add($"撤销那一挪没把框带回 {before.X:0.#} 宽 {before.Width:0.#}：读到 {back.X:0.#} 宽 {back.Width:0.#}");
+                }
+                else
+                {
+                    Diagnostics.Write(
+                        $"selftest 拖出组: {roomy.frame.Id} 从 {roomy.members.Count} 格里挪走最右那一格以后框宽 " +
+                        $"{before.Width:0.#}→{after.Width:0.#}，撤销带回去");
+                }
+
+                Rebuild();
             }
         }
 
@@ -2707,6 +3183,96 @@ public sealed partial class MainWindow : Window
             if (FilterBanner.Visibility == Visibility.Visible)
             {
                 problems.Add("清了筛选，板顶横幅还挂着");
+            }
+        }
+
+        // 筛选折叠那一层要在消费端量：折进去的格子必须 ① 画在锚点上 ② 点不到 ③ 文档一个字节不动
+        // ④ 框 hug 看得见的那几格 ⑤ 框上写着"折起 N 格"。摊开以后 ①② 反过来。
+        // 演示板上没有"一组两枚、只有一枚带标签"的形状，所以这一发自己造一枚——造完交回去。
+        {
+            var host = GroupRects()
+                .Select(frame => (frame, members: BoardNotes().Where(node => frame.Holds(RectOf(node))).ToList()))
+                .FirstOrDefault(candidate => candidate.members.Count >= 2);
+
+            if (host.frame.Id is null)
+            {
+                Diagnostics.Write("selftest 折叠: 没有哪个组里有两格，这一发不适用（不是跳过，是没有可测的组）");
+            }
+            else
+            {
+                var keeper = host.members[0];
+                var stray = host.members[^1];
+                var textBefore = keeper.Text;
+
+                keeper.Text = "@t折叠自检\n" + (textBefore ?? string.Empty);
+
+                _view.TagFilter = "#折叠自检";
+                Rebuild();
+
+                var jsonWhileFolded = _document.ToJson();
+                var displays = BuildDisplays();
+                var foldedAway = displays.Count(pair => pair.Value.FoldedAway);
+                displays.TryGetValue(host.frame.Id, out var plannedFrame);
+
+                var shown = plannedFrame?.ShownFrame;
+                var suffix = plannedFrame?.Suffix ?? string.Empty;
+
+                if (foldedAway != host.members.Count - 1)
+                {
+                    problems.Add($"折叠了几格读到 {foldedAway}，应是 {host.members.Count - 1}（一组 {host.members.Count} 格里只有一枚命中）");
+                }
+
+                if (_realized.TryGetValue(stray.Id, out var strayVisual)
+                    && (strayVisual.IsHitTestVisible || strayVisual.Opacity > 0.001))
+                {
+                    problems.Add($"折进去的那一格还点得到（可点 {strayVisual.IsHitTestVisible}、亮度 {strayVisual.Opacity:0.##}）");
+                }
+
+                if (shown is null || shown.Value.Width >= host.frame.Width)
+                {
+                    problems.Add($"框没有跟着看得见的格子收：读到 {(shown?.Width ?? -1):0.#} 宽，原来那副框是 {host.frame.Width:0.#}");
+                }
+
+                if (!suffix.Contains("折起 1 格", StringComparison.Ordinal))
+                {
+                    problems.Add($"框上那句「藏着几格」没出现：读到『{suffix}』");
+                }
+
+                // 框上那行会被卡片盖住（框贴着成员收，没给标题留边），所以同一句话必须由横幅再说一遍
+                // ——这一发量的就是"屏幕上真有一处说得出藏了几格"。
+                if (!_bannerRow.Text.Contains("1 格折进了组", StringComparison.Ordinal))
+                {
+                    problems.Add($"横幅没说折进了几格：『{_bannerRow.Text}』");
+                }
+
+                _expandedGroup = host.frame.Id;
+
+                var opened = BuildDisplays();
+
+                if (opened.Any(pair => pair.Value.FoldedAway))
+                {
+                    problems.Add("摊开以后还有格子是折着的");
+                }
+
+                if (opened.TryGetValue(stray.Id, out var backAgain) && (backAgain.FoldDX != 0 || backAgain.FoldDY != 0))
+                {
+                    problems.Add($"摊开以后那一格还被位移着：{backAgain.FoldDX:0.##},{backAgain.FoldDY:0.##}");
+                }
+
+                if (!string.Equals(_document.ToJson(), jsonWhileFolded, StringComparison.Ordinal))
+                {
+                    problems.Add("折回／摊开把文档改了：折叠必须只长在画面上，一次筛选不许同步给手机");
+                }
+
+                _expandedGroup = null;
+                _view.TagFilter = null;
+                keeper.Text = textBefore;
+                Rebuild();
+
+                Diagnostics.Write(
+                    $"selftest 折叠: {host.members.Count} 格里 1 枚命中 ⇒ 折 {foldedAway} 格、点不到、" +
+                    $"框从 {host.frame.Width:0.#} 收到 {shown?.Width ?? 0:0.#} 宽、框上『{suffix.Trim()}』；" +
+                    "摊开以后文档字节一个没变");
             }
         }
 
@@ -2855,6 +3421,57 @@ public sealed partial class MainWindow : Window
             Diagnostics.Write("selftest: 板上没有多行文字的格子 ⇒ 编辑器换行往返这一发不适用（不是跳过，是没有可测的格子）");
         }
 
+        // 回车换行时编辑框要立刻长高，不要等提交；手动定过大小的格子必须保持原框。
+        {
+            var growProbe = BoardNotes()
+                .Where(node => node.Kind == CanvasNodeKind.Text && !_view.IsManualSize(node.Id))
+                .OrderBy(node => node.Height)
+                .FirstOrDefault();
+
+            if (growProbe is not null)
+            {
+                var savedText = growProbe.Text;
+                var savedHeight = growProbe.Height;
+
+                BeginEdit(growProbe.Id);
+
+                if (_editor is null)
+                {
+                    problems.Add("编辑增长那一发没有开出输入框");
+                }
+                else
+                {
+                    var start = _editor.Height;
+                    _editor.Text = string.Join("\n", Enumerable.Range(1, 20).Select(n => $"第 {n} 行"));
+
+                    // WinUI 的 TextChanged 会晚一拍；这里直接走同一个测量函数，验的是增长算式。
+                    GrowEditorToFit();
+
+                    if (_editor.Height <= start + 1)
+                    {
+                        problems.Add($"多行输入没有让编辑框长高：{start:0.#} → {_editor.Height:0.#}");
+                    }
+                }
+
+                CloseEditor(commit: false);
+                growProbe.Text = savedText;
+                growProbe.Height = savedHeight;
+            }
+
+            var manual = _document.Add(CanvasNodeKind.Text, 40, 40, 220, 60);
+            manual.Text = string.Join("\n", Enumerable.Range(1, 10).Select(n => $"第 {n} 行"));
+            var manualHeight = manual.Height;
+            _view.MarkManualSize(manual.Id);
+            FitNoteHeight(manual);
+
+            if (Math.Abs(manual.Height - manualHeight) > 0.5)
+            {
+                problems.Add($"手动定过大小的格子被自动高度改成了 {manual.Height:0.#}（原 {manualHeight:0.#}）");
+            }
+
+            _document.Remove(manual.Id);
+        }
+
         // 箭头：加一条边，线上必须真的画出"一根线 + 一枚箭头"两个图元；撤掉就归零。
         // 只在内存里加，不存盘——自检要的是"画没画"，不是"文件里有没有"。
         {
@@ -2973,10 +3590,21 @@ public sealed partial class MainWindow : Window
                     BoardArea.UpdateLayout();
 
                     var fit = card.WindowState();
+                    var moreAbove = FindDescendant<Border>(card, "MoreAbove");
+                    var moreBelow = FindDescendant<Border>(card, "MoreBelow");
 
                     if (fit.Visible < fit.Total)
                     {
                         problems.Add($"自动高度以后还差 {fit.Total - fit.Visible} 行没地方放（可见 {fit.Visible} / 共 {fit.Total}）");
+                    }
+
+                    if (moreAbove is null || moreBelow is null)
+                    {
+                        problems.Add("便签上没有『更多』提示牌");
+                    }
+                    else if (moreBelow.Visibility != Visibility.Collapsed)
+                    {
+                        problems.Add("放得下的便签仍挂着『更多 ↓』");
                     }
 
                     if (card.ScrollByLines(1))
@@ -2992,9 +3620,19 @@ public sealed partial class MainWindow : Window
 
                     var cut = card.WindowState();
 
+                    if (moreBelow is not null && moreBelow.Visibility != Visibility.Visible)
+                    {
+                        problems.Add($"压到 {probe.Height:0}px（可见 {cut.Visible} 行 / 共 {cut.Total} 行）却没有『更多 ↓』提示");
+                    }
+
                     if (!card.ScrollByLines(2))
                     {
                         problems.Add($"压到 {probe.Height:0}px（可见 {cut.Visible} 行 / 共 {cut.Total} 行）滚轮仍不归这一格：整页会被缩放，剩下的字够不着");
+                    }
+
+                    if (moreAbove is not null && moreAbove.Visibility != Visibility.Visible)
+                    {
+                        problems.Add("往下翻两行以后没有『↑ 更多』提示");
                     }
 
                     if (card.WindowState().First != 2)
@@ -3008,12 +3646,361 @@ public sealed partial class MainWindow : Window
                     {
                         problems.Add("滚回顶部以后没有回到第一行");
                     }
+
+                    if (moreAbove is not null && moreAbove.Visibility != Visibility.Collapsed)
+                    {
+                        problems.Add("回到顶部以后『↑ 更多』还挂着");
+                    }
+
+                    // 他 10-22 报的第四条：手动拉长以后窗口还停在中间，"↑ 更多"亮着、底下全是空的
+                    // ——比句末三个点更糟。这一发先滚下去再拉高：放得下了就必须自己回顶、两牌同闭，
+                    // 而不是等人自己去滚。框本身不许自己缩（manual 尺寸是另一条规矩）。
+                    card.ScrollByLines(2);
+                    probe.Height = 2000;
+
+                    ArrangeAll();
+                    BoardArea.UpdateLayout();
+
+                    var grown = card.WindowState();
+
+                    if (grown.First != 0)
+                    {
+                        problems.Add($"拉长到全放得下以后窗口还停在第 {grown.First} 行（可见 {grown.Visible} / 共 {grown.Total}）：该自动回顶");
+                    }
+
+                    if ((moreAbove is not null && moreAbove.Visibility != Visibility.Collapsed)
+                        || (moreBelow is not null && moreBelow.Visibility != Visibility.Collapsed))
+                    {
+                        problems.Add($"拉长到全放得下（可见 {grown.Visible} / 共 {grown.Total}）以后『更多』牌子还挂着");
+                    }
                 }
 
                 probe.Text = wasText;
                 probe.Height = was;
 
                 Rebuild();
+            }
+
+            // 他 10-22 报的第一、二条：单击组里的便签＝只选那一枚（组是一个关系，不是一块场地）；
+            // 点组的名牌或虚线环带＝整组，且框自己不进选中——那才是"整个组的范围变蓝"的来源。
+            // 量的是点击路径的唯一判定源 PressTarget，和组卡片上的实物形状：名牌必须抬到顶边上方。
+            {
+                var emptyFrames = EmptyGroupIds();
+                var host = GroupRects().FirstOrDefault(frame => !emptyFrames.Contains(frame.Id));
+
+                if (host.Id is null)
+                {
+                    Diagnostics.Write("selftest 组点击: 板上没有组，这一发不适用（不是跳过，是没有可测的框）");
+                }
+                else
+                {
+                    var members = BoardNotes().Where(node => host.Holds(RectOf(node))).ToList();
+
+                    var (noteIds, noteFocus) = PressTarget(NodeOf(members[0].Id)!);
+
+                    if (noteIds.Count != 1 || noteIds[0] != members[0].Id || noteFocus is not null)
+                    {
+                        problems.Add($"点组里的便签选中了 {noteIds.Count} 格、焦点 {noteFocus ?? "无"}：单击就该直选那一枚");
+                    }
+
+                    var (groupIds, groupFocus) = PressTarget(NodeOf(host.Id)!);
+
+                    if (groupFocus != host.Id || groupIds.Count != members.Count || groupIds.Contains(host.Id))
+                    {
+                        problems.Add($"点组的边选中了 {groupIds.Count} 格、焦点 {groupFocus ?? "无"}，应是全组 {members.Count} 格且框不进选中");
+                    }
+
+                    if (!_realized.TryGetValue(host.Id, out var frameVisual))
+                    {
+                        problems.Add("组框没有实例化的视觉");
+                    }
+                    else
+                    {
+                        var chrome = frameVisual.GroupChrome();
+
+                        if (chrome.SurfaceHittable)
+                        {
+                            problems.Add("组框还在整片接鼠标：单击组里的便签会被框吃掉");
+                        }
+
+                        if (chrome.Grab != Visibility.Visible || chrome.Plate != Visibility.Visible)
+                        {
+                            problems.Add($"点边选整组的门没开（环带 {chrome.Grab}、名牌 {chrome.Plate}）");
+                        }
+
+                        if (chrome.PlateLift >= 0)
+                        {
+                            problems.Add($"组名牌还压在框内：偏移 {chrome.PlateLift:0.#}px，会和成员的字重合");
+                        }
+                    }
+
+                    Diagnostics.Write(
+                        $"selftest 组点击: {host.Id} 里 {members.Count} 格 ⇒ 单击便签只中 1、点边/名牌中 {groupIds.Count}（框不进选中）；" +
+                        "名牌出框、环带接点");
+                }
+            }
+
+            // 成组的两只手（10-22 他批的 C＋D，D 已并进操作条）：先摆三枚互相叠着的散格，问提议
+            // 胶囊浮不浮；点它＝走同一条成组路；再选中组里的一枚 ⇒ 操作条浮起，走「移出」那发
+            // ＝那格出组、框缩，撤销归位；普通拖动把成员甩出框 ⇒ 框必须跟着长（sticky）。
+            // 负对照：只擦肩 1% 的两枚不许浮提议。
+            {
+                var untouched = _document.ToJson();
+
+                // 临时堆放在 (900,520) 一带：那块在演示板上是空的，不会和 u0a/u48 的框
+                // 互相套住，测完按 id 拆干净。
+                var stackA = _document.Add(CanvasNodeKind.Text, 900, 520, 200, 100);
+                var stackB = _document.Add(CanvasNodeKind.Text, 1050, 540, 200, 100);
+                var stackC = _document.Add(CanvasNodeKind.Text, 975, 580, 200, 100);
+
+                Rebuild();
+
+                OfferGroupHint(stackA);
+
+                Grouping.Rect madeFrame = default;
+
+                if (_groupHint is null)
+                {
+                    problems.Add("三枚叠在一起没浮出『编成组？』提议");
+                }
+                else
+                {
+                    var hintText = ((TextBlock)_groupHint.Child).Text;
+
+                    if (!hintText.Contains("3 格", StringComparison.Ordinal))
+                    {
+                        problems.Add($"提议没说清是几格：『{hintText}』");
+                    }
+
+                    // 浮出来不等于看得见：量真实布局＋落位要在视口内——塌成一条线、
+                    // 或者停在屏幕外，屏幕上都是"没有提议"。
+                    ArrangeAll();
+                    BoardArea.UpdateLayout();
+
+                    var hintX = Canvas.GetLeft(_groupHint);
+                    var hintY = Canvas.GetTop(_groupHint);
+                    var hintSeen = _groupHint.ActualWidth > 60 && _groupHint.ActualHeight > 16
+                        && hintX >= 0 && hintX < BoardArea.ActualWidth
+                        && hintY >= 0 && hintY < BoardArea.ActualHeight;
+
+                    Diagnostics.Write(
+                        $"selftest 成组助手·胶囊: {ActualSizeOf(_groupHint)}、位 ({hintX:0.#},{hintY:0.#})、板宽 {BoardArea.ActualWidth:0.#}");
+
+                    if (!hintSeen)
+                    {
+                        problems.Add($"提议胶囊塌了：{_groupHint.ActualWidth:0.#}×{_groupHint.ActualHeight:0.#}");
+                    }
+
+                    AcceptGroupHint();
+
+                    madeFrame = GroupRects().FirstOrDefault(candidate =>
+                        candidate.Holds(RectOf(stackA))
+                        && candidate.Holds(RectOf(stackB))
+                        && candidate.Holds(RectOf(stackC)));
+
+                    if (madeFrame.Id is null)
+                    {
+                        problems.Add("点提议以后没有产出一个框住三格的框");
+                    }
+                }
+
+                if (madeFrame.Id is not null)
+                {
+                    SelectOnly(stackB.Id);
+                    ProjectSelection();
+
+                    var rail = FindDescendant<Border>(HandleLayer, "NoteRail");
+                    var railGroup = FindDescendant<Border>(HandleLayer, "NoteRailGroup");
+
+                    if (rail is null || rail.Visibility != Visibility.Visible || railGroup is null)
+                    {
+                        problems.Add("选中组里的一枚没浮出操作条（组/色/删三枚圆钮）");
+                    }
+                    else
+                    {
+                        var frameBefore = madeFrame;
+
+                        DetachFromGroup(stackB.Id); // 组钮菜单「移出分组」的落点
+
+                        if (frameBefore.Holds(RectOf(NodeOf(stackB.Id)!)))
+                        {
+                            problems.Add("走过『移出分组』以后那格还在框里");
+                        }
+
+                        var frameNow = GroupRects().First(candidate => candidate.Id == frameBefore.Id);
+
+                        if (frameNow.Width >= frameBefore.Width)
+                        {
+                            problems.Add($"移出以后框没缩：宽 {frameBefore.Width:0.#} → {frameNow.Width:0.#}");
+                        }
+
+                        Undo();
+
+                        // 撤销是按快照重铸文档的：手里那枚 stackB 是旧对象，必须按 id 重新取，
+                        // 否则量的是撤销前那份尸体。
+                        if (!SameFrame(RectOf(NodeOf(frameBefore.Id)!), frameBefore)
+                            || !frameBefore.Holds(RectOf(NodeOf(stackB.Id)!)))
+                        {
+                            problems.Add("撤销一发没把那格和框一起拉回");
+                        }
+                    }
+
+                    // 换色钮现在弹一列色板（6 预设＋无色＝7 颗，直接涂颜色不写色名），点谁套谁——
+                    // 不再是"点一下循环换一格"；右键菜单里那份"颜色"也删了，换色只剩操作条这一处入口。
+                    SelectOnly(stackB.Id);
+                    ProjectSelection();
+                    ToggleColorPopover();
+
+                    var popover = FindDescendant<Border>(HandleLayer, "NoteColorPopover");
+
+                    if (popover is null || popover.Visibility != Visibility.Visible)
+                    {
+                        problems.Add("点换色钮没弹出左侧色板（NoteColorPopover）");
+                    }
+                    else
+                    {
+                        var none = FindDescendant<Border>(popover, "NoteSwatchNone");
+                        var third = FindDescendant<Border>(popover, "NoteSwatch3");
+
+                        if (none is null || third is null)
+                        {
+                            problems.Add("色板缺颗：该有『无色』和各预设圆钮");
+                        }
+                        else if (none.Child is null || third.Child is not null)
+                        {
+                            problems.Add("只有『无色』那枚该带斜杠：无色没斜杠、或有色那枚带了斜杠");
+                        }
+
+                        ApplyColor("3");
+
+                        if (NodeOf(stackB.Id)?.Color != "3")
+                        {
+                            problems.Add($"点色板第 3 颗该把那格定成 3，实得 {NodeOf(stackB.Id)?.Color ?? "null"}");
+                        }
+
+                        Undo(); // 收回这一发改色，别给临时副本留脏格
+                    }
+
+                    CloseColorPopover();
+
+                    Diagnostics.Write("selftest 换色色板: 弹层 7 颗（『无色』那枚一圈虚线环）、点第 3 颗＝定色不循环；右键菜单已无『颜色』子项");
+
+                    // 普通拖动不许把成员甩出组：把他甩到框外 300 像素——框必须跟着长（sticky），
+                    // 撤销一发框和格一起回去。只有组钮那一路才允许真出框。
+                    if (rail is not null)
+                    {
+                        var stickyB = NodeOf(stackB.Id)!;
+                        var startMembers = new List<string>(Grouping.Members(madeFrame, BoardNotes().ConvertAll(RectOf))
+                            .Select(member => member.Id));
+                        var startPos = (stickyB.X, stickyB.Y);
+
+                        BeginGesture("自检普通拖出");
+
+                        stickyB.X = madeFrame.Right + 300;
+
+                        KeepDraggedMemberInFrame(new NodeGesture(
+                            0,
+                            0,
+                            new Dictionary<string, (double X, double Y)>(StringComparer.Ordinal) { [stickyB.Id] = startPos },
+                            stickyB.Id,
+                            GroupMode: false,
+                            StartGroupId: madeFrame.Id,
+                            StartMembers: startMembers));
+
+                        EndGesture();
+
+                        var grown = RectOf(NodeOf(madeFrame.Id)!);
+
+                        if (!grown.Holds(RectOf(NodeOf(stackB.Id)!)))
+                        {
+                            problems.Add("普通拖动把成员甩出了框：sticky 没让框跟着长");
+                        }
+
+                        Undo();
+                        Rebuild();
+                    }
+
+                    // 一角碰上就该入组，而且**格子不动、只有框长过去**（他 10-22 的更正：
+                    // "松手之后便签的位置会变，有问题，应该只是组的虚线边框范围变化"）：
+                    // 整格在框外不许入；只让一角探进来（中心在框外）→ 松手判定把框长到罩住它，格子留在原地。
+                    if (rail is not null)
+                    {
+                        var cornerB = NodeOf(stackB.Id)!;
+
+                        cornerB.X = madeFrame.Right + 400;
+
+                        if (JoinByGrowingFrame(stackB.Id, null))
+                        {
+                            problems.Add("整格在框外 400 像素也被吸进了组");
+                        }
+
+                        cornerB.X = madeFrame.Right - 30; // 左上一角探进框，中心仍在框外
+
+                        var droppedX = cornerB.X;
+
+                        if (madeFrame.Holds(RectOf(cornerB)))
+                        {
+                            problems.Add("自检没造出「一角碰上、中心在外」那一形");
+                        }
+                        else if (!JoinByGrowingFrame(stackB.Id, null))
+                        {
+                            problems.Add("一角碰上组框却没激活入组（还是只有中心进框才算）");
+                        }
+                        else
+                        {
+                            var grownFrame = GroupRects().First(candidate => candidate.Id == madeFrame.Id);
+
+                            if (NodeOf(stackB.Id)!.X != droppedX)
+                            {
+                                problems.Add("入组把便签挪走了——应该只长框，格子留在松手处");
+                            }
+
+                            if (!grownFrame.Holds(RectOf(NodeOf(stackB.Id)!)))
+                            {
+                                problems.Add("框没长到罩住这格（中心还在框外）");
+                            }
+                        }
+
+                        Rebuild();
+                    }
+
+                    _document.Remove(madeFrame.Id!);
+                }
+
+                var grazeA = _document.Add(CanvasNodeKind.Text, 6000, 6000, 200, 100);
+                var grazeB = _document.Add(CanvasNodeKind.Text, 6198, 6000, 200, 100);
+
+                Rebuild();
+                OfferGroupHint(grazeA);
+
+                if (_groupHint is not null)
+                {
+                    problems.Add("两枚只擦肩 1% 也浮了『编成组？』——阈值没挡住");
+                }
+
+                ClearGroupHint();
+
+                foreach (var temp in new[] { grazeB, grazeA, stackC, stackB, stackA })
+                {
+                    _document.Remove(temp.Id);
+                }
+
+                Rebuild();
+
+                if (!string.Equals(_document.ToJson(), untouched, StringComparison.Ordinal))
+                {
+                    problems.Add("成组提议／操作条／sticky 那一发在文档里留了字节");
+                }
+                else
+                {
+                    Diagnostics.Write(
+                        "selftest 成组助手: 3 枚叠拢 ⇒ 提议浮起、点＝同路成组；操作条随单枚选中浮起，『移出』让框缩、撤销归位；" +
+                        "普通拖动甩成员＝框跟着长（sticky）；擦肩 1% 不提议");
+                }
+
+                static bool SameFrame(Grouping.Rect left, Grouping.Rect right)
+                    => Math.Abs(left.X - right.X) <= 0.001 && Math.Abs(left.Y - right.Y) <= 0.001
+                        && Math.Abs(left.Width - right.Width) <= 0.001 && Math.Abs(left.Height - right.Height) <= 0.001;
             }
 
             // 双击那三条路的判据：同一格的上边正中该被认成"边缘"，中心该被认成"格内"，
@@ -3090,6 +4077,20 @@ public sealed partial class MainWindow : Window
 
             ShowCheatsheet();
             SetFilterPanel(true);
+
+            if (CheatScroll.Content is not StackPanel cheatColumns)
+            {
+                problems.Add("键位清单没有摊成栏");
+            }
+            else
+            {
+                var expectedColumns = Root.ActualWidth >= 820 ? 3 : 2;
+
+                if (cheatColumns.Children.Count != expectedColumns)
+                {
+                    problems.Add($"键位清单读到 {cheatColumns.Children.Count} 栏，应 {expectedColumns}（窗宽 {Root.ActualWidth:0}）");
+                }
+            }
 
             // 查找那一层要拿板上真的有的那半句话去搜：命中为 0 的面板只是在演它自己。
             var probeTerm = ProbeTerm();
@@ -3353,6 +4354,15 @@ public sealed partial class MainWindow : Window
             }
         }
 
+        // 换板子那一组断言在 BoardTabs.cs：切走必须落盘、历史不跨板、关标签不删板、最后一块拒关。
+        SelfTestBoardSwitching(problems);
+
+        // 直建与行内改名也走界面自己那两条路；跑在自检副本上，收尾把造出来的板子删掉。
+        SelfTestCreateAndRename(problems);
+
+        // 关掉一块＝删掉这块板：文件、sidecar、历史与本地同步账本一起走；再点加号会重新建出同名板。
+        SelfTestBoardDeletion(problems);
+
         Diagnostics.Write(
             $"selftest: zoom now {Percent()}, realised {_realized.Count}/{_document.Nodes.Count}, " +
             $"visible {VisibleCount()}, handles {_handles.Count}, selected {_selection.Count}, " +
@@ -3365,24 +4375,78 @@ public sealed partial class MainWindow : Window
         return problems;
     }
 
+    /// <summary>
+    /// 被视口剔除的格子必须整件 Collapsed。只把 Width/Height 置零不够：三枚纸影是
+    /// 卡盒子外的独立矩形，会留在旧位置——他 10-22 截图里那排"只剩阴影"的空白条。
+    /// </summary>
+    private void SelfTestCulledVisuals(List<string> problems)
+    {
+        var culled = _realized.Values
+            .Where(visual => visual.Width <= 0.5 || visual.Height <= 0.5)
+            .ToList();
+
+        if (culled.Count == 0)
+        {
+            Diagnostics.Write("selftest 剔除: 这一拍没有格子被剔出，阴影残留这一发不适用（不是通过）");
+
+            return;
+        }
+
+        var leaking = culled
+            .Where(visual => visual.Visibility != Visibility.Collapsed)
+            .ToList();
+
+        if (leaking.Count > 0)
+        {
+            problems.Add(
+                $"{leaking.Count}/{culled.Count} 格被剔除后仍 Visibility={leaking[0].Visibility}：卡片阴影带会留在板上");
+        }
+        else
+        {
+            Diagnostics.Write($"selftest 剔除: {culled.Count} 格已 Collapsed，阴影带不再露");
+        }
+    }
+
     public void BeginSelfTest()
     {
         RoutedEventHandler run = null!;
 
+        // 标签条的 ListView 是在 Root.Loaded 之后才收到自己的 Loaded 的：同一拍量它，
+        // 得到的是"items=0、6×5、容器全没长"的假读数（10-22 第一发就红在这里）。
+        // 自检要等它真 loaded 再跑；等不到也照跑，让几何断言自己红，而不是把装置问题
+        // 读成产品问题。
+        void FinishWhenTabsAreLoaded(int attempts)
+        {
+            var list = FindDescendant<ListView>(BoardTabs, "TabListView");
+
+            if (list is null || list.IsLoaded || attempts >= 120)
+            {
+                if (list is not null && !list.IsLoaded)
+                {
+                    Diagnostics.Write($"SELFTEST NOTE: TabListView 等到 {attempts} 拍仍未 loaded，标签条几何会读 0");
+                }
+
+                var problems = RunSelfTest();
+
+                foreach (var problem in problems)
+                {
+                    Diagnostics.Write($"SELFTEST FAIL: {problem}");
+                }
+
+                Diagnostics.Write(problems.Count == 0 ? "SELFTEST PASS" : $"SELFTEST FAILED ({problems.Count} problem(s))");
+
+                Environment.Exit(problems.Count == 0 ? 0 : 1);
+
+                return;
+            }
+
+            DispatcherQueue.TryEnqueue(() => FinishWhenTabsAreLoaded(attempts + 1));
+        }
+
         run = (_, _) =>
         {
             Root.Loaded -= run;
-
-            var problems = RunSelfTest();
-
-            foreach (var problem in problems)
-            {
-                Diagnostics.Write($"SELFTEST FAIL: {problem}");
-            }
-
-            Diagnostics.Write(problems.Count == 0 ? "SELFTEST PASS" : $"SELFTEST FAILED ({problems.Count} problem(s))");
-
-            Environment.Exit(problems.Count == 0 ? 0 : 1);
+            FinishWhenTabsAreLoaded(attempts: 0);
         };
 
         if (Root.IsLoaded)
@@ -3484,6 +4548,7 @@ public sealed partial class MainWindow : Window
         var savedCheatsheet = _cheatsheetOpen;
         var savedSearch = _searchOpen;
         var savedRestore = _restoreOpen;
+        var savedRename = _renamingPath;
         var panelsOpened = false;
         string? savedPanelTagFilter = null;
         Box? framedBox = null;
@@ -3520,9 +4585,10 @@ public sealed partial class MainWindow : Window
                 Frame(toFrame.Value);
                 reframed = true;
             }
-            else if (mode != "view")
+            else if (mode != "view" && mode != "chrome")
             {
-                return new ShotReply(false, null, Error: $"不懂的 mode \"{request.Mode}\"，可给 view / fit / node");
+                // 打错的档位不当场拒的话会降级成 view：拍不到标签条的那张图会被读成"标签条没画出来"。
+                return new ShotReply(false, null, Error: $"不懂的 mode \"{request.Mode}\"，可给 view / fit / node / chrome");
             }
 
             if (request.Select is { Length: > 0 } selectArg)
@@ -3575,6 +4641,20 @@ public sealed partial class MainWindow : Window
 
                     case "restore":
                         SetRestorePanel(true);
+                        break;
+
+                    case "rename":
+                        // 行内改名那一帧也得拍得到：活动标签换成了输入框，关闭键收起，输入框
+                        // 比原名长一截——否则"c"和原名一模一样，PNG 看不出换没换。
+                        // 预览锁：TextField 失焦会走提交，拍图不能因此真把临时板改名。
+                        _renamePreview = true;
+                        BeginRenameTab(_boardPath);
+
+                        if (_renameBox is not null)
+                        {
+                            _renameBox.Text = $"{BoardName(_boardPath)}（改名）";
+                        }
+
                         break;
 
                     case "pair":
@@ -3648,15 +4728,45 @@ public sealed partial class MainWindow : Window
                         Rebuild();
                         break;
 
+                    case "fold":
+                    case "unfold":
+                        {
+                            // 折叠那一层的两个终态。取证不许造数据：板上没有"一组里有的命中、有的不命中"
+                            // 的形状就明说——而不是挑一个把整组都筛暗的标签，拍一张看着像折好了的图。
+                            var probe = FoldProbe();
+
+                            if (probe is null)
+                            {
+                                return new ShotReply(false, null,
+                                    Error: "板上没有「一组里有的命中、有的不命中」的形状，折不出东西");
+                            }
+
+                            _view.TagFilter = probe.Value.Tag;
+
+                            Rebuild();
+                            SetGroupExpanded(probe.Value.Group, panelArg is "unfold", animate: false);
+
+                            Diagnostics.Write(
+                                $"shot {panelArg}: lens『{probe.Value.Tag}』落在 {probe.Value.Group}，" +
+                                $"这一发里折着的格子 {_folded.Count} 枚");
+
+                            break;
+                        }
+
                     default:
-                        return new ShotReply(false, null, Error: $"不懂的 panel \"{panelArg}\"，可给 filter / cheat / banner / search / restore / pair / pull / shrink / scrolled");
+                        return new ShotReply(false, null, Error: $"不懂的 panel \"{panelArg}\"，可给 filter / cheat / banner / search / restore / rename / fold / unfold / pair / pull / shrink / scrolled");
                 }
 
                 panelsOpened = true;
                 savedPanelTagFilter = savedTagFilter;
             }
 
-            BoardArea.UpdateLayout();
+            // chrome 拍的是整扇窗口：顶上那条标签不在 BoardArea 里，拿板面那档去量它，
+            // 只会拍出"图里没有标签"这一条假读数。板面那一档的目标一个字不动——
+            // 已有的对比读数（点阵、板底、浮层）都锚在 BoardArea 上。
+            FrameworkElement surface = mode == "chrome" ? Root : BoardArea;
+
+            surface.UpdateLayout();
 
             var bitmap = new RenderTargetBitmap();
 
@@ -3666,7 +4776,7 @@ public sealed partial class MainWindow : Window
             // layers *under* the notes (dot grid, vignette) and the surface's own fill, and
             // ItemLayer's bounds leave all of that out — that is the defect that made "板底
             // 读回 rgba(0,0,0,0)" and hid S2 from the instrument that was supposed to check it.
-            await bitmap.RenderAsync(BoardArea);
+            await bitmap.RenderAsync(surface);
 
             if (bitmap.PixelWidth == 0 || bitmap.PixelHeight == 0)
             {
@@ -3705,6 +4815,16 @@ public sealed partial class MainWindow : Window
                 $"at left {Canvas.GetLeft(GridLayer):0.###} top {Canvas.GetTop(GridLayer):0.###} " +
                 $"size {GridLayer.Width:0.###}×{GridLayer.Height:0.###} visible {GridLayer.Visibility} " +
                 $"offset {GridOffset.X:0.###},{GridOffset.Y:0.###} actual {GridLayer.ActualWidth:0.#}×{GridLayer.ActualHeight:0.#})");
+
+            if (mode == "chrome")
+            {
+                // 这一档的读数必须落在日志里，否则"标签条拍到了"只是我的一句断言。
+                Diagnostics.Write(
+                    $"  标题栏: 标签 {BoardTabs.TabItems.Count} 枚，选中第 {BoardTabs.SelectedIndex} 枚" +
+                    $"（{(BoardTabs.SelectedItem as TabViewItem)?.Header}），" +
+                    $"条 {BoardTabs.ActualWidth:0.##}×{BoardTabs.ActualHeight:0.##}，宿主 {TitleBarHost.ActualWidth:0.##}×{TitleBarHost.ActualHeight:0.##}，" +
+                    $"右侧内缩 {TitleBarHost.Padding.Right:0.##}，整窗框 {frameWidth}×{frameHeight}");
+            }
 
             return new ShotReply(
                 true,
@@ -3756,7 +4876,7 @@ public sealed partial class MainWindow : Window
                     CloseCheatsheet();
                 }
 
-                if (string.Equals(request.Panel?.Trim(), "banner", StringComparison.OrdinalIgnoreCase)
+                if (request.Panel?.Trim() is "banner" or "fold" or "unfold"
                     && !string.Equals(_view.TagFilter, savedPanelTagFilter, StringComparison.Ordinal))
                 {
                     _view.TagFilter = savedPanelTagFilter;
@@ -3773,6 +4893,13 @@ public sealed partial class MainWindow : Window
                 {
                     CloseRestorePanel();
                 }
+
+                if (savedRename is null && _renamingPath is not null)
+                {
+                    CancelRename();
+                }
+
+                _renamePreview = false;
 
                 if (Pulling)
                 {
@@ -3950,6 +5077,13 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // 任何一格 TextBox 持键盘时，打进去的字归它，不归板子。改名那一格就在标签条里，
+        // 它没有自己的面板可判，所以这里按焦点类型放行——这也是其余输入框共用的不变量。
+        if (FocusManager.GetFocusedElement(Root.XamlRoot) is TextBox)
+        {
+            return;
+        }
+
         var control = (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down));
 
@@ -3983,6 +5117,13 @@ public sealed partial class MainWindow : Window
                     // 一按退一层：正在拉的那根线先断掉，板子上什么都没留下。
                     CancelPull();
                     Say("那根线没收了");
+                    e.Handled = true;
+                    break;
+                }
+
+                if (CollapseExpandedGroup())
+                {
+                    // 摊开的那一层也算一层：Esc 先把它折回去，再管面板与选中。
                     e.Handled = true;
                     break;
                 }
@@ -4082,7 +5223,10 @@ internal sealed record NodeGesture(
     double StartPointerX,
     double StartPointerY,
     Dictionary<string, (double X, double Y)> StartGeometry,
-    string PrimaryId);
+    string PrimaryId,
+    bool GroupMode = false,
+    string? StartGroupId = null,
+    IReadOnlyList<string>? StartMembers = null);
 
 internal sealed record ResizeGesture(
     string Direction,

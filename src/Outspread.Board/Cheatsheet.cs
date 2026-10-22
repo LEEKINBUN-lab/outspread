@@ -114,23 +114,33 @@ public sealed partial class MainWindow
             .Select(command => PanelKit.Row(command.Label, command.Chord, keys: true))
             .ToList();
 
-        // 两栏按行数切平。上一版切在分节边界上是为了"一节不许跨栏"——节名一删，那条约束
-        // 就没有对象了，剩下的只是让两边一样高：收尾空半截正是他截图里指过的样子。
-        var half = (rows.Count + 1) / 2;
+        // 两栏还是三栏看窗口给不给地方：30 行摊成两栏是一堵 600px 的墙（他 10-22 说拥挤），
+        // 三栏把它压到 10 行高，横向仍落在 772 的 MaxWidth 里。窄窗口退回两栏，宁可高也不裁字。
+        var columns = Root.ActualWidth >= 820 ? 3 : 2;
+        var perColumn = (rows.Count + columns - 1) / columns;
 
-        // 两栏各按自己的内容长：这里不能用星号列——presenter 的模板里有一枚横向禁滚的 ScrollViewer，
+        // 每栏各按自己的内容长：这里不能用星号列——presenter 的模板里有一枚横向禁滚的 ScrollViewer，
         // 它在"可用宽度由内容决定"的宿主里会退化成最小宽度（量到过：整块清单被压到 240 宽、
-        // 右列的键位被挤出可视区）。横排 StackPanel 给的是无限宽测量，两栏才各自称出自己的体重。
+        // 右列的键位被挤出可视区）。横排 StackPanel 给的是无限宽测量，几栏才各自称出自己的体重。
         var pair = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 34,
+            Spacing = 44,
         };
 
-        pair.Children.Add(PanelKit.Host(rows.Take(half).ToArray()));
-        pair.Children.Add(PanelKit.Host(rows.Skip(half).ToArray()));
+        for (var column = 0; column < columns; column++)
+        {
+            var slice = rows.Skip(column * perColumn).Take(perColumn).ToArray();
+
+            if (slice.Length > 0)
+            {
+                pair.Children.Add(PanelKit.Host(slice));
+            }
+        }
 
         CheatScroll.Content = pair;
+
+        Diagnostics.Write($"键位清单: {rows.Count} 行 × {columns} 栏（每栏最多 {perColumn} 行）");
 
         // 板底在浮层下面透出来一点：它盖住的那格字仍可辨，这是"悬浮"而不是"遮挡"的唯一可读凭据。
         CheatScrim.Visibility = Visibility.Visible;

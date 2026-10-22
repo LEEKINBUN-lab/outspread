@@ -77,6 +77,12 @@ public sealed partial class MainWindow
         new("查找", "Ctrl+F", "板子", OpenSearch, Listed: false),
         new("恢复…", string.Empty, "板子", OpenRestorePanel),
 
+        // 一块板一件事：这一组管的是"这扇窗口现在在处理哪件事"，不动板子上的任何一个字。
+        new("新板块", "Ctrl+T", "换板子", CreateNewBoard),
+        new("关掉这块板", "Ctrl+W", "换板子", CloseCurrentBoard),
+        new("下一块板", "Ctrl+PageDown", "换板子", () => StepBoard(1)),
+        new("上一块板", "Ctrl+PageUp", "换板子", () => StepBoard(-1)),
+
         // Shift+1 / Shift+2 同样走那枚 switch（数字键的 e.Key 是 Number1），这里只负责菜单与清单上有它。
         new("看到全部", "Shift+1", "看", ZoomToFit, Dispatched: false),
         new("看到选中", "Shift+2", "看", ZoomToSelection, Dispatched: false),
@@ -85,8 +91,16 @@ public sealed partial class MainWindow
     /// <summary>Every node on the board — the same call the keyboard's Ctrl+A makes.</summary>
     private void SelectAll()
     {
+        var emptyGroups = EmptyGroupIds();
+
         foreach (var node in _document.Nodes)
         {
+            // 空组已经被藏起来；把它选进来只会在屏幕上留下一个没有内容的实线框。
+            if (node.Kind == CanvasNodeKind.Group && emptyGroups.Contains(node.Id))
+            {
+                continue;
+            }
+
             _selection.Add(node.Id);
         }
 
@@ -107,13 +121,9 @@ public sealed partial class MainWindow
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Which group's layer is active — the app's half of the prototype's <c>groupFocus</c>.
+    /// 最近一次按下的是哪一组的名牌／环带——只是菜单的<b>语境</b>（右键它时"拆组"排前面），
+    /// 不再是一层选中状态：10-22 起单击便签就是那一枚，点边才选整组，层这个概念没了。
     /// </summary>
-    /// <remarks>
-    /// It is a property of the <b>selection</b>, not of the document: the same frame is either
-    /// "the thing I'm working on" or "the box around the thing I'm working on". It resets with the
-    /// selection, because a stale layer is how the second click stops being a second click.
-    /// </remarks>
     private string? _groupFocus;
 
     private List<CanvasNode> SelectedNotes()
@@ -159,7 +169,7 @@ public sealed partial class MainWindow
         SaveSoon();
         ProjectSelection();
 
-        Say($"成组：框住 {members.Count} 格，现在停在组这一层（再点一次才进单枚）");
+        Say($"成组：框住 {members.Count} 格 · 点便签＝单枚，点名字或虚线边＝整组");
     }
 
     private void UngroupSelection()
@@ -244,16 +254,15 @@ public sealed partial class MainWindow
     /// </summary>
     private void Cluster(string label, Func<CanvasNode, string> keyOf)
     {
-        var items = BoardNotes();
+        var notes = BoardNotes();
+        var units = Grouping.UnitsOf(notes.ConvertAll(RectOf), GroupRects());
 
-        var outcome = Aligning.Cluster(items.ConvertAll(PlacedOf), items.Select(keyOf).ToList());
+        // 一个组跟着它第一格走：聚拢要的是"同类放一起"，而组是一件东西，不能为了分色把它劈成两半。
+        // 所以那一簇由组里最先出现的那格决定，回执里也会说出搬了几件是整块。
+        var keys = units
+            .Select(unit => NodeOf(unit.MemberIds[0]) is { } first ? keyOf(first) : string.Empty)
+            .ToList();
 
-        if (!outcome.Ok)
-        {
-            Say($"『{label}』要至少 {outcome.Needed} 格，板上有 {outcome.Have} 格");
-            return;
-        }
-
-        ApplyMoves(label, outcome);
+        ApplyUnitMoves(label, units, Aligning.Cluster([.. units.Select(PlacedOf)], keys));
     }
 }

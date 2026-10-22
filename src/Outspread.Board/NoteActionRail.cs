@@ -51,6 +51,9 @@ public sealed partial class MainWindow
         public double StartY { get; init; }
         public bool Started;
         public string? StartGroupId;
+
+        // 多选时这一发要拖走整组选中：记下每一枚的起手坐标（单选时它就一枚）。
+        public Dictionary<string, (double X, double Y)> StartPositions { get; init; } = new(StringComparer.Ordinal);
     }
 
     /// <summary>ProjectSelection 每一拍叫它：该不该有操作条、贴在哪。手势进行中不重画。</summary>
@@ -122,8 +125,11 @@ public sealed partial class MainWindow
         };
 
         _railGroup = RoundButton("NoteRailGroup", GroupIcon(), "分组（点＝菜单，按住拖＝拖入/拖出）");
-        _railColor = RoundButton("NoteRailColor", DropletIcon(), "换色");
+        _railColor = RoundButton("NoteRailColor", ColorWheelIcon(), "换色");
         _railDelete = RoundButton("NoteRailDelete", TrashIcon(), "删掉这格");
+
+        // 删除那枚整颗染红（图标 + 描边），一眼看出是危险动作。
+        _railDelete.BorderBrush = new SolidColorBrush(Color.FromArgb(255, 0xD3, 0x2F, 0x2F));
 
         host.Children.Add(_railGroup);
         host.Children.Add(_railColor);
@@ -198,34 +204,55 @@ public sealed partial class MainWindow
         return grid;
     }
 
-    private static UIElement DropletIcon()
+    // 换色钮：一枚六瓣彩色色盘（红/橙/黄/绿/青/紫），一眼是"挑颜色"。用扇形 Path 拼，
+    // 不依赖 ConicGradientBrush（WinUI 这版没有）——分段色轮比水滴更直白地指向那排色板。
+    private static UIElement ColorWheelIcon()
     {
-        var ink = new SolidColorBrush(NoteStyling.InkFor(NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark))));
+        var grid = new Grid { Width = 22, Height = 22 };
 
-        var grid = new Grid { Width = 20, Height = 20 };
-
-        grid.Children.Add(new Polygon
+        var hues = new[]
         {
-            Points = new PointCollection { new Point(10, 2.4), new Point(14.8, 10.4), new Point(5.2, 10.4) },
-            Fill = ink,
-        });
+            Color.FromArgb(255, 0xE5, 0x39, 0x35), Color.FromArgb(255, 0xFB, 0x8C, 0x00), Color.FromArgb(255, 0xFD, 0xD8, 0x35),
+            Color.FromArgb(255, 0x43, 0xA0, 0x47), Color.FromArgb(255, 0x00, 0xAC, 0xC1), Color.FromArgb(255, 0x8E, 0x24, 0xAA),
+        };
 
-        grid.Children.Add(new Ellipse
+        const double cx = 11, cy = 11, r = 10;
+        var step = System.Math.PI * 2 / hues.Length;
+
+        for (var i = 0; i < hues.Length; i++)
         {
-            Width = 12,
-            Height = 12,
-            Fill = ink,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Bottom,
-            Margin = new Thickness(0, 0, 0, 2),
-        });
+            var a0 = i * step;
+            var a1 = (i + 1) * step;
+
+            var figure = new PathFigure
+            {
+                StartPoint = new Point(cx + (r * System.Math.Cos(a0)), cy + (r * System.Math.Sin(a0))),
+                IsClosed = true,
+            };
+
+            figure.Segments.Add(new ArcSegment
+            {
+                Point = new Point(cx + (r * System.Math.Cos(a1)), cy + (r * System.Math.Sin(a1))),
+                Size = new Size(r, r),
+                SweepDirection = SweepDirection.Clockwise,
+                IsLargeArc = false,
+            });
+
+            figure.Segments.Add(new LineSegment { Point = new Point(cx, cy) });
+
+            var geometry = new PathGeometry();
+            geometry.Figures.Add(figure);
+
+            grid.Children.Add(new Microsoft.UI.Xaml.Shapes.Path { Data = geometry, Fill = new SolidColorBrush(hues[i]) });
+        }
 
         return grid;
     }
 
     private static UIElement TrashIcon()
     {
-        var ink = new SolidColorBrush(NoteStyling.InkFor(NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark))));
+        // 删除＝红色，和那颗红描边的按钮一起把"危险"说清楚。
+        var ink = new SolidColorBrush(Color.FromArgb(255, 0xD3, 0x2F, 0x2F));
 
         var grid = new Grid { Width = 20, Height = 20 };
 
@@ -333,18 +360,30 @@ public sealed partial class MainWindow
 
         group.PointerPressed += (_, e) =>
         {
-            if (_selection.Count == 0 || NodeOf(_selection.First()) is not { } node)
+            // 记下整组选中的起手坐标（单选就一枚，多选全带上）——组钮那一条现在也能拖多枚。
+            var positions = new Dictionary<string, (double X, double Y)>(StringComparer.Ordinal);
+
+            foreach (var selectedId in _selection)
+            {
+                if (NodeOf(selectedId) is { } selected && selected.Kind != CanvasNodeKind.Group)
+                {
+                    positions[selected.Id] = (selected.X, selected.Y);
+                }
+            }
+
+            if (positions.Count == 0 || NodeOf(positions.Keys.First()) is not { } first)
             {
                 return;
             }
 
             _railDrag = new RailDrag
             {
-                NodeId = node.Id,
+                NodeId = first.Id,
                 StartPointer = e.GetCurrentPoint(BoardArea).Position,
-                StartX = node.X,
-                StartY = node.Y,
-                StartGroupId = Grouping.GroupOf(RectOf(node), GroupRects())?.Id,
+                StartX = first.X,
+                StartY = first.Y,
+                StartPositions = positions,
+                StartGroupId = Grouping.GroupOf(RectOf(first), GroupRects())?.Id,
             };
 
             group.CapturePointer(e.Pointer);
@@ -363,12 +402,6 @@ public sealed partial class MainWindow
 
             if (!state.Started)
             {
-                // 拖入/拖出只对单枚有意义；多枚时这一发不拖，松手走菜单（创建/移出）。
-                if (_selection.Count != 1)
-                {
-                    return;
-                }
-
                 if (Math.Abs(screen.X - state.StartPointer.X) + Math.Abs(screen.Y - state.StartPointer.Y) <= 6)
                 {
                     return;
@@ -424,12 +457,12 @@ public sealed partial class MainWindow
             return;
         }
 
-        BeginGesture("把这格拖进／拖出组");
+        BeginGesture(state.StartPositions.Count > 1 ? $"把 {state.StartPositions.Count} 格拖进／拖出组" : "把这格拖进／拖出组");
 
         _nodeGesture = new NodeGesture(
             _view.ToWorldX(screen.X),
             _view.ToWorldY(screen.Y),
-            new Dictionary<string, (double X, double Y)>(StringComparer.Ordinal) { [node.Id] = (state.StartX, state.StartY) },
+            new Dictionary<string, (double X, double Y)>(state.StartPositions, StringComparer.Ordinal),
             node.Id,
             GroupMode: true,
             StartGroupId: state.StartGroupId,
@@ -467,12 +500,30 @@ public sealed partial class MainWindow
 
     private void UpdateGroupAlerts(Point screen)
     {
-        if (_nodeGesture is not { GroupMode: true } gesture || NodeOf(gesture.PrimaryId) is not { } node)
+        if (_nodeGesture is not { GroupMode: true } gesture)
         {
             return;
         }
 
-        var rect = RectOf(node);
+        var dragged = gesture.StartGeometry.Keys
+            .Select(id => NodeOf(id))
+            .Where(n => n is not null)
+            .Select(n => RectOf(n!))
+            .ToList();
+
+        if (dragged.Count == 0)
+        {
+            return;
+        }
+
+        // 多枚一起拖时，用它们的外接矩形去碰框（一角碰上就算），单选时它就等于那一枚。
+        var rect = new Grouping.Rect(
+            dragged[0].Id,
+            dragged.Min(r => r.X),
+            dragged.Min(r => r.Y),
+            dragged.Max(r => r.Right) - dragged.Min(r => r.X),
+            dragged.Max(r => r.Bottom) - dragged.Min(r => r.Y));
+
         string? alertId = null;
         string? kind = null;
 
@@ -534,7 +585,7 @@ public sealed partial class MainWindow
         // 松手那一拍重新问一次"现在跟哪个框碰上了"——不依赖拖动中途缓存的末态：末态只在指针
         // 还在动时刷新，拖到位后停一下再松手会漏掉，那一趟角就白碰了（他报的"只有一角移入没
         // 生效，还是只有几何中心移入才入组"就是这个）。判定抽在 JoinByGrowingFrame。
-        var joined = JoinByGrowingFrame(state.NodeId, state.StartGroupId);
+        var joined = JoinByGrowingFrame(state.StartPositions.Keys.ToList(), state.StartGroupId);
 
         _nodeGesture = null;
         DrawGuides([]);
@@ -590,14 +641,23 @@ public sealed partial class MainWindow
     /// "松手之后便签的位置会变，有问题，应该只是组的虚线边框范围变化"）。框长到覆盖整格后，
     /// 这格的中心自然落进新框里，"成员按中心"那条规矩在下一拍重算时仍然自洽。返回是否入了某框。
     /// </summary>
-    private bool JoinByGrowingFrame(string nodeId, string? startGroupId)
+    private bool JoinByGrowingFrame(IReadOnlyList<string> draggedIds, string? startGroupId)
     {
-        if (NodeOf(nodeId) is not { } dragged)
+        var dragged = draggedIds
+            .Select(id => NodeOf(id))
+            .Where(n => n is not null)
+            .Select(n => RectOf(n!))
+            .ToList();
+
+        if (dragged.Count == 0)
         {
             return false;
         }
 
-        var rect = RectOf(dragged);
+        var draggedSet = new HashSet<string>(draggedIds, StringComparer.Ordinal);
+        var left = dragged.Min(r => r.X);
+        var top = dragged.Min(r => r.Y);
+        var union = new Grouping.Rect(dragged[0].Id, left, top, dragged.Max(r => r.Right) - left, dragged.Max(r => r.Bottom) - top);
 
         foreach (var frame in GroupRects())
         {
@@ -606,7 +666,7 @@ public sealed partial class MainWindow
                 continue;
             }
 
-            if (!frame.Intersects(rect))
+            if (!frame.Intersects(union))
             {
                 continue;
             }
@@ -615,13 +675,13 @@ public sealed partial class MainWindow
 
             foreach (var note in BoardNotes())
             {
-                if (note.Id != dragged.Id && frame.Holds(RectOf(note)))
+                if (!draggedSet.Contains(note.Id) && frame.Holds(RectOf(note)))
                 {
                     members.Add(RectOf(note));
                 }
             }
 
-            members.Add(rect);
+            members.AddRange(dragged);
 
             var grown = Grouping.Enclose(frame.Id, members);
 
@@ -633,7 +693,7 @@ public sealed partial class MainWindow
                 frameNode.Height = grown.Height;
             }
 
-            Diagnostics.Write($"join grow: {nodeId} 一角碰上 {frame.Id} → 框长到 {grown.Width:0.#}×{grown.Height:0.#}（格子不动）");
+            Diagnostics.Write($"join grow: {dragged.Count} 格一角碰上 {frame.Id} → 框长到 {grown.Width:0.#}×{grown.Height:0.#}（格子不动）");
 
             return true;
         }

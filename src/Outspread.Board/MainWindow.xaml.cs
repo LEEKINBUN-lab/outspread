@@ -4107,7 +4107,7 @@ public sealed partial class MainWindow : Window
 
                         cornerB.X = madeFrame.Right + 400;
 
-                        if (JoinByGrowingFrame(stackB.Id, null))
+                        if (JoinByGrowingFrame([stackB.Id], null))
                         {
                             problems.Add("整格在框外 400 像素也被吸进了组");
                         }
@@ -4120,7 +4120,7 @@ public sealed partial class MainWindow : Window
                         {
                             problems.Add("自检没造出「一角碰上、中心在外」那一形");
                         }
-                        else if (!JoinByGrowingFrame(stackB.Id, null))
+                        else if (!JoinByGrowingFrame([stackB.Id], null))
                         {
                             problems.Add("一角碰上组框却没激活入组（还是只有中心进框才算）");
                         }

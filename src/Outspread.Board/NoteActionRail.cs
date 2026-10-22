@@ -204,25 +204,22 @@ public sealed partial class MainWindow
         return grid;
     }
 
-    // 换色钮：一枚六瓣彩色色盘（红/橙/黄/绿/青/紫），一眼是"挑颜色"。用扇形 Path 拼，
-    // 不依赖 ConicGradientBrush（WinUI 这版没有）——分段色轮比水滴更直白地指向那排色板。
+    // 换色钮：一枚自然晕染的色轮（色相绕圈、越靠圆心越淡到白）。WinUI 这版没有 ConicGradientBrush，
+    // 就用 60 片连续插值的扇形拼出色相环，再压一层"白心→透明"的径向渐变当饱和度衰减——
+    // 60 片在 22px 下接缝看不出来，读起来就是一张调色的色盘。
     private static UIElement ColorWheelIcon()
     {
         var grid = new Grid { Width = 22, Height = 22 };
 
-        var hues = new[]
-        {
-            Color.FromArgb(255, 0xE5, 0x39, 0x35), Color.FromArgb(255, 0xFB, 0x8C, 0x00), Color.FromArgb(255, 0xFD, 0xD8, 0x35),
-            Color.FromArgb(255, 0x43, 0xA0, 0x47), Color.FromArgb(255, 0x00, 0xAC, 0xC1), Color.FromArgb(255, 0x8E, 0x24, 0xAA),
-        };
-
         const double cx = 11, cy = 11, r = 10;
-        var step = System.Math.PI * 2 / hues.Length;
+        const int slices = 60;
+        var step = System.Math.PI * 2 / slices;
 
-        for (var i = 0; i < hues.Length; i++)
+        for (var i = 0; i < slices; i++)
         {
             var a0 = i * step;
             var a1 = (i + 1) * step;
+            var color = HsvToColor(360.0 * i / slices, 1, 1);
 
             var figure = new PathFigure
             {
@@ -243,10 +240,54 @@ public sealed partial class MainWindow
             var geometry = new PathGeometry();
             geometry.Figures.Add(figure);
 
-            grid.Children.Add(new Microsoft.UI.Xaml.Shapes.Path { Data = geometry, Fill = new SolidColorBrush(hues[i]) });
+            grid.Children.Add(new Microsoft.UI.Xaml.Shapes.Path { Data = geometry, Fill = new SolidColorBrush(color) });
         }
 
+        grid.Children.Add(new Ellipse
+        {
+            Width = r * 2,
+            Height = r * 2,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+            Fill = new RadialGradientBrush
+            {
+                GradientOrigin = new Point(0.5, 0.5),
+                Center = new Point(0.5, 0.5),
+                RadiusX = 0.5,
+                RadiusY = 0.5,
+                GradientStops =
+                {
+                    new GradientStop { Color = Color.FromArgb(255, 255, 255, 255), Offset = 0 },
+                    new GradientStop { Color = Color.FromArgb(0, 255, 255, 255), Offset = 0.72 },
+                },
+            },
+        });
+
         return grid;
+    }
+
+    private static Color HsvToColor(double h, double s, double v)
+    {
+        var c = v * s;
+        var x = c * (1 - System.Math.Abs(((h / 60) % 2) - 1));
+        var m = v - c;
+
+        var (r1, g1, b1) = h switch
+        {
+            < 60 => (c, x, 0.0),
+            < 120 => (x, c, 0.0),
+            < 180 => (0.0, c, x),
+            < 240 => (0.0, x, c),
+            < 300 => (x, 0.0, c),
+            _ => (c, 0.0, x),
+        };
+
+        return Color.FromArgb(
+            255,
+            (byte)System.Math.Round((r1 + m) * 255),
+            (byte)System.Math.Round((g1 + m) * 255),
+            (byte)System.Math.Round((b1 + m) * 255));
     }
 
     private static UIElement TrashIcon()

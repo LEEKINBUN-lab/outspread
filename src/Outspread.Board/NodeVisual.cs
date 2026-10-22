@@ -97,9 +97,12 @@ public sealed class NodeVisual : ContentControl
     {
         HorizontalAlignment = HorizontalAlignment.Left,
         VerticalAlignment = VerticalAlignment.Top,
-        CornerRadius = new CornerRadius(6),
-        BorderThickness = new Thickness(1),
-        Padding = new Thickness(5, 1, 6, 3),
+        // 不再用圆角矩形把名字包起来（10-22 他不要那层壳）：透明底只保留可点区，
+        // 点名字＝选中组里所有便签这条不能丢，所以 Background 留 Transparent 而不是 null。
+        CornerRadius = new CornerRadius(0),
+        BorderThickness = new Thickness(0),
+        Background = new SolidColorBrush(Colors.Transparent),
+        Padding = new Thickness(2, 0, 2, 0),
     };
 
     private readonly TranslateTransform _nameLift = new();
@@ -785,13 +788,16 @@ public sealed class NodeVisual : ContentControl
         _label.MaxLines = 1;
         _label.MaxWidth = Math.Max(60, Width - 12);
 
-        _namePlate.Background = new SolidColorBrush(NoteStyling.SurfaceFor(null));
-        _namePlate.BorderBrush = new SolidColorBrush(NoteStyling.LineFor(null, NoteStyling.SurfaceFor(null)));
+        // 名牌不再套壳：透明底（保住"点名字＝选中整组"的可点区），不画边框、不圆角。
+        _namePlate.Background = new SolidColorBrush(Colors.Transparent);
+        _namePlate.BorderBrush = new SolidColorBrush(Colors.Transparent);
 
         // 抬到框顶边上方：负移走 RenderTransform，不碰布局——命中区跟着变换走，
         // 所以"点名字"和"看见名字"落在同一块像素上。
-        _namePlate.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
-        _nameLift.Y = -(_namePlate.DesiredSize.Height + 3);
+        // 抬升量用**行高**算，不用 _namePlate.DesiredSize——编辑别的格子那一拍里，这枚还没排版
+        // 的 Border 量出来是 0 高，抬升塌成 -3 就把名牌压回框顶线上（10-22 他截图：新建时组的描述
+        // 被挤进框里，点一下才回到上方）。行高是确定的，任何时候都算得出同一个位置。
+        _nameLift.Y = -(_label.LineHeight + 3);
 
         _namePlate.Visibility = Visibility.Visible;
 

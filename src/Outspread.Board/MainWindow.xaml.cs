@@ -3743,8 +3743,8 @@ public sealed partial class MainWindow : Window
                     BoardArea.UpdateLayout();
 
                     var fit = card.WindowState();
-                    var moreAbove = FindDescendant<Border>(card, "MoreAbove");
-                    var moreBelow = FindDescendant<Border>(card, "MoreBelow");
+                    var moreAbove = FindDescendant<Microsoft.UI.Xaml.Shapes.Rectangle>(card, "OverflowFadeAbove");
+                    var moreBelow = FindDescendant<Microsoft.UI.Xaml.Shapes.Rectangle>(card, "OverflowFadeBelow");
 
                     if (fit.Visible < fit.Total)
                     {
@@ -3753,11 +3753,11 @@ public sealed partial class MainWindow : Window
 
                     if (moreAbove is null || moreBelow is null)
                     {
-                        problems.Add("便签上没有『更多』提示牌");
+                        problems.Add("便签上没有溢出渐隐遮罩（OverflowFadeAbove/Below）");
                     }
                     else if (moreBelow.Visibility != Visibility.Collapsed)
                     {
-                        problems.Add("放得下的便签仍挂着『更多 ↓』");
+                        problems.Add("放得下的便签仍压着底部渐隐遮罩");
                     }
 
                     if (card.ScrollByLines(1))
@@ -3775,7 +3775,7 @@ public sealed partial class MainWindow : Window
 
                     if (moreBelow is not null && moreBelow.Visibility != Visibility.Visible)
                     {
-                        problems.Add($"压到 {probe.Height:0}px（可见 {cut.Visible} 行 / 共 {cut.Total} 行）却没有『更多 ↓』提示");
+                        problems.Add($"压到 {probe.Height:0}px（可见 {cut.Visible} 行 / 共 {cut.Total} 行）却没有底部渐隐遮罩");
                     }
 
                     if (!card.ScrollByLines(2))
@@ -3785,7 +3785,7 @@ public sealed partial class MainWindow : Window
 
                     if (moreAbove is not null && moreAbove.Visibility != Visibility.Visible)
                     {
-                        problems.Add("往下翻两行以后没有『↑ 更多』提示");
+                        problems.Add("往下翻两行以后顶部没有渐隐遮罩");
                     }
 
                     if (card.WindowState().First != 2)
@@ -3802,7 +3802,7 @@ public sealed partial class MainWindow : Window
 
                     if (moreAbove is not null && moreAbove.Visibility != Visibility.Collapsed)
                     {
-                        problems.Add("回到顶部以后『↑ 更多』还挂着");
+                        problems.Add("回到顶部以后顶部渐隐遮罩还压着");
                     }
 
                     // 他 10-22 报的第四条：手动拉长以后窗口还停在中间，"↑ 更多"亮着、底下全是空的
@@ -3824,7 +3824,7 @@ public sealed partial class MainWindow : Window
                     if ((moreAbove is not null && moreAbove.Visibility != Visibility.Collapsed)
                         || (moreBelow is not null && moreBelow.Visibility != Visibility.Collapsed))
                     {
-                        problems.Add($"拉长到全放得下（可见 {grown.Visible} / 共 {grown.Total}）以后『更多』牌子还挂着");
+                        problems.Add($"拉长到全放得下（可见 {grown.Visible} / 共 {grown.Total}）以后渐隐遮罩还压着");
                     }
                 }
 

@@ -119,11 +119,9 @@ public sealed class NodeVisual : ContentControl
 
     private string _grabKey = string.Empty;
 
-    /// <summary>上下还有没露出来的行时，卡片角上一枚"更多"牌子；比句末三个点更明确。</summary>
-    private readonly TextBlock _moreAboveText = new();
-    private readonly TextBlock _moreBelowText = new();
-    private readonly Border _moreAbove;
-    private readonly Border _moreBelow;
+    /// <summary>内容超出时，卡片上/下边缘各压一道渐隐遮罩（B 方案：无字，只把最后一行淡进卡底）。</summary>
+    private readonly Microsoft.UI.Xaml.Shapes.Rectangle _fadeAbove = OverflowFade(VerticalAlignment.Top, "OverflowFadeAbove");
+    private readonly Microsoft.UI.Xaml.Shapes.Rectangle _fadeBelow = OverflowFade(VerticalAlignment.Bottom, "OverflowFadeBelow");
 
     /// <summary>
     /// The same body, painted as blocks, when it carries markdown: one element per line so a heading
@@ -250,11 +248,6 @@ public sealed class NodeVisual : ContentControl
             FontFamily = NoteStyling.NoteFont,
         };
 
-        _moreAbove = MoreBadge(_moreAboveText, VerticalAlignment.Top, new Thickness(0, 4, 6, 0));
-        _moreBelow = MoreBadge(_moreBelowText, VerticalAlignment.Bottom, new Thickness(0, 0, 6, 4));
-        _moreAbove.Name = "MoreAbove";
-        _moreBelow.Name = "MoreBelow";
-
         _textHost.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         _textHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
@@ -293,8 +286,8 @@ public sealed class NodeVisual : ContentControl
         var paint = new Grid();
         paint.Children.Add(_bands);
         paint.Children.Add(_surface);
-        paint.Children.Add(_moreAbove);
-        paint.Children.Add(_moreBelow);
+        paint.Children.Add(_fadeAbove);
+        paint.Children.Add(_fadeBelow);
         paint.Children.Add(_press);
         paint.Children.Add(_groupHalo);
         paint.Children.Add(_frame);
@@ -759,7 +752,7 @@ public sealed class NodeVisual : ContentControl
             }
         }
 
-        UpdateMoreBadges(node, view);
+        UpdateOverflowFades(node, view);
 
         // Update 每拍都把 _frame 的描边按默认虚线铺回去；警示态（组钮拖那一拍）要压过它。
         ApplyGroupAlert();
@@ -830,45 +823,30 @@ public sealed class NodeVisual : ContentControl
         _chips.Visibility = Visibility.Collapsed;
     }
 
-    private static Border MoreBadge(TextBlock text, VerticalAlignment align, Thickness margin)
-    {
-        text.IsHitTestVisible = false;
-        text.FontFamily = NoteStyling.NoteFont;
-        text.FontWeight = Microsoft.UI.Text.FontWeights.Medium;
-        text.VerticalAlignment = VerticalAlignment.Center;
-
-        return new Border
+    private static Microsoft.UI.Xaml.Shapes.Rectangle OverflowFade(VerticalAlignment align, string name)
+        => new()
         {
-            HorizontalAlignment = HorizontalAlignment.Right,
+            Name = name,
             VerticalAlignment = align,
-            Margin = margin,
-            Padding = new Thickness(5, 1, 5, 2),
-            CornerRadius = new CornerRadius(8),
-            BorderThickness = new Thickness(1),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
             IsHitTestVisible = false,
             Visibility = Visibility.Collapsed,
-            Child = text,
+            Fill = new LinearGradientBrush { StartPoint = new Windows.Foundation.Point(0, 0), EndPoint = new Windows.Foundation.Point(0, 1) },
         };
-    }
 
     /// <summary>
-    /// 卡片只画得下几行时，角上给一枚"更多 ↓ / ↑ 更多"：句末省略号说的是"断了"，
-    /// 这枚牌子说的是"剩下的在下面，滚轮能翻到"。
+    /// 内容画不下时不再挂"更多 ↓"角标（他嫌突兀），改成在卡片上/下边缘压一道"表面色↔透明"的
+    /// 渐隐遮罩：底下还有行就把最后一行淡进卡底；往上翻过则顶部淡一道。无字，靠视觉暗示。
     /// </summary>
-    private void UpdateMoreBadges(CanvasNode node, BoardViewState view)
+    private void UpdateOverflowFades(CanvasNode node, BoardViewState view)
     {
         var textCard = Kind == CanvasNodeKind.Text;
-        var above = textCard && _firstLine > 0;
-        var below = textCard && _hasMore;
+        var shown = view.Zoom >= 0.5;
+        var above = textCard && shown && _firstLine > 0;
+        var below = textCard && shown && _hasMore;
 
-        if (view.Zoom < 0.5)
-        {
-            above = false;
-            below = false;
-        }
-
-        _moreAbove.Visibility = above ? Visibility.Visible : Visibility.Collapsed;
-        _moreBelow.Visibility = below ? Visibility.Visible : Visibility.Collapsed;
+        _fadeAbove.Visibility = above ? Visibility.Visible : Visibility.Collapsed;
+        _fadeBelow.Visibility = below ? Visibility.Visible : Visibility.Collapsed;
 
         if (!above && !below)
         {
@@ -876,26 +854,30 @@ public sealed class NodeVisual : ContentControl
         }
 
         var surface = NoteStyling.SurfaceFor(node.Color);
-        var ink = NoteStyling.InkFor(node.Color, surface);
-        var line = NoteStyling.LineFor(node.Color, surface);
-        var fontSize = Math.Clamp(11 * view.Zoom, 9, 14);
-        var padX = Math.Clamp(6 * view.Zoom, 4, 9);
-        var padY = Math.Clamp(2 * view.Zoom, 1, 3);
+        var solid = Color.FromArgb(255, surface.R, surface.G, surface.B);
+        var clear = Color.FromArgb(0, surface.R, surface.G, surface.B);
+        var height = Math.Clamp(22 * view.Zoom, 12, 34);
 
-        foreach (var (badge, text, label) in new[]
-                 {
-                     (_moreAbove, _moreAboveText, "↑ 更多"),
-                     (_moreBelow, _moreBelowText, "更多 ↓"),
-                 })
+        if (above)
         {
-            text.Text = label;
-            text.FontSize = fontSize;
-            text.Foreground = new SolidColorBrush(ink);
-            text.IsHitTestVisible = false;
-            badge.Background = new SolidColorBrush(surface);
-            badge.BorderBrush = new SolidColorBrush(line);
-            badge.Padding = new Thickness(padX, padY, padX, padY);
-            badge.IsHitTestVisible = false;
+            ApplyFade(_fadeAbove, height, solid, clear);
+        }
+
+        if (below)
+        {
+            ApplyFade(_fadeBelow, height, clear, solid);
+        }
+    }
+
+    private static void ApplyFade(Microsoft.UI.Xaml.Shapes.Rectangle fade, double height, Color from, Color to)
+    {
+        fade.Height = height;
+
+        if (fade.Fill is LinearGradientBrush brush)
+        {
+            brush.GradientStops.Clear();
+            brush.GradientStops.Add(new GradientStop { Color = from, Offset = 0 });
+            brush.GradientStops.Add(new GradientStop { Color = to, Offset = 1 });
         }
     }
 

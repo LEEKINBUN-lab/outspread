@@ -151,9 +151,9 @@ public sealed partial class MainWindow
     {
         var members = SelectedNotes();
 
-        if (members.Count < 2)
+        if (members.Count < 1)
         {
-            Say($"『成组』要至少 2 格，现在选了 {members.Count} 格");
+            Say("先选中至少一格再成组");
             return;
         }
 
@@ -162,6 +162,10 @@ public sealed partial class MainWindow
         var frame = Grouping.Enclose(string.Empty, members.ConvertAll(RectOf));
         var made = _document.Add(CanvasNodeKind.Group, frame.X, frame.Y, frame.Width, frame.Height);
 
+        // 新建的组要有一句能看见、能改的描述（10-22 他：新建的组没描述也没法改）。
+        // 给个默认名，双击名牌即可改名。
+        made.Label = "分组";
+
         EndGesture();
 
         _groupFocus = made.Id;
@@ -169,7 +173,9 @@ public sealed partial class MainWindow
         SaveSoon();
         ProjectSelection();
 
-        Say($"成组：框住 {members.Count} 格 · 点便签＝单枚，点名字或虚线边＝整组");
+        Say(members.Count == 1
+            ? $"成组：框住这 1 格（想往里再加，选中它再『创建分组』，或用组钮拖）"
+            : $"成组：框住 {members.Count} 格 · 点便签＝单枚，点名字或虚线边＝整组");
     }
 
     private void UngroupSelection()

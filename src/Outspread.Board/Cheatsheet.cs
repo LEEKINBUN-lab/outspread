@@ -190,7 +190,7 @@ public sealed partial class MainWindow
     {
         BeginGesture("新建一格");
 
-        var node = CreateTextNote(string.Empty, new Point(_view.ToWorldX(screen.X), _view.ToWorldY(screen.Y)));
+        var node = CreateTextNote(string.Empty, FreeOfGroups(new Point(_view.ToWorldX(screen.X), _view.ToWorldY(screen.Y))));
 
         EndGesture();
 

@@ -83,6 +83,30 @@ public sealed partial class MainWindow
             && Math.Abs(left.Width - right.Width) <= 0.001
             && Math.Abs(left.Height - right.Height) <= 0.001;
 
+    /// <summary>
+    /// 新建的格子落在所有组框<b>之外</b>：分组是显式动作（组钮/创建分组），双击新建就该是一枚自由格。
+    /// 否则它一进来就被某块组框接住、组框往上长一圈、名牌跟着跳一下——再点一次空被收回、框缩回、
+    /// 名牌又跳回去（10-22 他报的"双击新建时组的描述会移动，再双击又恢复"）。落点压到最外那块的下方。
+    /// </summary>
+    private Windows.Foundation.Point FreeOfGroups(Windows.Foundation.Point at)
+    {
+        for (var guard = 0; guard < 8; guard++)
+        {
+            var enclosing = GroupRects()
+                .Where(frame => at.X >= frame.X && at.X <= frame.Right && at.Y >= frame.Y && at.Y <= frame.Bottom)
+                .ToList();
+
+            if (enclosing.Count == 0)
+            {
+                break;
+            }
+
+            at.Y = enclosing.Max(frame => frame.Bottom) + 40;
+        }
+
+        return at;
+    }
+
     /// <summary>没有成员的组：框没有可贴的东西，渲染层把它藏起来，别拿一个空的大方框压着别人的便签。</summary>
     private HashSet<string> EmptyGroupIds()
     {
@@ -223,7 +247,22 @@ public sealed partial class MainWindow
 
         Undo();
 
-        Diagnostics.Write("selftest 新建自由格: 远端建一格 → GroupOf 为空 → 撤销收回（建出来就是自由的）");
+        // 落进组框里的那一点，FreeOfGroups 必须把它推到框外——新建不该被组接住、组框不该因此长、
+        // 名牌不该跳。取板上第一枚组的中心当"框内一点"来量。
+        if (GroupRects().FirstOrDefault() is { } probe)
+        {
+            var inside = new Windows.Foundation.Point(probe.CenterX, probe.CenterY);
+            var pushed = FreeOfGroups(inside);
+
+            if (pushed.X >= probe.X && pushed.X <= probe.Right && pushed.Y >= probe.Y && pushed.Y <= probe.Bottom)
+            {
+                problems.Add(
+                    $"FreeOfGroups 没把组框内的点推出去：{probe.Id} 中心 {inside.X:0.#},{inside.Y:0.#} → " +
+                    $"{pushed.X:0.#},{pushed.Y:0.#} 还在框里");
+            }
+        }
+
+        Diagnostics.Write("selftest 新建自由格: 远端建一格 → GroupOf 为空 → 撤销收回；组框内的点被 FreeOfGroups 推到框外（建出来就是自由的）");
     }
 
     /// <summary>

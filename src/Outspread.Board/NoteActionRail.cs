@@ -56,10 +56,9 @@ public sealed partial class MainWindow
     /// <summary>ProjectSelection 每一拍叫它：该不该有操作条、贴在哪。手势进行中不重画。</summary>
     private void EnsureRail()
     {
-        if (_selection.Count != 1
-            || NodeOf(_selection.First()) is not { } node
-            || node.Kind == CanvasNodeKind.Group
-            || _resizeGesture is not null)
+        // 选中至少一枚就浮操作条——多枚更需要那枚"创建分组"（10-22 他：选中多个也该出现按钮）。
+        // 位置按整个选中的包围盒贴，不再只认那一枚。
+        if (_resizeGesture is not null || SelectionBox() is not { } box)
         {
             HideRail();
 
@@ -68,10 +67,10 @@ public sealed partial class MainWindow
 
         _rail ??= BuildRail();
 
-        var screenLeft = _view.ToScreenX(node.X);
+        var screenLeft = _view.ToScreenX(box.X);
         var flip = screenLeft < 60;
-        var x = flip ? _view.ToScreenX(node.Right) + 12 : screenLeft - 50;
-        var y = Math.Clamp(_view.ToScreenY(node.Y + node.Height / 2) - 64, 8, Math.Max(8, BoardArea.ActualHeight - 140));
+        var x = flip ? _view.ToScreenX(box.Right) + 12 : screenLeft - 50;
+        var y = Math.Clamp(_view.ToScreenY(box.Y + box.Height / 2) - 64, 8, Math.Max(8, BoardArea.ActualHeight - 140));
 
         // 记住操作条这一列落在哪：色板弹层要贴在同一坐标空间里（HandleLayer 带平移/缩放变换，
         // 用 TransformToVisual 量会偏出一大截——10-22 那张截图色板跑到最左边就是这么来的）。
@@ -334,7 +333,7 @@ public sealed partial class MainWindow
 
         group.PointerPressed += (_, e) =>
         {
-            if (_selection.Count != 1 || NodeOf(_selection.First()) is not { } node)
+            if (_selection.Count == 0 || NodeOf(_selection.First()) is not { } node)
             {
                 return;
             }
@@ -364,6 +363,12 @@ public sealed partial class MainWindow
 
             if (!state.Started)
             {
+                // 拖入/拖出只对单枚有意义；多枚时这一发不拖，松手走菜单（创建/移出）。
+                if (_selection.Count != 1)
+                {
+                    return;
+                }
+
                 if (Math.Abs(screen.X - state.StartPointer.X) + Math.Abs(screen.Y - state.StartPointer.Y) <= 6)
                 {
                     return;
@@ -644,42 +649,35 @@ public sealed partial class MainWindow
 
     private void ShowGroupMenu()
     {
-        if (_selection.Count != 1 || NodeOf(_selection.First()) is not { } node)
+        if (_selection.Count == 0)
         {
             return;
         }
 
         var menu = new MenuFlyout();
 
-        // 创建分组：把本格连同它压着的那几枚（ClusterIds）圈成一个<b>新</b>组。
-        // 旧的那条"移入分组＝塞进最近的一个已有框"被删了——不指哪个框就悄悄并进哪个，
-        // 正是 10-22 他报的"莫名其妙分到已有分组"。要并进某个具体的框，走组钮按住拖那一条。
+        // 创建分组：把当前选中的（一枚或多枚）圈成一个<b>新</b>组——分组是显式动作，
+        // 单枚也能成组（10-22 他要的）。旧那条"移入分组＝塞进最近的一个已有框"已删；
+        // 要并进某个具体的框，走组钮按住拖那一条。
         var create = new MenuFlyoutItem
         {
-            Text = "创建分组",
+            Text = SelectedNotes().Count == 1 ? "创建分组（这一格）" : $"创建分组（这 {SelectedNotes().Count} 格）",
             Icon = DotIcon(new SolidColorBrush(Color.FromArgb(200, 150, 158, 166))),
         };
-        create.IsEnabled = ClusterIds(node).Count >= 2;
-        create.Click += (_, _) =>
-        {
-            var ids = ClusterIds(node);
-
-            ClearSelection();
-
-            foreach (var id in ids)
-            {
-                _selection.Add(id);
-            }
-
-            ProjectSelection();
-            GroupSelection();
-        };
+        create.IsEnabled = SelectedNotes().Count >= 1;
+        create.Click += (_, _) => GroupSelection();
         menu.Items.Add(create);
 
         var leave = new MenuFlyoutItem { Text = "移出分组", Icon = DotIcon(ChromeStyling.Snap) };
-        var ownGroup = Grouping.GroupOf(RectOf(node), GroupRects());
-        leave.IsEnabled = ownGroup is not null;
-        leave.Click += (_, _) => DetachFromGroup(node.Id);
+        var inGroup = SelectedNotes().Where(n => Grouping.GroupOf(RectOf(n), GroupRects()) is not null).ToList();
+        leave.IsEnabled = inGroup.Count >= 1;
+        leave.Click += (_, _) =>
+        {
+            foreach (var n in inGroup)
+            {
+                DetachFromGroup(n.Id);
+            }
+        };
         menu.Items.Add(leave);
 
         _groupMenu = menu;
@@ -905,22 +903,32 @@ public sealed partial class MainWindow
 
     private void DeleteSelectedWithFade()
     {
-        if (_selection.Count != 1 || _selection.First() is not { } id)
+        if (_selection.Count == 0)
         {
             return;
         }
 
-        if (_realized.TryGetValue(id, out var visual))
-        {
-            var board = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
-            board.Children.Add(FadeTo(visual, 0, Motion.BaseMs));
-            board.Completed += (_, _) => RemoveSelection();
-            board.Begin();
-        }
-        else
+        var visuals = _realized
+            .Where(pair => _selection.Contains(pair.Key))
+            .Select(pair => pair.Value)
+            .ToList();
+
+        if (visuals.Count == 0)
         {
             RemoveSelection();
+
+            return;
         }
+
+        var board = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
+
+        foreach (var visual in visuals)
+        {
+            board.Children.Add(FadeTo(visual, 0, Motion.BaseMs));
+        }
+
+        board.Completed += (_, _) => RemoveSelection();
+        board.Begin();
     }
 
     // ---------------------------------------------------------------------

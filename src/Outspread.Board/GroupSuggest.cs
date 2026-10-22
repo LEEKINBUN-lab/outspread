@@ -127,17 +127,65 @@ public sealed partial class MainWindow
             return;
         }
 
-        BeginGesture("把这格拉出组");
+        var rect = RectOf(node);
+        var remaining = Grouping.Members(group, BoardNotes().ConvertAll(RectOf)).Where(member => member.Id != id).ToList();
 
-        node.X = group.Right + 20;
+        BeginGesture("把这格移出组");
+
+        if (remaining.Count == 0)
+        {
+            // 组里只有它一枚：撤掉这个框＝取消分组，格子原地不动。
+            _document.Remove(group.Id);
+        }
+        else
+        {
+            var hug = Grouping.Enclose(group.Id, remaining);
+
+            if (NodeOf(group.Id) is { } frameNode)
+            {
+                frameNode.X = hug.X;
+                frameNode.Y = hug.Y;
+                frameNode.Width = hug.Width;
+                frameNode.Height = hug.Height;
+            }
+
+            // 缩完框后它若还在框里（和剩下的成员叠在一起），只挪出<b>最近那条边</b>一点点——
+            // 不再甩到 group.Right+20 那种横跨整组的跳位（10-22 他：移出不该让便签跳）。
+            if (hug.Holds(rect))
+            {
+                const double margin = 12;
+                var left = rect.Right - hug.X + margin;
+                var right = hug.Right - rect.X + margin;
+                var up = rect.Bottom - hug.Y + margin;
+                var down = hug.Bottom - rect.Y + margin;
+                var min = Math.Min(Math.Min(left, right), Math.Min(up, down));
+
+                if (min == left)
+                {
+                    node.X -= left;
+                }
+                else if (min == right)
+                {
+                    node.X += right;
+                }
+                else if (min == up)
+                {
+                    node.Y -= up;
+                }
+                else
+                {
+                    node.Y += down;
+                }
+            }
+        }
 
         EndGesture();
 
         Rebuild();
         SaveSoon();
-        Say("移出了那一组：框已缩回，Ctrl＋Z 把它拉回去");
+        Say(remaining.Count == 0 ? "这一组只有它一枚，框撤掉了，格子没动" : "移出了那一组：格子尽量留在原位");
 
-        Diagnostics.Write($"pull out: {id} 出 {group.Id}，X → {node.X:0.#}");
+        Diagnostics.Write($"pull out: {id} 出 {group.Id}，剩 {remaining.Count} 枚，X→{node.X:0.#} Y→{node.Y:0.#}");
     }
 
     private static string ActualSizeOf(FrameworkElement element)

@@ -63,7 +63,10 @@ public static class ShotProtocol
 
 /// <param name="Mode">
 /// <c>view</c> captures what is on screen now; <c>fit</c> frames the whole board and
-/// captures that; <c>node</c> frames one node.
+/// captures that; <c>node</c> frames one node. The first three render the board element.
+/// <c>chrome</c> renders the whole window instead, because the tab strip that is the title bar
+/// sits above the board and is not in that subtree — without this mode its look would be a claim
+/// with no reading behind it, which is the failure the <c>Popup</c> panels used to have.
 /// </param>
 /// <param name="Select">
 /// Comma-separated node ids to select for the shot, then put back. The selection chrome — ring,
@@ -78,6 +81,11 @@ public static class ShotProtocol
 /// translucency are things that can be read off a PNG instead of claimed. <c>banner</c> is the
 /// activation-only strip, so the request genuinely applies a tag filter (the first tag in use) and
 /// hands the previous lens back afterwards.
+/// <c>fold</c> / <c>unfold</c> are the two end states of group folding: the shot finds a group whose
+/// members do not all match one tag, applies that lens, and sets the group folded / expanded without
+/// waiting for the tween — the mid-frames of an animation are not something a PNG can settle. If the
+/// board has no such shape the request refuses rather than photographing a dimmed group and calling
+/// it folded. <c>boards</c> is the new-board / open-another-board surface.
 /// </param>
 public sealed record ShotRequest(
     [property: JsonPropertyName("op")] string Op,

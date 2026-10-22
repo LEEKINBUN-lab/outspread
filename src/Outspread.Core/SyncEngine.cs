@@ -85,7 +85,7 @@ public sealed record SyncReport(
             SyncOutcome.RemoteRejected => "远端不收这份：形状或大小",
             SyncOutcome.RemoteGone => "远端不见了：本地是唯一副本",
             SyncOutcome.RemoteUnreadable => "远端那份读不懂：已停用同步",
-            SyncOutcome.LocalUnreadable => "本地这份读不懂：未上传",
+            SyncOutcome.LocalUnreadable => "未同步：本地文件不可读",
             _ => "同步",
         };
 
@@ -132,7 +132,7 @@ public sealed class SyncEngine
         {
             return Finish(state, new SyncReport(
                 SyncOutcome.LocalUnreadable,
-                $"no board at {_boardPath} to sync",
+                $"board file is missing: {_boardPath}",
                 state.Rev,
                 0,
                 0,
@@ -180,7 +180,7 @@ public sealed class SyncEngine
         }
         catch (CanvasDocumentException e)
         {
-            Note($"本地这份读不懂，待发数量按 0 报：{e.Message}");
+            Note($"本地文件读取失败，待发数量按 0 报：{e.Message}");
 
             return 0;
         }
@@ -216,7 +216,7 @@ public sealed class SyncEngine
         }
         catch (Exception e) when (e is CanvasDocumentException or IOException or UnauthorizedAccessException)
         {
-            Note($"本地这份读不懂，未上传：{e.Message}");
+            Note($"本地文件读取失败，本轮上传跳过：{e.Message}");
 
             return Finish(state, new SyncReport(
                 SyncOutcome.LocalUnreadable,

@@ -96,8 +96,8 @@ internal static class Program
               outspread patch ID  [--x --y --width --height --text --text-file --file --url --label --color] [--clear color|text]
               outspread rm    ID  [--board 路径]
               outspread validate  [--board 路径]
-              outspread shot      [--out 路径.png] [--mode view|fit|node] [--id 节点] [--select 节点,节点]
-                               [--panel filter|cheat|banner|search|restore|pair|pull|shrink|scrolled]
+              outspread shot      [--out 路径.png] [--mode view|fit|node|chrome] [--id 节点] [--select 节点,节点]
+                               [--panel filter|cheat|banner|search|restore|rename|fold|unfold|pair|pull|shrink|scrolled]
                                问运行中的界面要一张 PNG；没开界面会明确报错，不会自己画一份
               outspread new   新板路径
 

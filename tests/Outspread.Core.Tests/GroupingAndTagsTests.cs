@@ -3,7 +3,7 @@ using Xunit;
 
 namespace Outspread.Core.Tests;
 
-/// <summary>Groups (geometric membership + the two-level click), tags/due parsing, and clustering.</summary>
+/// <summary>Groups (geometric membership + frame-press selection), tags/due parsing, and clustering.</summary>
 public class GroupingAndTagsTests
 {
     private static Grouping.Rect Note(string id, double x, double y, double w = 100, double h = 60)
@@ -42,44 +42,71 @@ public class GroupingAndTagsTests
     }
 
     [Fact]
-    public void First_click_on_a_member_takes_the_group_second_click_takes_the_note()
+    public void Pressing_the_frame_takes_every_note_it_holds_and_never_the_frame()
     {
+        // 10-22 的语义：组是一个关系。点名牌/虚线边＝选中组里所有便签，框自己从不进选中——
+        // 它进选中就是"整个组的范围变蓝"，那正是这一版要消灭的形状。
         var group = Note("g", -10, -10, 320, 180);
-        var groups = new[] { group };
-        var notes = new[] { Note("a", 0, 0), Note("b", 200, 100) };
+        var notes = new[] { Note("a", 0, 0), Note("b", 200, 100), Note("far", 900, 900) };
 
-        var first = Grouping.OnNotePressed(notes[0], notes, groups, focusedGroup: null, additive: false);
-        Assert.Equal(Grouping.Layer.Group, first.Layer);
-        Assert.Equal(new[] { "a", "b" }, first.Ids);
-        Assert.Equal("g", first.FocusedGroup);
+        var ids = Grouping.OnFramePressed(group, notes);
 
-        var second = Grouping.OnNotePressed(notes[0], notes, groups, "g", additive: false);
-        Assert.Equal(Grouping.Layer.Unit, second.Layer);
-        Assert.Equal(new[] { "a" }, second.Ids);
+        Assert.Equal(new[] { "a", "b" }, ids);
+        Assert.DoesNotContain("g", ids);
     }
 
     [Fact]
-    public void Additive_picking_always_addresses_the_single_note()
+    public void A_note_pressed_on_its_own_needs_no_layer_answer_from_core()
     {
-        var groups = new[] { Note("g", -10, -10, 320, 180) };
-        var notes = new[] { Note("a", 0, 0), Note("b", 200, 100) };
-
-        var ctrl = Grouping.OnNotePressed(notes[0], notes, groups, "g", additive: true);
-
-        Assert.Equal(Grouping.Layer.Unit, ctrl.Layer);
-        Assert.Equal(new[] { "a" }, ctrl.Ids);
-        Assert.Equal("g", ctrl.FocusedGroup);
+        // 单击便签＝那一枚，没有任何"先看有没有组"的分支：这条测试钉的是旧的两层契约
+        // 已经不存在（OnNotePressed 被删除），别让它在哪个角落又长回来。
+        Assert.Null(typeof(Grouping).GetMethod("OnNotePressed"));
     }
 
     [Fact]
-    public void A_note_nobody_grouped_selects_alone_and_clears_the_layer()
+    public void Stacking_a_note_onto_two_others_is_a_group_proposal()
     {
-        var notes = new[] { Note("lonely", 500, 500) };
+        var moved = Note("m", 0, 0, 200, 100);
+        var neighbours = new[]
+        {
+            moved,
+            Note("a", 60, 30, 200, 100),   // 叠掉小格的 49%——明显
+            Note("b", 120, 60, 200, 100),  // 叠掉 16%——明显
+        };
 
-        var decision = Grouping.OnNotePressed(notes[0], notes, [], "g", additive: false);
+        var touched = Grouping.TouchedBy(moved, neighbours);
 
-        Assert.Equal(Grouping.Layer.Unit, decision.Layer);
-        Assert.Null(decision.FocusedGroup);
+        Assert.Equal(new[] { "a", "b" }, touched.Select(rect => rect.Id).ToList());
+    }
+
+    [Fact]
+    public void A_graze_is_not_a_stack()
+    {
+        var moved = Note("m", 0, 0, 200, 100);
+
+        // 只压上 2px×100px＝1%——擦肩而过不该被读成"堆成一堆"（阈值 8%）。
+        var graze = Note("g", 198, 0, 200, 100);
+
+        Assert.Equal(0.01, Math.Round(Grouping.OverlapOf(moved, graze), 4));
+        Assert.Empty(Grouping.TouchedBy(moved, [moved, graze]));
+
+        // 边贴边连面积都没有：0。
+        Assert.Equal(0, Grouping.OverlapOf(moved, Note("t", 200, 0, 100, 100)));
+    }
+
+    [Fact]
+    public void One_corner_inside_the_frame_activates_the_group_drag()
+    {
+        var frame = Note("g", 0, 0, 300, 300);
+
+        // 只有一角探进框（右下角压在框左上角一点）：中心还在框外，但一角碰上就该激活拖入。
+        var corner = Note("c", -120, -120, 200, 200);
+
+        Assert.False(frame.Holds(corner));
+        Assert.True(frame.Intersects(corner));
+
+        // 整格离开：不相交——那才是移出。
+        Assert.False(frame.Intersects(Note("away", 400, 400, 100, 100)));
     }
 
     [Fact]

@@ -1,8 +1,8 @@
 namespace Outspread.Core;
 
 /// <summary>
-/// Groups: a rectangle on the board, and the two-level click that decides whether the user means
-/// the container or the one note inside it.
+/// Groups: a rectangle on the board, and the rule that a note click picks the one note while a
+/// click on the frame's name plate or dashed edge picks every note the frame holds.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -13,7 +13,10 @@ namespace Outspread.Core;
 /// silently. The port has to make that visible on the surface rather than pretend membership.
 /// </para>
 /// <para>
-/// The click rule is his own words from the prototype round: 第一次点必定选中组，第二次点则选中组内单个元素.
+/// The click rule is his own words from the 10-22 round: 单击组里的便签＝只选中那枚便签；
+/// 点击组的文案或边缘的虚线＝选中组里的所有便签（不是整个组的范围）.组是一个关系，不是
+/// 一块场地——所以选中的永远是格子的集合，框本身从不进选中。早期原型里"第一次点必中组、
+/// 第二次点中格"的两层规矩被这一句取代，那枚 <c>groupFocus</c> 的状态机也随之作废。
 /// </para>
 /// </remarks>
 public static class Grouping
@@ -67,83 +70,98 @@ public static class Grouping
     public static IReadOnlyList<Rect> Members(Rect group, IReadOnlyList<Rect> candidates)
         => candidates.Where(member => group.Holds(member)).ToList();
 
-    /// <summary>Which layer a click on a note lands on.</summary>
-    public enum Layer
-    {
-        /// <summary>The whole group: every member becomes selected.</summary>
-        Group,
-
-        /// <summary>Just the one note clicked.</summary>
-        Unit,
-    }
-
-    /// <param name="Layer">What to select.</param>
-    /// <param name="Ids">The ids to put in the selection.</param>
-    /// <param name="FocusedGroup">The group that owns the layer afterwards — null clears it.</param>
-    public readonly record struct Selection(Layer Layer, IReadOnlyList<string> Ids, string? FocusedGroup);
+    /// <summary>
+    /// 一次排布眼里的"一件东西"：一张便签，或一整个组。
+    /// </summary>
+    /// <param name="Id">组的话是那个框的 id，散格的话是那张格子的 id。</param>
+    /// <param name="Box">这一件占的矩形：组用框本身（它带着 Pad，也是屏幕上那条边），散格用它自己。</param>
+    /// <param name="MemberIds">搬这一件时要一起搬走的格子（散格就是它一枚）。顺序＝文档顺序。</param>
+    public readonly record struct Unit(string Id, Rect Box, IReadOnlyList<string> MemberIds);
 
     /// <summary>
-    /// The two-level click.
+    /// 把一批便签归成单位：每张便签归到<b>最内层</b>那个框底下，没有框就是它自己一件。
     /// </summary>
     /// <remarks>
-    /// Ctrl/Shift is the escape hatch out of the layering: it always addresses the single note,
-    /// because additive picking is already a precise operation and forcing a user to click twice
-    /// to add one note is the annoyance the layering was meant to trade away.
+    /// 组框自己不是一种"东西"——它是成员包围盒的派生物（见 <see cref="Enclose"/>）。把它和它的成员
+    /// 一起交给对齐，等于让一个容器去和它装的东西排队：实测那一发是 Ctrl+A＋左对齐，
+    /// 25 个节点（含框）全压到同一列，框留在原地，而邻居便签的中心落进了框里被当场算成成员。
+    /// 单位的顺序是成员第一次出现的顺序，也就是文档（z）顺序——堆叠与均分读的就是这个次序。
     /// </remarks>
-    /// <param name="focusedGroup">The group whose layer is currently active, if any.</param>
-    public static Selection OnNotePressed(
-        Rect pressed,
-        IReadOnlyList<Rect> notes,
-        IReadOnlyList<Rect> groups,
-        string? focusedGroup,
-        bool additive)
+    public static IReadOnlyList<Unit> UnitsOf(IReadOnlyList<Rect> notes, IReadOnlyList<Rect> groups)
     {
-        var group = GroupOf(pressed, groups);
+        var frames = groups.ToDictionary(group => group.Id, StringComparer.Ordinal);
+        var order = new List<string>();
+        var buckets = new Dictionary<string, List<Rect>>(StringComparer.Ordinal);
 
-        if (group is null)
+        foreach (var note in notes)
         {
-            return new Selection(Layer.Unit, [pressed.Id], FocusedGroup: null);
-        }
+            var key = GroupOf(note, groups)?.Id ?? note.Id;
 
-        if (additive)
-        {
-            return new Selection(Layer.Unit, [pressed.Id], group.Value.Id);
-        }
-
-        // First click on a member of a group nobody has focused yet: take the whole group.
-        if (focusedGroup != group.Value.Id)
-        {
-            var ids = notes.Where(member => group.Value.Holds(member)).Select(member => member.Id).ToList();
-
-            if (!ids.Contains(pressed.Id))
+            if (!buckets.TryGetValue(key, out var bucket))
             {
-                ids.Add(pressed.Id);
+                bucket = [];
+                buckets[key] = bucket;
+                order.Add(key);
             }
 
-            return new Selection(Layer.Group, ids, group.Value.Id);
+            bucket.Add(note);
         }
 
-        return new Selection(Layer.Unit, [pressed.Id], group.Value.Id);
+        return order.ConvertAll(key =>
+        {
+            var members = buckets[key];
+
+            return new Unit(
+                key,
+                frames.TryGetValue(key, out var frame) ? frame : members[0],
+                members.ConvertAll(member => member.Id));
+        });
     }
 
     /// <summary>
-    /// Everything that must move when the layer is the group's: the clicked note plus its members.
+    /// 按在组的<b>名牌或边缘虚线</b>上：组里所有便签进选中。选中的永远是格子的集合，框本身从不
+    /// 进选中——框进选中就等于"整个组的范围变蓝"，而那正是这一版要消灭的语义。
     /// </summary>
-    public static IReadOnlyList<string> DragSet(
-        Rect pressed,
+    /// <remarks>
+    /// 按在便签上没有这条判定可问：单击就是一枚，Core 不再管选中层次。曾经的两层规矩
+    /// （<c>OnNotePressed</c> ＋ <c>DragSet</c> ＋ <c>focusedGroup</c> 状态机）随 10-22 的新语义
+    /// 一并删除——被证伪的契约留在原地，下一次实现就会照着它长回来。
+    /// </remarks>
+    public static IReadOnlyList<string> OnFramePressed(Rect group, IReadOnlyList<Rect> notes)
+        => [.. notes.Where(member => group.Holds(member)).Select(member => member.Id)];
+
+    /// <summary>两个矩形有没有真的碰上（一角进入就算；边贴边零面积不算）。</summary>
+    public static bool Intersects(this Rect left, Rect right)
+        => left.X < right.Right && right.X < left.Right
+            && left.Y < right.Bottom && right.Y < left.Bottom;
+
+    /// <summary>叠多少才算"明显"：按两格相交的那块面积占<b>小格</b>的比例算，8% 以下只算擦肩。</summary>
+    public const double SuggestMinOverlap = 0.08;
+
+    /// <summary>
+    /// 挪开手的那一拍：这一格把自己送进了哪几枚的身边。"叠在一起"用眼界的矩形相交来量——
+    /// 提议成组要的就是"看上去堆成一堆"那一形，不是中心距离（距离量不出"堆"，只量得出"靠近"）。
+    /// </summary>
+    public static IReadOnlyList<Rect> TouchedBy(
+        Rect moved,
         IReadOnlyList<Rect> notes,
-        IReadOnlyList<Rect> groups,
-        Layer layer)
+        double minOverlap = SuggestMinOverlap)
+        => [.. notes.Where(other => other.Id != moved.Id
+            && OverlapOf(moved, other) >= minOverlap)];
+
+    /// <summary>相交面积 ÷ 较小格的面积（0＝没碰上）。</summary>
+    public static double OverlapOf(Rect left, Rect right)
     {
-        if (layer == Layer.Unit)
+        var width = Math.Min(left.Right, right.Right) - Math.Max(left.X, right.X);
+        var height = Math.Min(left.Bottom, right.Bottom) - Math.Max(left.Y, right.Y);
+
+        if (width <= 0 || height <= 0)
         {
-            return [pressed.Id];
+            return 0;
         }
 
-        var group = GroupOf(pressed, groups);
+        var smaller = Math.Min(left.Width * left.Height, right.Width * right.Height);
 
-        return group is null
-            ? [pressed.Id]
-            : notes.Where(member => group.Value.Holds(member)).Select(member => member.Id).ToList();
+        return smaller <= 0 ? 0 : (width * height) / smaller;
     }
 }

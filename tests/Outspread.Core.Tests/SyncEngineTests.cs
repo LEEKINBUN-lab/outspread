@@ -638,6 +638,20 @@ public class SyncEngineTests
         Assert.Contains("待发 1", offline.StatusLine());
     }
 
+    [Fact]
+    public void A_missing_local_board_is_reported_without_colloquial_wording()
+    {
+        var report = new SyncReport(
+            SyncOutcome.LocalUnreadable,
+            "Could not find file 'D:\\board\\未命名板1.canvas'",
+            0,
+            0,
+            0,
+            []);
+
+        Assert.Equal("未同步：本地文件不可读 r0 · 待发 0", report.StatusLine());
+    }
+
     private static void PutImage(Scratch scratch, string name, byte[] bytes)
     {
         var path = Path.Combine(AssetStore.AssetsDirectory(scratch.BoardPath), name);

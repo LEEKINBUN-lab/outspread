@@ -24,6 +24,7 @@ public sealed class BoardViewState
     public const double DefaultFontSize = NoteTypography.DefaultSize;
 
     private readonly Dictionary<string, double> _fontSizes = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _manualSizes = new(StringComparer.Ordinal);
 
     public double PanX { get; set; } = 24;
 
@@ -36,6 +37,13 @@ public sealed class BoardViewState
     public NoteSizeMode NoteSize { get; set; } = NoteSizeMode.Automatic;
 
     public IReadOnlyDictionary<string, double> FontSizes => _fontSizes;
+
+    /// <summary>
+    /// 这一格被用户手动拖过大小。自动高度只改没有这个标记的格子；手动定过的格子保持人给的框。
+    /// </summary>
+    public bool IsManualSize(string id) => _manualSizes.Contains(id);
+
+    public void MarkManualSize(string id) => _manualSizes.Add(id);
 
     /// <summary>
     /// Today, as far as the marks care. A property rather than a call to <c>DateTime.Now</c> so the
@@ -131,6 +139,15 @@ public sealed class BoardViewState
             }
         }
 
+        foreach (var id in _manualSizes.ToList())
+        {
+            if (!live.Contains(id))
+            {
+                _manualSizes.Remove(id);
+                dropped++;
+            }
+        }
+
         return dropped;
     }
 
@@ -154,6 +171,18 @@ public sealed class BoardViewState
             }
 
             root["fontSize"] = fonts;
+        }
+
+        if (_manualSizes.Count > 0)
+        {
+            var manual = new JsonArray();
+
+            foreach (var id in _manualSizes.OrderBy(id => id, StringComparer.Ordinal))
+            {
+                manual.Add(id);
+            }
+
+            root["manualSize"] = manual;
         }
 
         var stream = new MemoryStream();
@@ -202,6 +231,17 @@ public sealed class BoardViewState
                 if (size is not null)
                 {
                     state._fontSizes[id] = size.Value;
+                }
+            }
+        }
+
+        if (root["manualSize"] is JsonArray manual)
+        {
+            foreach (var item in manual)
+            {
+                if (item is JsonValue value && value.TryGetValue(out string? id) && !string.IsNullOrWhiteSpace(id))
+                {
+                    state._manualSizes.Add(id);
                 }
             }
         }

@@ -41,6 +41,29 @@ public static class Chrome
 }
 
 /// <summary>
+/// 动效那几枚数。它们不是这里发明的：<c>design/feel.html</c> 的 <c>--dur-*</c> 就是这一套
+/// （fast 83 / base 167 / slow 320 / enter 250 / hover 120），网页那侧每一处过渡都从那份令牌取。
+/// 界面这一侧以前没有一处定义过时长，所以第一次要用到它的时候必须落在这枚文件里，
+/// 而不是写进某个 Storyboard 的常数。
+/// </summary>
+/// <remarks>
+/// 曲线对不上要说清楚：页面写的是 <c>cubic-bezier(0,0,0,1)</c>（进入）与 <c>(0.16,1,0.3,1)</c>（悬停），
+/// 而这一投影里没有能喂任意贝塞尔的动画对象（<c>CubicBezier</c> 在 <c>Microsoft.UI.Xaml.winmd</c> 里
+/// 0 命中），能给的只有平台的 <c>CubicEase</c>。所以这里只钉时长，曲线用平台的，差在哪记在调研那一页。
+/// </remarks>
+public static class Motion
+{
+    /// <summary>进入那一档：页面里的 <c>--dur-enter</c>。</summary>
+    public const double EnterMs = 250;
+
+    /// <summary>退出与淡出那一档：页面里的 <c>--dur-base</c>（微软的 base 档）。</summary>
+    public const double BaseMs = 167;
+
+    /// <summary>悬停那一档：页面里的 <c>--dur-hover</c>。</summary>
+    public const double HoverMs = 120;
+}
+
+/// <summary>
 /// The design language for floating surfaces — one set of numbers that the key sheet, the filter
 /// panel and the context menu all read, so a row is a row wherever it appears.
 /// </summary>
@@ -141,6 +164,127 @@ public static class Sheet
 
     /// <summary>The sheet's fill — the same surface the control cluster sits on.</summary>
     public static Rgb Fill(bool dark) => Badge.PanelColour(dark);
+}
+
+/// <summary>
+/// 标签条那一排浏览器式标签的数值。这是一次**改皮**，不是换骨架：标签仍是原生
+/// <c>TabView</c>，键盘、溢出滚动、关闭请求、标题栏拖拽都还由平台管；这里只定它长什么样。
+/// </summary>
+/// <remarks>
+/// <para>
+/// 2026-10-22 他对着截图点名四件事：标签难区分、缺动效、加号位置奇怪、新建浮窗不好看。他点头的
+/// 原型是 <c>design/tabs.html</c>（对话里那版可点原型同源）。这一组的每个数都能回到那份原型的
+/// <c>getComputedStyle</c>：条 38、标签 34、上沿圆角 8、字号 13、左内缩 12、关闭键 20 视觉
+/// （命中区在界面侧补到 24）、加号 28、分隔线上下各缩 9。
+/// </para>
+/// <para>
+/// 活动标签的填充**必须等于板底**：这是"这块屏现在在办哪件事"的那一格与它下面那张纸连成一片，
+/// 浏览器标签之所以一眼能分出来，靠的不是多一条线，而是它和内容同色、其余标签退回条底。深色
+/// 档也照这条走，活动标签会比条底更深，边缘那条发丝负责把它从条里切出来。
+/// </para>
+/// <para>
+/// 非活动标签的墨色沿用 <see cref="Badge.Muted"/>，活动墨色沿用 <see cref="Sheet.Ink"/>：标签条
+/// 不是浮层，但它是同一套界面里的字，不能在这里长第二套墨。条底/发丝/悬停/分隔线是这一格
+/// 新有的三枚颜色，浅深各一套。
+/// </para>
+/// </remarks>
+public static class TabStrip
+{
+    /// <summary>整条标题栏的高度：标签 34 加 4 的上沿空气。</summary>
+    public const double StripHeight = 38;
+
+    public const double TabHeight = 34;
+
+    /// <summary>只圆上沿。标签下沿必须与板面接上，方角是"纸"，不是这里的事。</summary>
+    public const double TopRadius = 8;
+
+    public const double TabMinWidth = 82;
+
+    public const double TabMaxWidth = 220;
+
+    /// <summary>改名时那枚标签临时放宽；输入框也要有 180 的字面，否则长名字只能看见两个半字。</summary>
+    public const double RenameTabMaxWidth = 300;
+
+    public const double RenameBoxMinWidth = 180;
+
+    public const double RenameBoxMaxWidth = 240;
+
+    public const double FontPx = 13;
+
+    /// <summary>标签左内缩。原型量的 12；关闭键占位另算。</summary>
+    public const double PadLeft = 12;
+
+    /// <summary>关闭键的视觉方框。命中区在界面侧取 24（他的可访问下限）。</summary>
+    public const double ClosePx = 20;
+
+    public const double CloseHitPx = 24;
+
+    public const double CloseGlyphPx = 10;
+
+    public const double CloseRadius = 6;
+
+    /// <summary>关闭键左缘与标签右内缩：没有关闭键的那一档要把这 30 留空，
+    /// 否则鼠标一停上去 × 长出来，整枚标签和邻居会横向跳一格。</summary>
+    public const double CloseMarginPx = 2;
+
+    public const double PadRight = 4;
+
+    public const double CloseReservePx = CloseHitPx + CloseMarginPx + PadRight;
+
+    /// <summary>加号那一枚：28×28、圆角 6，紧跟最后一枚标签，不再漂到标题条右边。</summary>
+    public const double AddPx = 28;
+
+    public const double AddRadius = 6;
+
+    public const double AddGlyphPx = 17;
+
+    /// <summary>标签之间的发丝线上下各缩多少。</summary>
+    public const double SeparatorInset = 9;
+
+    /// <summary>标题条底：独立于板面的一层浅灰/近黑，让活动标签能"浮"出来。</summary>
+    public static Rgb StripBackground(bool dark) => dark ? new Rgb(23, 25, 28) : new Rgb(236, 238, 242);
+
+    /// <summary>
+    /// 自绘标题按钮：系统框整条去掉之后由我们画三枚，尺寸沿用 Windows 的 46 宽，
+    /// 高度跟这条 38 的标题条；右边让出的总宽就是 3×46。
+    /// </summary>
+    public const double CaptionButtonWidth = 46;
+
+    public const double CaptionWidth = CaptionButtonWidth * 3;
+
+    public const double CaptionGlyphPx = 10;
+
+    /// <summary>关闭键悬停的红：Windows 自己的 caption close hover 色。</summary>
+    public static Rgb CaptionCloseRed => new(196, 43, 28);
+
+    /// <summary>活动标签填充＝板底。见类型注释：这一条是把"区分"从装饰变成结构。</summary>
+    public static Rgb ActiveFill(bool dark) => BoardGrid.BoardBackground(dark);
+
+    public static Rgb InactiveInk(bool dark) => Badge.Muted(dark);
+
+    public static Rgb ActiveInk(bool dark) => Sheet.Ink(dark);
+
+    /// <summary>条底那条发丝；活动标签会盖住它，非活动区才看得见。</summary>
+    public static Rgb Line(bool dark) => dark ? new Rgb(255, 255, 255) : new Rgb(0, 0, 0);
+
+    public static double LineAlpha(bool dark) => dark ? 0.11 : 0.11;
+
+    /// <summary>非活动标签悬停时的淡底。</summary>
+    public static Rgb Hover(bool dark) => Line(dark);
+
+    public static double HoverAlpha(bool dark) => dark ? 0.075 : 0.055;
+
+    /// <summary>两个非活动标签之间的竖发丝。</summary>
+    public static double SeparatorAlpha(bool dark) => dark ? 0.10 : 0.09;
+
+    /// <summary>活动标签自己的边缘发丝：浅色档压一道浅灰，深色档提一道浅白。</summary>
+    public static double EdgeAlpha(bool dark) => dark ? 0.13 : 0.09;
+
+    /// <summary>关闭键悬停时的底；比标签悬停实一档，说明这一下是点它。</summary>
+    public static double CloseHoverAlpha(bool dark) => dark ? 0.13 : 0.09;
+
+    /// <summary>标签条自己的动效档：悬停用平台那枚 120，增删由 TabView 的 AddDelete 过渡负责。</summary>
+    public const double HoverMs = Motion.HoverMs;
 }
 
 /// <summary>

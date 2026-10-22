@@ -198,6 +198,26 @@ public class ValidationAssetAndViewTests
     }
 
     [Fact]
+    public void Manual_note_sizes_survive_the_camera_file_and_prune_with_dead_nodes()
+    {
+        using var scratch = new Scratch("view-manual-size");
+
+        var state = new BoardViewState();
+        state.MarkManualSize("u111111111111");
+        state.MarkManualSize("u-dead0000");
+
+        state.Save(scratch.SidecarPath);
+        var loaded = BoardViewState.TryLoad(scratch.SidecarPath);
+
+        Assert.True(loaded.State.IsManualSize("u111111111111"));
+        Assert.True(loaded.State.IsManualSize("u-dead0000"));
+
+        Assert.Equal(1, loaded.State.Prune(["u111111111111"]));
+        Assert.True(loaded.State.IsManualSize("u111111111111"));
+        Assert.False(loaded.State.IsManualSize("u-dead0000"));
+    }
+
+    [Fact]
     public void The_camera_file_round_trips_and_reports_that_it_cannot_read_one()
     {
         using var scratch = new Scratch("view");

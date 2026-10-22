@@ -104,6 +104,171 @@ public static class BoardLocator
         return null;
     }
 
+    /// <summary>
+    /// Every board in one folder, in the order <see cref="FirstBoardIn"/> would walk them.
+    /// </summary>
+    /// <remarks>
+    /// Conflict copies are deliberately not <c>.canvas</c> (see <c>SyncEngine.ConflictCopyPath</c>),
+    /// so they cannot show up here and turn one failed sync into a board nobody asked for.
+    /// </remarks>
+    public static IReadOnlyList<string> BoardsIn(string directory)
+    {
+        if (!Directory.Exists(directory))
+        {
+            return [];
+        }
+
+        return Directory.EnumerateFiles(directory, "*" + CanvasStore.Extension)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>How long a board's name may be. A tab strip has to show it without eliding the
+    /// words that make it a task, and the ledger folder on the far side is named after it.</summary>
+    public const int MaxBoardNameChars = 40;
+
+    /// <summary>
+    /// Turns the name a person typed into a board path inside <paramref name="directory"/>, or says
+    /// in one sentence why it cannot.
+    /// </summary>
+    /// <remarks>
+    /// The name is the only part of a new board the interface asks for, and it becomes a file name,
+    /// a folder key in <c>boards/.sync/</c> and the tab's label. So the refusal has to be one string
+    /// a person can act on — "invalid characters" is not, and a silent trim that lands on a different
+    /// board than the one they typed is worse.
+    /// </remarks>
+    public static NewBoardResult NewBoard(string directory, string name)
+        => CheckName(directory, name, ignorePath: null);
+
+    /// <summary>
+    /// 把一块已经在了的板改成另一个名字。它只回答"新名字能不能用、会落到哪个路径"，
+    /// 不移动文件——移动、sidecar 和 watcher 的换绑属于界面那一层，Core 不碰进程状态。
+    /// </summary>
+    /// <remarks>
+    /// 同名的这一发是合法的空操作；只改大小写也合法（Windows 不区分大小写，界面侧要用
+    /// 临时名走两步）。目标已经是一块别的板时照旧拒绝，且不会把原文件当成"目标已存在"。
+    /// </remarks>
+    public static NewBoardResult Rename(string boardPath, string name)
+    {
+        var full = Path.GetFullPath(boardPath);
+
+        return CheckName(BoardDirectory(full), name, ignorePath: full);
+    }
+
+    /// <summary>
+    /// 一步新建用的名字：<c>未命名板1</c>、<c>未命名板2</c>……从 1 开始顺延。
+    /// 被一个**有内容**的板占了就跳过；零节点的空文件（旧版留下的空壳或手工空板）直接复用，
+    /// 这样名字被腾出来时仍先回到 1。名字本身的规则仍由 <see cref="NewBoard"/> 守。
+    /// </summary>
+    /// <param name="avoid">
+    /// 现在开着的路径（大小写不敏感）。空壳如果已经在标签条上，不让新板去复用它。
+    /// </param>
+    public static NewBoardResult NewUntitledBoard(
+        string directory,
+        IReadOnlyCollection<string>? avoid = null)
+    {
+        for (var suffix = 1; suffix < 1000; suffix++)
+        {
+            var name = $"未命名板{suffix}";
+            var path = Path.Combine(directory, name + CanvasStore.Extension);
+
+            if (avoid is not null && avoid.Any(open => string.Equals(open, path, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            if (!File.Exists(path))
+            {
+                return NewBoard(directory, name);
+            }
+
+            // 旧版关掉未命名板时留下的空壳：内容为空就直接拿来用，不再往下数。
+            try
+            {
+                var document = CanvasDocument.Parse(CanvasStore.ReadAllText(path), path);
+
+                if (document.Nodes.Count == 0)
+                {
+                    return new NewBoardResult(path, null);
+                }
+            }
+            catch (Exception ex) when (ex is CanvasDocumentException or IOException or UnauthorizedAccessException)
+            {
+                // 读不懂/读不到就当成被占：绝不拿一个看不懂的文件当新板写掉。
+            }
+        }
+
+        return NewBoardResult.Refuse("未命名板已经编到 999 了：目录里腾一个名字再用");
+    }
+
+    private static NewBoardResult CheckName(string directory, string name, string? ignorePath)
+    {
+        var trimmed = name.Trim();
+
+        if (trimmed.Length == 0)
+        {
+            return NewBoardResult.Refuse("名字是空的：给这块板写一件事，比如「周会」");
+        }
+
+        if (trimmed.EndsWith(CanvasStore.Extension, StringComparison.OrdinalIgnoreCase))
+        {
+            trimmed = trimmed[..^CanvasStore.Extension.Length];
+
+            if (trimmed.Trim().Length == 0)
+            {
+                return NewBoardResult.Refuse("只写了扩展名，名字还是空的");
+            }
+        }
+
+        if (trimmed.Length > MaxBoardNameChars)
+        {
+            return NewBoardResult.Refuse(
+                $"名字 {trimmed.Length} 个字符，上限 {MaxBoardNameChars}：标签条上放不下，也说不清一件要做的事");
+        }
+
+        if (trimmed.StartsWith('.'))
+        {
+            return NewBoardResult.Refuse("名字不许以句点开头（那是给 .sync 这类目录留的）");
+        }
+
+        if (trimmed.EndsWith('.'))
+        {
+            return NewBoardResult.Refuse("名字不许以句点结尾（Windows 会把它吃掉，落盘的就是另一个名字）");
+        }
+
+        var badIndex = trimmed.IndexOfAny(InvalidNameCharacters);
+
+        if (badIndex >= 0)
+        {
+            return NewBoardResult.Refuse($"名字里有不能当文件名的字符「{trimmed[badIndex]}」");
+        }
+
+        if (trimmed.Contains("..", StringComparison.Ordinal))
+        {
+            return NewBoardResult.Refuse("名字里不许有 ..（板子只能建在这块板旁边的目录里）");
+        }
+
+        var path = Path.Combine(directory, trimmed + CanvasStore.Extension);
+
+        if (!string.Equals(path, ignorePath, StringComparison.OrdinalIgnoreCase) && File.Exists(path))
+        {
+            return NewBoardResult.Refuse($"这块板已经在了：{trimmed}");
+        }
+
+        return new NewBoardResult(path, null);
+    }
+
+    private static readonly char[] InvalidNameCharacters = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+
+    /// <param name="BoardPath">The path to create, when <paramref name="Problem"/> is null.</param>
+    /// <param name="Problem">One sentence the interface can show as-is; null means the name is usable.</param>
+    public sealed record NewBoardResult(string? BoardPath, string? Problem)
+    {
+        public bool Ok => BoardPath is not null && Problem is null;
+
+        public static NewBoardResult Refuse(string problem) => new(null, problem);
+    }
+
     private static IEnumerable<string> Ancestors(DirectoryInfo start)
     {
         for (var current = start; current is not null; current = current.Parent)

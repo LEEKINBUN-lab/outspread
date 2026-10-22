@@ -105,6 +105,40 @@ public class ChromeTests
     }
 
     [Fact]
+    public void The_tab_strip_is_browser_shaped_and_the_active_tab_is_the_board()
+    {
+        // 2026-10-22：他点名的四格里，"难区分"与"加号位置"不是口味，是两条结构判据。
+        // 活动标签的填充必须等于板底——这是标签与它下面那张纸连成一片的唯一来由；
+        // 条底则必须与板底分开，否则活动标签再白也只是白上白。
+        foreach (var dark in new[] { false, true })
+        {
+            Assert.Equal(BoardGrid.BoardBackground(dark), TabStrip.ActiveFill(dark));
+            Assert.NotEqual(BoardGrid.BoardBackground(dark), TabStrip.StripBackground(dark));
+            Assert.NotEqual(TabStrip.InactiveInk(dark), TabStrip.ActiveInk(dark));
+        }
+
+        // 上沿圆角只圆这一半；下沿不圆，因为它要和板面接上。
+        Assert.Equal(8, TabStrip.TopRadius);
+        Assert.Equal(38, TabStrip.StripHeight);
+        Assert.Equal(34, TabStrip.TabHeight);
+        Assert.True(TabStrip.StripHeight > TabStrip.TabHeight, "标签条要比标签高，上沿才有那 4 像素的空气");
+
+        // 可访问下限：关闭键的视觉是 20，命中区取 24；加号本身 28。
+        Assert.Equal(20, TabStrip.ClosePx);
+        Assert.True(TabStrip.CloseHitPx >= 24, "关闭键的命中区不能低于 24");
+        Assert.True(TabStrip.AddPx >= 24, "加号也要按得到");
+        Assert.True(TabStrip.CloseRadius > 0 && TabStrip.AddRadius > 0);
+
+        // 没有关闭键的那一档必须把整格留空；否则悬停长出 × 时整枚标签会变宽、邻居跟着跳。
+        Assert.Equal(TabStrip.CloseHitPx + TabStrip.CloseMarginPx + TabStrip.PadRight, TabStrip.CloseReservePx);
+        Assert.True(TabStrip.CloseReservePx > TabStrip.CloseHitPx);
+
+        // 悬停要有一档可看的差：非活动墨在浅底上要暗于条底，深底上要亮于条底。
+        Assert.True(TabStrip.InactiveInk(false).R < TabStrip.StripBackground(false).R);
+        Assert.True(TabStrip.InactiveInk(true).R > TabStrip.StripBackground(true).R);
+    }
+
+    [Fact]
     public void The_chip_is_chrome_measured_in_screen_pixels_not_paper_type()
     {
         // 12 / 22 是从原型的四版样张上量的（四版全是 font-size:12、高 22-24）。

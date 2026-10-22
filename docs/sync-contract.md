@@ -34,6 +34,10 @@ JSON Canvas 1.0 规范里**没有任何版本、时间戳、revision 字段**（
 
 **`deviceId` 一旦生成就不能改**：几何字段打架时它参与决胜（`Merge3.cs:424` `Wins`），改了等于把历史合并结果变成不可复现。
 
+**本机改名不在这一版的跨端契约里（2026-10-22）**：界面把 `.canvas` 与 `<名>.canvas.view.json` 改成新名字后，下一轮同步按新名去找 `boards/<新名>.canvas` 与 `boards/.sync/<新名>.manifest.json`；远端旧名那份**不动**，新名那份作为"首轮、没祖先"取并集创建。⇒ 跨端看是**多了一块板**，不是把一块板改名。要迁远端（移动/删除旧路径与旧账本）得单开一轮；今天没做，回执里会明说。
+
+**关掉一块板只删本机（2026-10-22 第五轮）**：关标签删本机 `.canvas`、`.view.json` 和这块板的历史快照，命名板也一样；**不发远端删除请求**。同步账本保留（它是同名板下一次同步时的祖先，能把这次删除推过去），远端仓库的板和 manifest 原样留着。⇒ 若之后建立同名板并同步：远端没改过则删除胜出、远端被清空；远端这期间改过则改动胜出（会复活）。没有跨端墓碑，这一版不删远端。
+
 **所有同步用的 JSON 一律 LF**：`Ledger.Encode` 过一个 `JsonText.NormalizeNewLines` 才成字节，`state.json`／`remote.json`／仓里的 `<名>.manifest.json`／`outspread.sync.json` 都走它。原因不是好看——`.NET` 的缩进写器给的是平台行尾，而 `manifest.json` 是**进仓、两端都读**的文件，手机端读 LF：同一份内容在两台上算出两个摘要就是错的。测试 `The_ledger_entry_a_phone_reads_is_line_ending_free`；真机复验：`remote.json`/`state.json` 重写后 CR 计数 0。`base-*.canvas` 的**文件名哈希与落盘字节同源**（`KeepBase` 先 `Encode` 再写，名字声称是这份的哈希，就得真是这份的哈希）。
 
 ## 一轮同步干什么（`SyncEngine.cs`）

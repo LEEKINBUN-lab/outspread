@@ -15,6 +15,13 @@ public static class BoardLocator
 
     public const string DefaultFileName = "scratch.canvas";
 
+    /// <summary>
+    /// 首次开屏那块教程板。它和 <see cref="DefaultFileName"/> 是两件事：前者是"这台机器第一次
+    /// 打开时给他看什么"，后者是"没点名时 CLI 和启动器兜底找哪一个文件"。2026-10-23 他把演示板
+    /// 改成了教程板，并要首次开屏进它——之后的开屏由 <see cref="BoardSession"/> 记着的上一块板接。
+    /// </summary>
+    public const string QuickStartFileName = "快速入门.canvas";
+
     public const string BoardPathEnvironmentVariable = "TANKAI_BOARD";
 
     /// <summary>Environment overrides, applied in the order documented here.</summary>
@@ -99,6 +106,28 @@ public static class BoardLocator
                      .OrderBy(path => path, StringComparer.Ordinal))
         {
             return file;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 向上找 <c>boards/快速入门.canvas</c>——首次开屏要给他看的那块教程板。找不到返回 null，
+    /// 由调用方落回 <see cref="Resolve"/> 的老规矩。只认这个确切的名字：这不是"目录里第一块板"
+    /// 那种猜测，猜错会把别人的板当成教程打开。
+    /// </summary>
+    public static string? FindQuickStart(string? searchStart = null)
+    {
+        var start = Path.GetFullPath(searchStart ?? Directory.GetCurrentDirectory());
+
+        foreach (var directory in Ancestors(new DirectoryInfo(start)))
+        {
+            var candidate = Path.Combine(directory, DefaultFolder, QuickStartFileName);
+
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
         }
 
         return null;

@@ -4,8 +4,16 @@ rem One command that says whether this board still works:
 rem core tests, both builds, and the window's own self test.
 rem
 rem The self test runs against a COPY of the board under %TEMP%, because it moves a node,
-rem undoes it and saves on a timer: pointed at boards\scratch.canvas it has been seen to
-rem leave one node two pixels off. His board file is not the gate's playground.
+rem undoes it and saves on a timer: pointed at a live board it has been seen to leave one node
+rem two pixels off. His board file is not the gate's playground.
+rem
+rem The copy comes from tests\fixtures\gate.canvas, not from boards\: the fixture has the shapes
+rem the self test walks (a group with two members, loose cards, multi-line text, a tagged and a
+rem dated card), while boards\ now holds his own tutorial board — editing that must not silently
+rem turn a self-test step into "not applicable".
+rem
+rem The fixture path is ASCII on purpose: this file is UTF-8 but cmd parses a batch in the OEM
+rem code page, so a Chinese file name here would be looked for under the wrong bytes.
 
 cd /d "%~dp0"
 
@@ -40,7 +48,7 @@ if not "%ERRORLEVEL%"=="0" goto :fail
 echo [4/4] 界面自检（在临时副本上跑，绝不动 boards 里的板子）
 if not exist "%SCRATCH%" mkdir "%SCRATCH%"
 if exist "%SCRATCH%\selftest.canvas" del "%SCRATCH%\selftest.canvas"
-copy /y "boards\scratch.canvas" "%SCRATCH%\selftest.canvas" >nul
+copy /y "tests\fixtures\gate.canvas" "%SCRATCH%\selftest.canvas" >nul
 if exist "boards\assets" xcopy /y /i /e /q "boards\assets" "%SCRATCH%\assets" >nul
 if not exist "%BOARD%" goto :fail
 rem The board path must be passed explicitly. The window locates a board by

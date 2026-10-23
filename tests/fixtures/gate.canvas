@@ -26,7 +26,7 @@
       "width": 340,
       "height": 138,
       "text": "这一格演示编辑\n双击空白＝新建并直接写\nCtrl＋Enter 或点到别处＝提交\nEsc＝放弃（没写字的格子会被收回）",
-      "color": "yellow"
+      "color": "3"
     },
     {
       "id": "u333333333333",
@@ -77,16 +77,6 @@
       "color": "1"
     },
     {
-      "id": "u666666666204",
-      "type": "text",
-      "x": 40,
-      "y": 945,
-      "width": 340,
-      "height": 119,
-      "text": "@d2026-10-11\n这一格演示到期（今天）\n左缘一条琥珀\n（这两条会随日期变老，那是正常的）",
-      "color": "3"
-    },
-    {
       "id": "u666666666205",
       "type": "text",
       "x": 40,
@@ -124,24 +114,6 @@
       "text": "这一格演示 agent\noutspread list / show / patch / shot\n外部改动 0.4 秒并进来，只并对方改的格\n这一步还能撤销"
     },
     {
-      "id": "a5a5a5a5a5a5a",
-      "type": "file",
-      "x": 2694,
-      "y": 635,
-      "width": 358,
-      "height": 233,
-      "file": "assets/probe-chart.png"
-    },
-    {
-      "id": "u6e2e0523c07e",
-      "type": "text",
-      "x": 3394,
-      "y": 40,
-      "width": 260,
-      "height": 139,
-      "text": "@t演示\n# 测试\n## 测试1\n- 23\n- [ ] 测试\n"
-    },
-    {
       "id": "u4800cea76b48",
       "type": "group",
       "x": -57,
@@ -153,32 +125,12 @@
     {
       "id": "u18c7d4c66d1d",
       "type": "text",
-      "x": 404,
-      "y": 352,
+      "x": 422,
+      "y": 344,
       "width": 260,
       "height": 146,
       "text": "单指拖空白＝框选\n双指＝平移＋缩放\n点一格＝选中它",
       "color": "2"
-    },
-    {
-      "id": "ucdc48393e7f1",
-      "type": "text",
-      "x": 404,
-      "y": 546,
-      "width": 321,
-      "height": 205,
-      "text": "这块板存的是 JSON Canvas 1.0：\n一个 .canvas 文本文件，图片在旁边 assets/ 里。\n手机上它是 App 私有目录里的工作副本。",
-      "color": "4"
-    },
-    {
-      "id": "u8b4fad9dd969",
-      "type": "text",
-      "x": 404,
-      "y": 945,
-      "width": 296,
-      "height": 139,
-      "text": "两指落在同一格里＝改这格：\n横着拉＝宽，竖着拉＝高，另一轴不动。",
-      "color": "3"
     },
     {
       "id": "uebaab13c6be4",
@@ -191,24 +143,6 @@
       "color": "1"
     },
     {
-      "id": "u8ae6f09b4f65",
-      "type": "link",
-      "x": 3678,
-      "y": 40,
-      "width": 220,
-      "height": 70,
-      "url": "https://jsoncanvas.org/spec/1.0/"
-    },
-    {
-      "id": "u666666666666",
-      "type": "text",
-      "x": 3922,
-      "y": 40,
-      "width": 220,
-      "height": 100,
-      "text": "贴图这轮没接：面板里那行灰的写着『分享目标未接』。\n想加一格：双击空白，或按底栏『新建』。"
-    },
-    {
       "id": "u2e9624a4947d",
       "type": "file",
       "x": 4166,
@@ -218,23 +152,24 @@
       "file": "assets/probe-chart.png"
     },
     {
-      "id": "u9bcc840583d1",
+      "id": "u8b4fad9dd969",
       "type": "text",
-      "x": 4590,
-      "y": 40,
-      "width": 260,
-      "height": 90,
-      "text": "3347"
+      "x": 404,
+      "y": 984,
+      "width": 296,
+      "height": 139,
+      "text": "两指落在同一格里＝改这格：\n横着拉＝宽，竖着拉＝高，另一轴不动。",
+      "color": "3"
     },
     {
-      "id": "uff632b2a2427",
+      "id": "u666666666204",
       "type": "text",
-      "x": 932,
-      "y": 514,
-      "width": 260,
-      "height": 64,
-      "text": "测试",
-      "color": "4"
+      "x": 40,
+      "y": 944,
+      "width": 340,
+      "height": 128,
+      "text": "@d2026-10-11\n这一格演示到期（今天）\n左缘一条琥珀\n（这两条会随日期变老，那是正常的）",
+      "color": "3"
     }
   ],
   "edges": []

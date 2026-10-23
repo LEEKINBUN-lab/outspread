@@ -11,6 +11,9 @@ public partial class App : Application
     private static bool SelfTestMode
         => Environment.GetCommandLineArgs().Contains("--selftest", StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>自检跑在 %TEMP% 的副本上：它切来切去的那几块板不能写进"上次打开的板"。</summary>
+    public static bool SelfTest => SelfTestMode;
+
     /// <summary>进程起来的那一刻，用来把"打开慢"切成几段分别量。</summary>
     private static readonly DateTime Boot = Process.GetCurrentProcess().StartTime;
 

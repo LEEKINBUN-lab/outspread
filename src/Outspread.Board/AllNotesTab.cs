@@ -176,4 +176,95 @@ public sealed partial class MainWindow
             Diagnostics.Write($"all-notes save failed for {ownerPath}: {ex}");
         }
     }
+
+    /// <summary>
+    /// 往返自检（临时副本上、放在最后）：并集数对 → 父集新建落未归档 → 父集删格源文件里消失。
+    /// 这发是"父集写回真的没写错文件"的闸，不靠人肉点。
+    /// </summary>
+    private void SelfTestAllNotesTab(List<string> problems)
+    {
+        if (_document is null || _boardPath is null || IsAllNotes(_boardPath))
+        {
+            return;
+        }
+
+        var startPath = _boardPath;
+
+        try
+        {
+            SwitchToBoard(AllNotesKey);
+
+            if (!IsAllNotes(_boardPath))
+            {
+                problems.Add("切到『所有便签』没切过去");
+                return;
+            }
+
+            var unfiled = UnfiledPath;
+
+            var expected = 0;
+            foreach (var path in _openBoards.Where(p => !IsAllNotes(p)))
+            {
+                expected += CanvasDocument.Parse(CanvasStore.ReadAllText(path), path).Nodes.Count;
+            }
+
+            if (File.Exists(unfiled))
+            {
+                expected += CanvasDocument.Parse(CanvasStore.ReadAllText(unfiled), unfiled).Nodes.Count;
+            }
+
+            if (_document.Nodes.Count != expected)
+            {
+                problems.Add($"所有便签并集数不对：{_document.Nodes.Count}，应为 {expected}");
+            }
+
+            var unfiledBefore = File.Exists(unfiled)
+                ? CanvasDocument.Parse(CanvasStore.ReadAllText(unfiled), unfiled).Nodes.Count
+                : 0;
+
+            CreateTextNote("总览往返", new Windows.Foundation.Point(4000, 4000));
+            SaveNow();
+
+            var unfiledAfter = File.Exists(unfiled)
+                ? CanvasDocument.Parse(CanvasStore.ReadAllText(unfiled), unfiled).Nodes.Count
+                : 0;
+
+            if (unfiledAfter != unfiledBefore + 1)
+            {
+                problems.Add($"在父集新建后未归档文件没多一格：{unfiledBefore} → {unfiledAfter}");
+            }
+
+            // 删一格属于真实板的格：源文件里必须消失。
+            var victim = _document.Nodes.FirstOrDefault(n =>
+                BoardMerge.TryUnmerge(n.Id, out var owner, out _) && !SameBoard(owner, unfiled));
+
+            if (victim is not null && BoardMerge.TryUnmerge(victim.Id, out var ownerPath, out var rawId))
+            {
+                _document.Remove(victim.Id);
+                SaveNow();
+
+                var ownerDoc = CanvasDocument.Parse(CanvasStore.ReadAllText(ownerPath), ownerPath);
+
+                if (ownerDoc.Nodes.Any(n => n.Id == rawId))
+                {
+                    problems.Add($"父集删格后源文件 {System.IO.Path.GetFileName(ownerPath)} 里那格还在");
+                }
+            }
+
+            Diagnostics.Write(
+                $"selftest 所有便签: 并集 {expected} 格、父集新建落未归档（{unfiledBefore}→{unfiledAfter}）、父集删格源文件消失");
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Write($"all-notes selftest exception: {ex}");
+            problems.Add($"所有便签往返自检炸了：{ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            if (!SameBoard(_boardPath ?? string.Empty, startPath))
+            {
+                SwitchToBoard(startPath);
+            }
+        }
+    }
 }

@@ -495,8 +495,24 @@ public sealed partial class MainWindow : Window
 
     private NodeVisual CreateVisual(CanvasNode node)
     {
+        // 「所有便签」里每格的图片要按它**所属的那块板**解析（相对路径相对源文件的 assets/），
+        // 不能拿哨兵当 base——那会把全部图片解析成"找不到"，甚至踩到 Border.Child 的异常。
         var visual = new NodeVisual(node, relative =>
-            _boardPath is null ? null : AssetStore.ResolveExisting(_boardPath, relative));
+        {
+            if (_boardPath is null)
+            {
+                return null;
+            }
+
+            var basePath = _boardPath;
+
+            if (IsAllNotes(_boardPath))
+            {
+                basePath = BoardMerge.TryUnmerge(node.Id, out var owner, out _) ? owner : UnfiledPath;
+            }
+
+            return AssetStore.ResolveExisting(basePath, relative);
+        });
 
         visual.PointerPressed += OnNodePressed;
 
@@ -4604,6 +4620,9 @@ public sealed partial class MainWindow : Window
 
         ClearSelection();
         ProjectSelection();
+
+        // 放在最后：它会切到「所有便签」再切回，且会改动临时副本上的文件（父集新建/删格）。
+        SelfTestAllNotesTab(problems);
 
         return problems;
     }

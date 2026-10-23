@@ -227,6 +227,11 @@ public sealed class NodeVisual : ContentControl
 
     private string? _loadedPath;
 
+    /// <summary>那格"图没了/读不出"的字。不复用 <see cref="_label"/>：它挂在 <c>_textHost</c> 里，
+    /// 而 WinUI 不许把还有父亲的元素再挂一次——10-23 拿一块丢了图的板子开屏，就是这一句把窗口
+    /// 直接打死（<c>Border.set_Child</c> 抛 ArgumentException）。</summary>
+    private TextBlock? _missing;
+
     public NodeVisual(CanvasNode node, Func<string, string?> resolveAsset)
     {
         NodeId = node.Id;
@@ -478,6 +483,9 @@ public sealed class NodeVisual : ContentControl
 
     /// <summary>True when the node is a file that could not be found or decoded.</summary>
     public bool IsBroken { get; private set; }
+
+    /// <summary>那格"图没了/读不出"的字；图在的时候是 null。界面自检量这一格用它。</summary>
+    public string? MissingText => _missing?.Text;
 
     internal Func<string, string?> ResolveAsset { get; }
 
@@ -1077,8 +1085,8 @@ public sealed class NodeVisual : ContentControl
         if (absolute is null)
         {
             IsBroken = true;
-            _surface.Child = _label;
-            _label.Text = $"未找到\n{node.FilePath}";
+            ShowMissing($"未找到\n{node.FilePath}");
+
             return;
         }
 
@@ -1088,7 +1096,12 @@ public sealed class NodeVisual : ContentControl
             bitmap.UriSource = new Uri(absolute, UriKind.Absolute);
 
             _image.Source = bitmap;
-            _surface.Child = _image;
+
+            if (!ReferenceEquals(_surface.Child, _image))
+            {
+                _surface.Child = _image;
+            }
+
             IsBroken = false;
             _loadedPath = node.FilePath;
         }
@@ -1096,8 +1109,24 @@ public sealed class NodeVisual : ContentControl
         {
             // A tile that says what went wrong beats a blank square that says nothing.
             IsBroken = true;
-            _surface.Child = _label;
-            _label.Text = $"读不出这张图\n{Path.GetFileName(absolute)}";
+            ShowMissing($"读不出这张图\n{Path.GetFileName(absolute)}");
+        }
+    }
+
+    /// <summary>把这一格换成"说清楚它为什么空着"的那行字。同一枚元素已经在那格上就不再挂一次。</summary>
+    private void ShowMissing(string text)
+    {
+        _missing ??= new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            FontFamily = NoteStyling.NoteFont,
+        };
+
+        _missing.Text = text;
+
+        if (!ReferenceEquals(_surface.Child, _missing))
+        {
+            _surface.Child = _missing;
         }
     }
 }

@@ -19,9 +19,10 @@ namespace Outspread.Board;
 /// and so does losing the window.
 /// </para>
 /// <para>
-/// The cost of taking Tab is named: Tab is also how a keyboard user walks the focus ring. It is
-/// therefore swallowed only while the board surface itself holds focus and no note is being edited
-/// — inside the editor, and on the mark-rail chips, Tab still does what it always did.
+/// The cost of taking Tab is named: Tab is also how a keyboard user walks the focus ring, and that
+/// ring is what he called "通用的找按钮" on 2026-10-23 — so the ring is gone on purpose. Every Tab
+/// press is swallowed here: the board answers it with this sheet, and inside the editor, the rename
+/// box or a floating panel it answers nothing at all.
 /// </para>
 /// </remarks>
 public sealed partial class MainWindow
@@ -37,10 +38,11 @@ public sealed partial class MainWindow
 
     private void OnCheatPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        // 只在"板子自己持焦点、且没在编辑任何格子"时截 Tab：编辑里、面板的按钮上，
-        // Tab 还得是 Tab。
-        var boardHasFocus = ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(BoardArea.XamlRoot), BoardArea);
-
+        // Tab 归板子的条件是"现在没有在写字、也没有面板在收键"，不是"焦点恰好在 BoardArea"。
+        // 10-23 他报"第一下 Tab 没反应、要按第二下"：第一下被当成了焦点导航，焦点落到板面，
+        // 第二下才满足旧守卫。现在那第一下就把焦点交给板面并直接开清单——在标签条/按钮上按
+        // Tab 也是同一个意思。同一批改动里他还点名"找按钮"那一下：所以不归板子的 Tab 也一律
+        // 截住（见下），不再让平台把焦点挪到别的控件上。
         if (e.Key == Windows.System.VirtualKey.Space && _editingId is null && !_searchOpen && BareSpace())
         {
             // 在 Tab 之前截：空格要抢在"焦点按钮被激活"前面。按住它平移仍然成立——那条路读的是
@@ -52,14 +54,48 @@ public sealed partial class MainWindow
             return;
         }
 
-        if (e.Key != Windows.System.VirtualKey.Tab || _editingId is not null || !boardHasFocus)
+        if (e.Key != Windows.System.VirtualKey.Tab)
         {
             return;
         }
 
-        ShowCheatsheet();
-
+        // 无论这一发归不归板子，Tab 都不许再走到平台的焦点遍历上——他 10-23 点名的就是编辑框、
+        // 改名框、浮层里那一下"找按钮"：焦点跳到别的控件，改名框跟着乱。截在这里，那些场合的
+        // Tab 什么都不做；键位清单仍只在板子能接键的时候开。
         e.Handled = true;
+
+        if (!BoardCanTakeTabKey())
+        {
+            return;
+        }
+
+        BoardArea.Focus(FocusState.Programmatic);
+        ShowCheatsheet();
+    }
+
+    /// <summary>
+    /// 这一发 Tab 能不能归板子：没有在编辑、没有浮层在收键、焦点不在文本框里。
+    /// 焦点在标签条/按钮上也算——那是"手在板子上"，不是"在打字"。
+    /// </summary>
+    private bool BoardCanTakeTabKey()
+    {
+        if (_editingId is not null || _filterPanelOpen || _searchOpen || _restoreOpen || _cheatsheetOpen
+            || _renamingPath is not null)
+        {
+            return false;
+        }
+
+        var focused = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(BoardArea.XamlRoot) as DependencyObject;
+
+        for (var node = focused; node is not null; node = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(node))
+        {
+            if (node is TextBox)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>空格只单独算一件事：不带 Ctrl/Alt/Shift 的那一发才是"复位视图"。</summary>
@@ -108,24 +144,37 @@ public sealed partial class MainWindow
         ChromeStyling.Ensure(NoteStyling.IsDark);
         ChromeStyling.ApplyFloatingChrome(CheatPanel);
 
+        // 键位清单是"页面"，不是菜单：2026-10-23 他看过原型后选的宽裕两栏——内缩 16、圆角 12，
+        // 菜单那五枚仍是 4/8。同一枚填充、同一层抬起，变的只是这张参考页该有多大的边。
+        CheatPanel.Padding = new Thickness(Sheet.PagePadPx);
+        CheatPanel.CornerRadius = new CornerRadius(Sheet.PageRadiusPx);
+
         // 分节字样删了（他 10-12 点名）："排布 / 组织 / 板子"是我给这张表起的分类名，
         // 不是他按下键时要找的东西。清单里只该有一种行：这一发按键干什么。
         var rows = Sections().SelectMany(section => section)
             .Select(command => PanelKit.Row(command.Label, command.Chord, keys: true))
             .ToList();
 
-        // 两栏还是三栏看窗口给不给地方：30 行摊成两栏是一堵 600px 的墙（他 10-22 说拥挤），
-        // 三栏把它压到 10 行高，横向仍落在 772 的 MaxWidth 里。窄窗口退回两栏，宁可高也不裁字。
-        var columns = Root.ActualWidth >= 820 ? 3 : 2;
+        // 两栏、每栏 15 行：760 是一张页面而不是一条横幅，单栏 ≈336 让"名字｜键帽"各自有地方。
+        // 窗口比 760 窄时整张页跟着收，两栏一起收，不把字裁在右缘外。
+        const int columns = 2;
+        const double pageMinWidth = 420;
         var perColumn = (rows.Count + columns - 1) / columns;
 
-        // 每栏各按自己的内容长：这里不能用星号列——presenter 的模板里有一枚横向禁滚的 ScrollViewer，
-        // 它在"可用宽度由内容决定"的宿主里会退化成最小宽度（量到过：整块清单被压到 240 宽、
-        // 右列的键位被挤出可视区）。横排 StackPanel 给的是无限宽测量，几栏才各自称出自己的体重。
+        var pageWidth = Math.Min(Sheet.PageWidthPx, Math.Max(pageMinWidth, BoardArea.ActualWidth - 48));
+        var columnWidth = (pageWidth - 2 - (Sheet.PagePadPx * 2) - Sheet.PageGutterPx) / 2;
+
+        CheatPanel.Width = pageWidth;
+
+        // 窗口矮的时候让整张页跟着收，多出来的行由面板自己的 ScrollViewer 接——不能把页脚裁在屏外。
+        CheatPanel.MaxHeight = Math.Max(240, Math.Min(660, BoardArea.ActualHeight - 48));
+
+        // 每栏定宽：横排 StackPanel 在无限宽测量下会让每栏按内容各自称重，两栏就不等宽了。
+        // 行本身是 ContentControl（HorizontalContentAlignment=Stretch），给了栏宽就跟着长。
         var pair = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 44,
+            Spacing = Sheet.PageGutterPx,
         };
 
         for (var column = 0; column < columns; column++)
@@ -134,13 +183,16 @@ public sealed partial class MainWindow
 
             if (slice.Length > 0)
             {
-                pair.Children.Add(PanelKit.Host(slice));
+                var host = PanelKit.Host(slice);
+                host.Width = columnWidth;
+                pair.Children.Add(host);
             }
         }
 
         CheatScroll.Content = pair;
 
-        Diagnostics.Write($"键位清单: {rows.Count} 行 × {columns} 栏（每栏最多 {perColumn} 行）");
+        Diagnostics.Write(
+            $"键位清单: {rows.Count} 行 × {columns} 栏（每栏最多 {perColumn} 行）、页 {pageWidth:0.#} 宽、栏 {columnWidth:0.#} 宽、内缩 {Sheet.PagePadPx:0.#}、圆角 {Sheet.PageRadiusPx:0.#}");
 
         // 板底在浮层下面透出来一点：它盖住的那格字仍可辨，这是"悬浮"而不是"遮挡"的唯一可读凭据。
         CheatScrim.Visibility = Visibility.Visible;

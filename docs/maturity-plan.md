@@ -82,7 +82,7 @@
 2. **锁定 / 隐藏**（Excalidraw `Ctrl+Alt+L` + `elementLock.{lock,unlock,lockAll}`；tldraw `locked-shapes`：锁定后不可选/移/缩/删/编组，`canEditWhileLocked`）——**共享板子被一次误拖就会搅乱**。
 3. **导出与"给别人看"**（tldraw PNG/JPEG/WebP/SVG + `scale` + `background:false` + 按选中导出 + 字体内联；Excalidraw 的 PNG `embedScene` 把场景塞进图里可再打开编辑，`Shift+Alt+C` 复制为图片）——我们只有 CLI 的 `outspread shot`。
 4. **板上查找**（Excalidraw `Ctrl+F` `searchMenu` + `CommandPalette`）。
-5. **首次使用 / 空板**（Excalidraw `welcomeScreen`：示例形状 + `toolbarHint` + `helpHint` + "记得定期存成文件"；`helpDialog` 用 `?`）——我们开屏是一块空板。
+5. **首次使用 / 空板**（Excalidraw `welcomeScreen`：示例形状 + `toolbarHint` + `helpHint` + "记得定期存成文件"；`helpDialog` 用 `?`）——**10-23 已落第一层**：首次开屏是 `boards/快速入门.canvas`（可动手的教程板），之后开屏回到上次最后打开的那块板；还差"新建空板时给一行提示"。
 6. **Alt 拖拽复制**（tldraw 拖拽即复制；Excalidraw 悬停复制并重新选中新副本）——我们只有原地 `Ctrl+D`。
 7. **选中上方的跟随工具条**（tldraw 用 `getSelectionBounds` 定位的 contextual toolbar + 样式面板）——我们所有动作都埋在右键菜单里。
 8. **带名字、按动作合并的撤销**（tldraw `markHistoryStoppingPoint('rotate shapes')` 分批、`history:'ignore'`、相机/会话不进栈；Excalidraw `History.record(delta)` 连 appState 一起恢复）——我们是整份文档快照 60 步。

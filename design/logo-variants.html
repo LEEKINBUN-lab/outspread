@@ -259,12 +259,11 @@ function v2p(k, p) {
   const back = sheetParts('B' + k, 154, 184, 214, 208, p.back, p.backEdge, 0.34, 3.5);
   // 纸的厚度边偏中性，不偏棕 —— 偏棕是上一版塑料感的来源之一
   const front = sheetParts('F' + k, 128, 124, 236, 230, p.paper, p.paperEdge, 0.9, 3.5);
-  return wrap(
-    plateDef(k, p.plate[0], p.plate[1], p.sheen, p.vig, p.vigo) +
-    shadow('sh' + k, { dx: 0, dy: 24, sd: 17, c: p.sh[0], o: p.sho[0] }, { dx: 0, dy: 4, sd: 3, c: p.sh[1], o: p.sho[1] }) +
-    shadow('ss' + k, { dx: 0, dy: 10, sd: 7, c: p.sh[0], o: p.sho[2] }, { dx: 0, dy: 2, sd: 2, c: p.sh[1], o: p.sho[3] }) +
-    back.defs + front.defs,
-    platePaint(k) +
+
+  // 2026-10-23：Android 的自适应图标要两层——板面（bg）与纸（fg）。layer 不给时仍是完整的一枚
+  // （Windows 的 .ico 走这一条）；给了就只画那一层，两层在启动器里合成。
+  const layer = p.layer;
+  const papers =
     `<g transform="rotate(-8 256 262)" filter="url(#ss${k})">${back.paint(20)}</g>
      <g transform="rotate(6 256 240)" filter="url(#sh${k})">${front.paint(20)}</g>
      <g transform="rotate(6 256 240)" fill="${p.ink}">
@@ -272,9 +271,19 @@ function v2p(k, p) {
      </g>
      ${tiny ? "" : `<g transform="rotate(6 256 240)" stroke="${p.barHi}" stroke-opacity="0.3" stroke-width="1.1" fill="none">
        <path d="M160 169 H312"/><path d="M160 205 H272"/>
-     </g>`}
-     ${p.rim ? `<rect x="${(p.rimw || 18) / 2}" y="${(p.rimw || 18) / 2}" width="${512 - (p.rimw || 18)}" height="${512 - (p.rimw || 18)}" rx="115" fill="none" stroke="${p.rim}" stroke-opacity="${p.rimo}" stroke-width="${p.rimw || 18}"/>` : ''}
-     ${p.grain ? grain(k, p.grain) : ""}`);
+     </g>`}`;
+  const plate = layer === 'fg' ? '' : platePaint(k);
+  const rim = p.rim && layer !== 'fg'
+    ? `<rect x="${(p.rimw || 18) / 2}" y="${(p.rimw || 18) / 2}" width="${512 - (p.rimw || 18)}" height="${512 - (p.rimw || 18)}" rx="115" fill="none" stroke="${p.rim}" stroke-opacity="${p.rimo}" stroke-width="${p.rimw || 18}"/>`
+    : '';
+  const grainRect = p.grain && layer !== 'fg' ? grain(k, p.grain) : '';
+
+  return wrap(
+    plateDef(k, p.plate[0], p.plate[1], p.sheen, p.vig, p.vigo) +
+    shadow('sh' + k, { dx: 0, dy: 24, sd: 17, c: p.sh[0], o: p.sho[0] }, { dx: 0, dy: 4, sd: 3, c: p.sh[1], o: p.sho[1] }) +
+    shadow('ss' + k, { dx: 0, dy: 10, sd: 7, c: p.sh[0], o: p.sho[2] }, { dx: 0, dy: 2, sd: 2, c: p.sh[1], o: p.sho[3] }) +
+    back.defs + front.defs,
+    plate + (layer === 'bg' ? '' : papers) + rim + grainRect);
 }
 const v2 = () => v2p('b', PAL[0]);
 
@@ -463,14 +472,17 @@ if (/[?&]sec=fix/.test(location.search)) {  document.getElementById('pal').remov
 if (/[?&]sec=ico/.test(location.search)) {
   const s = +((location.search.match(/[?&]s=(\d+)/) || [])[1] || 256);
   const tier = s <= 20 ? 1 : s <= 32 ? 2 : 3;   // 墨条在 16px 上只有 0.44 个像素，必须换形而不是缩放
-  const svg = v2p('I', Object.assign({}, B8, tier < 3 ? { bars: tier, grain: 0 } : {}));
+  // Android 自适应图标的两层：bg = 板面，fg = 纸（透明底）。不给 layer 时仍是完整的一枚。
+  const layer = (location.search.match(/[?&]layer=(fg|bg)/) || [])[1];
+  const svg = v2p('I', Object.assign({}, B8, tier < 3 ? { bars: tier, grain: 0 } : {}, layer ? { layer } : {}));
   document.querySelectorAll('h1,.lede,.rig,.h2,.lede2,#pal,#fix,#meas,#grid,#store').forEach(n => n.remove());
   const st = document.createElement('style');
   st.textContent = 'html,body{margin:0;padding:0;background:transparent;overflow:hidden}';
   document.head.appendChild(st);
   const holder = document.createElement('div');
+  // 两层给启动器自己裁（自适应图标的遮罩是平台的），所以不烧 squircle；完整一枚仍烧。
   holder.style.cssText = `position:absolute;left:0;top:0;width:${s}px;height:${s}px;` +
-    `border-radius:22.5%;overflow:hidden;background-size:cover;background-image:url("${uriOf(svg)}")`;
+    `border-radius:${layer ? '0' : '22.5%'};overflow:hidden;background-size:cover;background-image:url("${uriOf(svg)}")`;
   document.body.appendChild(holder);
   document.title = 'ICO ' + s;
 }

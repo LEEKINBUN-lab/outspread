@@ -70,7 +70,7 @@
 
 ## 那个 `.view.json` 是程序自己的
 
-`scratch.canvas.view.json` 存相机（`panX`/`panY`/`zoom`）、每格字号、`noteSize`（`auto`＝便签高度随文字走，`fixed`＝改字不动框高，尺寸只归手柄），以及 `manualSize`（被用户拖过手柄的文字格 id；自动高度跳过这些格子）。**它是本程序私有的，默认 .gitignore，agent 不要改**：改了不会报错，只会被下次存盘覆盖。格式里没有的东西我们不塞进 `.canvas`，这样这份文件对任何兼容工具都还是干净的。
+`<板子名>.canvas.view.json` 存相机（`panX`/`panY`/`zoom`）、每格字号、`noteSize`（`auto`＝便签高度随文字走，`fixed`＝改字不动框高，尺寸只归手柄），以及 `manualSize`（被用户拖过手柄的文字格 id；自动高度跳过这些格子）。**它是本程序私有的，默认 .gitignore，agent 不要改**：改了不会报错，只会被下次存盘覆盖。格式里没有的东西我们不塞进 `.canvas`，这样这份文件对任何兼容工具都还是干净的。
 
 ## 图片怎么落盘
 

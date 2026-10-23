@@ -40,6 +40,16 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
     private readonly bool _ownsHttp;
     private string? _branch;
 
+    /// <summary>
+    /// The last tree call's validator and its parsed answer. A poll that re-sends the validator
+    /// and gets 304 costs no rate limit at all (measured 2026-10-23: a full GET moved
+    /// <c>remaining</c> 4980→4979, the same call with <c>If-None-Match</c> answered 304 and the
+    /// counter did not move), which is what lets the window ask every eight seconds. Kept per
+    /// transport, so it dies with the board's window and one process start costs one full GET.
+    /// </summary>
+    private string? _treeEtag;
+    private RemoteTree? _tree;
+
     public GitHubContents(HttpClient http, string owner, string repo, string? branch = null)
     {
         _http = http;
@@ -87,7 +97,16 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
     {
         await EnsureBranchAsync(cancel);
 
-        var response = await GetAsync($"git/trees/{Escape(_branch!)}?recursive=1", cancel);
+        var response = await GetAsync($"git/trees/{Escape(_branch!)}?recursive=1", cancel, ifNoneMatch: _treeEtag);
+
+        // "Nothing you wrote last time changed" — the body would be identical to the one already
+        // parsed, and GitHub does not charge for finding that out.
+        if (response.StatusCode == HttpStatusCode.NotModified && _tree is not null)
+        {
+            response.Dispose();
+
+            return _tree;
+        }
 
         // A repository with no commits has no tree at all. That is an empty far side, not a
         // missing one: reporting it gone would make the very first upload impossible.
@@ -139,7 +158,14 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
                 "refusing to sync against a list that is not complete");
         }
 
-        return new RemoteTree(root.GetProperty("sha").GetString()!, entries);
+        var parsed = new RemoteTree(root.GetProperty("sha").GetString()!, entries);
+
+        // Only a full answer updates the validator: a 304 leaves both alone, and a 409/404 round
+        // must not remember a tree it never saw.
+        _treeEtag = response.Headers.ETag?.Tag;
+        _tree = parsed;
+
+        return parsed;
     }
 
     public async Task<RemoteFile?> ReadAsync(string path, CancellationToken cancel)
@@ -319,7 +345,11 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
         }
     }
 
-    private async Task<HttpResponseMessage> GetAsync(string suffix, CancellationToken cancel, bool acceptRaw = false)
+    private async Task<HttpResponseMessage> GetAsync(
+        string suffix,
+        CancellationToken cancel,
+        bool acceptRaw = false,
+        string? ifNoneMatch = null)
     {
         var url = suffix.Length == 0
             ? $"repos/{Escape(_owner)}/{Escape(_repo)}"
@@ -331,6 +361,11 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
         {
             request.Headers.Accept.Clear();
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.raw"));
+        }
+
+        if (ifNoneMatch is not null)
+        {
+            request.Headers.TryAddWithoutValidation("If-None-Match", ifNoneMatch);
         }
 
         return await SendAsync(request, cancel);

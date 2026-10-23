@@ -3909,6 +3909,15 @@ public sealed partial class MainWindow : Window
                     _document.Remove(seedGroup);
                 }
 
+                // 原有笔记也可能正好落在合成堆 (900,520) 附近（他手工在板上动过格），会把"3 枚叠拢"
+                // 数成 4 枚。先把现有笔记整体停到很远，基线只跟合成堆比；测完再挪回来，净改动为零。
+                var parked = new List<(string Id, double X, double Y)>();
+                foreach (var seedNote in _document.Nodes.Where(n => n.Kind != CanvasNodeKind.Group).ToList())
+                {
+                    parked.Add((seedNote.Id, seedNote.X, seedNote.Y));
+                    seedNote.X += 100000;
+                }
+
                 Rebuild();
 
                 var untouched = _document.ToJson();
@@ -4175,6 +4184,18 @@ public sealed partial class MainWindow : Window
                         "selftest 成组助手: 3 枚叠拢 ⇒ 提议浮起、点＝同路成组；操作条随单枚选中浮起，『移出』让框缩、撤销归位；" +
                         "普通拖动甩成员＝框跟着长（sticky）；擦肩 1% 不提议");
                 }
+
+                // 把停到远处的原有笔记挪回原位（基线已经比过了，这一步只影响后续自检看得见的板面）。
+                foreach (var (parkId, parkX, parkY) in parked)
+                {
+                    if (NodeOf(parkId) is { } parkedNode)
+                    {
+                        parkedNode.X = parkX;
+                        parkedNode.Y = parkY;
+                    }
+                }
+
+                Rebuild();
 
                 static bool SameFrame(Grouping.Rect left, Grouping.Rect right)
                     => Math.Abs(left.X - right.X) <= 0.001 && Math.Abs(left.Y - right.Y) <= 0.001

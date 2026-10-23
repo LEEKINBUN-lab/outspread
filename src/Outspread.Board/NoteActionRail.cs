@@ -37,6 +37,13 @@ public sealed partial class MainWindow
     private Ellipse? _tether;
     private RailDrag? _railDrag;
     private bool _railShown;
+    private bool _railGroupActive;
+
+    /// <summary>取证拍图期间为 true：入场动效改成立刻落定，照片才拍得到那一排圆钮。</summary>
+    private bool _capturingShot;
+
+    /// <summary>指针停在哪一枚上。这个投影里 <c>UIElement</c> 没有 IsPointerOver，自己记一格。</summary>
+    private Border? _railHover;
     private Border? _colorPopover;
     private bool _colorOpen;
     private double _railLeft;
@@ -75,6 +82,10 @@ public sealed partial class MainWindow
         var x = flip ? _view.ToScreenX(box.Right) + 12 : screenLeft - 50;
         var y = Math.Clamp(_view.ToScreenY(box.Y + box.Height / 2) - 64, 8, Math.Max(8, BoardArea.ActualHeight - 140));
 
+        // 落位对齐到整枚设备像素：38px 的圆在 .37 这种偏移上描边会一段实一段虚，看起来就是锯齿。
+        x = SnapToPixel(x);
+        y = SnapToPixel(y);
+
         // 记住操作条这一列落在哪：色板弹层要贴在同一坐标空间里（HandleLayer 带平移/缩放变换，
         // 用 TransformToVisual 量会偏出一大截——10-22 那张截图色板跑到最左边就是这么来的）。
         _railLeft = x;
@@ -100,6 +111,7 @@ public sealed partial class MainWindow
         }
 
         _railShown = false;
+        _railHover = null;
         CloseGroupMenu();
         CloseColorPopover();
 
@@ -128,9 +140,6 @@ public sealed partial class MainWindow
         _railColor = RoundButton("NoteRailColor", ColorWheelIcon(), "换色");
         _railDelete = RoundButton("NoteRailDelete", TrashIcon(), "删掉这格");
 
-        // 删除那枚整颗染红（图标 + 描边），一眼看出是危险动作。
-        _railDelete.BorderBrush = new SolidColorBrush(Color.FromArgb(255, 0xD3, 0x2F, 0x2F));
-
         host.Children.Add(_railGroup);
         host.Children.Add(_railColor);
         host.Children.Add(_railDelete);
@@ -150,30 +159,131 @@ public sealed partial class MainWindow
         return shell;
     }
 
-    private static Border RoundButton(string name, UIElement icon, string help)
+    /// <summary>操作条圆钮的直径。色板落位和命中区都按它算，所以只在这里写一次。</summary>
+    private const double RailButtonPx = 38;
+
+    private static readonly Color RailDangerInk = Color.FromArgb(255, 0xD3, 0x2F, 0x2F);
+
+    /// <summary>
+    /// 圆钮那一圈发丝的粗细。1.25 而不是 1：1px 的正圆在 125% 缩放下会一段深一段浅，看上去就是
+    /// 锯齿；多四分之一像素让覆盖更连续，观感仍是发丝。颜色走
+    /// <see cref="SelectionChrome.HandleEdgeAlpha"/>，和选中手柄同一档。
+    /// </summary>
+    private const double RailHairlinePx = 1.25;
+
+    /// <summary>
+    /// 一枚圆钮：外壳仍是 <see cref="Border"/>（自检按名字找它、拖动也靠它的指针事件），
+    /// 但圆和描边交给 <see cref="Ellipse"/> 画——10-22 那版是 Border 的 CornerRadius，弧线在
+    /// 帧边界上被切成一段段，他看到的锯齿就是它。椭圆的几何描边由平台自己抗锯齿，38px 下干净。
+    /// 悬停只做一件事：面加深一点、线实一点，说明"这一枚能按"。
+    /// </summary>
+    private Border RoundButton(string name, UIElement icon, string help)
     {
-        var paper = NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark));
+        var face = new Ellipse
+        {
+            Width = RailButtonPx,
+            Height = RailButtonPx,
+            StrokeThickness = RailHairlinePx,
+            IsHitTestVisible = false,
+        };
+
+        var stack = new Grid
+        {
+            Width = RailButtonPx,
+            Height = RailButtonPx,
+        };
+
+        stack.Children.Add(face);
+        stack.Children.Add(icon);
 
         var button = new Border
         {
             Name = name,
-            Width = 38,
-            Height = 38,
-            CornerRadius = new CornerRadius(19),
-            Background = new SolidColorBrush(paper),
-            BorderBrush = new SolidColorBrush(NoteStyling.FallbackLine()),
-            BorderThickness = new Thickness(1),
-            Child = icon,
+            Width = RailButtonPx,
+            Height = RailButtonPx,
+            Background = new SolidColorBrush(Colors.Transparent),
+            Child = stack,
             Tag = help,
+            IsHitTestVisible = true,
             RenderTransform = new TranslateTransform { X = 8 },
             Opacity = 0,
         };
 
+        // 三枚钮只有图标没有字：读屏与悬停都需要这行说明（它原来只躺在 Tag 里，没人读）。
+        ToolTipService.SetToolTip(button, help);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, help);
+
+        PaintRailButton(button, hover: false);
+
         return button;
     }
 
+    private static Ellipse? FaceOf(Border button)
+        => button.Child is Grid grid ? grid.Children.OfType<Ellipse>().FirstOrDefault() : null;
+
+    /// <summary>圆钮唯一的状态画法：纸面／悬停面、发丝／悬停线、组钮激活时的蓝环、删除钮的红。</summary>
+    private void PaintRailButton(Border button, bool hover)
+    {
+        if (FaceOf(button) is not { } face)
+        {
+            return;
+        }
+
+        var dark = NoteStyling.IsDark;
+        var paper = NoteStyling.ToColor(SelectionChrome.HandleFace(dark));
+        var ink = NoteStyling.ToColor(Sheet.Ink(dark));
+
+        var danger = button.Name == "NoteRailDelete";
+        var active = _railGroupActive && ReferenceEquals(button, _railGroup);
+
+        face.Fill = new SolidColorBrush(
+            hover ? Mixture(paper, danger ? RailDangerInk : ink, danger ? 0.08 : dark ? 0.10 : 0.05) : paper);
+
+        face.Stroke = new SolidColorBrush(
+            active ? NoteStyling.ToColor(SelectionChrome.Ring(dark))
+            : danger ? AtAlpha(RailDangerInk, hover ? 0.92 : 0.55)
+            : AtAlpha(NoteStyling.ToColor(dark ? new Rgb(255, 255, 255) : new Rgb(0, 0, 0)),
+                SelectionChrome.HandleEdgeAlpha(dark) + (hover ? 0.10 : 0)));
+    }
+
+    private static Color AtAlpha(Color color, double alpha)
+        => Color.FromArgb((byte)System.Math.Round(Math.Clamp(alpha, 0, 1) * 255), color.R, color.G, color.B);
+
+    /// <summary>组钮的激活环（拖动中／菜单开着）。原来改的是 Border.BorderBrush，现在那条边不存在了。</summary>
+    private void SetRailGroupActive(bool active)
+    {
+        _railGroupActive = active;
+
+        if (_railGroup is { } group)
+        {
+            PaintRailButton(group, hover: ReferenceEquals(_railHover, group));
+        }
+    }
+
+    private static Color Mixture(Color from, Color to, double amount)
+    {
+        var t = Math.Clamp(amount, 0, 1);
+
+        static byte Blend(byte a, byte b, double share) => (byte)Math.Round(a + ((b - a) * share));
+
+        return Color.FromArgb(from.A, Blend(from.R, to.R, t), Blend(from.G, to.G, t), Blend(from.B, to.B, t));
+    }
+
+    /// <summary>把布局坐标对齐到整枚设备像素（125%/150% 下也按物理像素算）。</summary>
+    private double SnapToPixel(double value)
+    {
+        var scale = BoardArea.XamlRoot?.RasterizationScale ?? 1;
+
+        if (scale <= 0)
+        {
+            scale = 1;
+        }
+
+        return Math.Round(value * scale) / scale;
+    }
+
     // WinUI 的几何没有 Geometry.Parse／RectangleGeometry.RadiusX 那套（那是 WPF 的），
-    // 三枚图标就用 Shape 直接拼：虚线框＋实心块＝组、圆滴＝颜色、盖＋身＝删。
+    // 三枚图标就用 Shape／字形直接拼：虚线框＋实心块＝组、圆滴＝颜色、垃圾桶＝删。
 
     private static UIElement GroupIcon()
     {
@@ -185,9 +295,11 @@ public sealed partial class MainWindow
         {
             Width = 15,
             Height = 15,
+            RadiusX = 2.5,
+            RadiusY = 2.5,
             Stroke = ink,
-            StrokeThickness = 1.6,
-            StrokeDashArray = [3.2, 2.4],
+            StrokeThickness = 1.5,
+            StrokeDashArray = [3, 2.2],
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
         });
@@ -196,6 +308,8 @@ public sealed partial class MainWindow
         {
             Width = 7,
             Height = 7,
+            RadiusX = 1.5,
+            RadiusY = 1.5,
             Fill = ink,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
@@ -205,14 +319,14 @@ public sealed partial class MainWindow
     }
 
     // 换色钮：一枚自然晕染的色轮（色相绕圈、越靠圆心越淡到白）。WinUI 这版没有 ConicGradientBrush，
-    // 就用 60 片连续插值的扇形拼出色相环，再压一层"白心→透明"的径向渐变当饱和度衰减——
-    // 60 片在 22px 下接缝看不出来，读起来就是一张调色的色盘。
+    // 就用连续插值的扇形拼出色相环，再压一层"白心→透明"的径向渐变当饱和度衰减——
+    // 72 片在 22px 下接缝看不出来，读起来就是一张调色的色盘；最外一圈发丝把这圈色收干净。
     private static UIElement ColorWheelIcon()
     {
         var grid = new Grid { Width = 22, Height = 22 };
 
         const double cx = 11, cy = 11, r = 10;
-        const int slices = 60;
+        const int slices = 72;
         var step = System.Math.PI * 2 / slices;
 
         for (var i = 0; i < slices; i++)
@@ -242,6 +356,17 @@ public sealed partial class MainWindow
 
             grid.Children.Add(new Microsoft.UI.Xaml.Shapes.Path { Data = geometry, Fill = new SolidColorBrush(color) });
         }
+
+        grid.Children.Add(new Ellipse
+        {
+            Width = r * 2,
+            Height = r * 2,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+            Stroke = new SolidColorBrush(Color.FromArgb(30, 0, 0, 0)),
+            StrokeThickness = 1,
+        });
 
         grid.Children.Add(new Ellipse
         {
@@ -292,43 +417,19 @@ public sealed partial class MainWindow
 
     private static UIElement TrashIcon()
     {
-        // 删除＝红色，和那颗红描边的按钮一起把"危险"说清楚。
-        var ink = new SolidColorBrush(Color.FromArgb(255, 0xD3, 0x2F, 0x2F));
-
-        var grid = new Grid { Width = 20, Height = 20 };
-
-        grid.Children.Add(new Rectangle
+        // 删除＝红色，和那颗红描边的按钮一起把"危险"说清楚。字形用系统自带的垃圾桶
+        // （Segoe MDL2 Assets E74D）——之前那版是两块矩形拼的盖和身，1.6px 的直角在
+        // 38px 圆里读起来像故障，而这类通用图标本来就该交给系统字体画。
+        return new FontIcon
         {
-            Width = 6,
-            Height = 2,
-            Fill = ink,
+            Glyph = "\uE74D",
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontSize = 18,
+            Foreground = new SolidColorBrush(RailDangerInk),
             HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(0, 3, 0, 0),
-        });
-
-        grid.Children.Add(new Rectangle
-        {
-            Width = 13,
-            Height = 2,
-            Fill = ink,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(0, 5.6, 0, 0),
-        });
-
-        grid.Children.Add(new Rectangle
-        {
-            Width = 10,
-            Height = 9,
-            Stroke = ink,
-            StrokeThickness = 1.6,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Bottom,
-            Margin = new Thickness(0, 0, 0, 2.5),
-        });
-
-        return grid;
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+        };
     }
 
     private void AnimateRailIn()
@@ -338,6 +439,18 @@ public sealed partial class MainWindow
         _rail.Opacity = 1;
 
         var buttons = new[] { _railGroup!, _railColor!, _railDelete! };
+
+        // 取证要的是落定那一帧：入场是 120ms 错峰，照片在 0ms 拍下去只会得到三枚透明圆。
+        if (_capturingShot)
+        {
+            foreach (var button in buttons)
+            {
+                button.RenderTransform = new TranslateTransform { X = 0 };
+                button.Opacity = 1;
+            }
+
+            return;
+        }
 
         for (var i = 0; i < buttons.Length; i++)
         {
@@ -489,6 +602,27 @@ public sealed partial class MainWindow
             DeleteSelectedWithFade();
             e.Handled = true;
         };
+
+        foreach (var button in new[] { _railGroup!, _railColor!, _railDelete! })
+        {
+            var target = button;
+
+            target.PointerEntered += (_, _) =>
+            {
+                _railHover = target;
+                PaintRailButton(target, hover: true);
+            };
+
+            target.PointerExited += (_, _) =>
+            {
+                if (ReferenceEquals(_railHover, target))
+                {
+                    _railHover = null;
+                }
+
+                PaintRailButton(target, hover: false);
+            };
+        }
     }
 
     private void BeginGroupDrag(RailDrag state, Point screen)
@@ -509,7 +643,7 @@ public sealed partial class MainWindow
             StartGroupId: state.StartGroupId,
             StartMembers: null);
 
-        _railGroup!.BorderBrush = ChromeStyling.Ring;
+        SetRailGroupActive(true);
 
         _tether ??= new Ellipse
         {
@@ -648,9 +782,9 @@ public sealed partial class MainWindow
             _tether.Visibility = Visibility.Collapsed;
         }
 
-        if (_railGroup is { } group)
+        if (_railGroup is not null)
         {
-            group.BorderBrush = new SolidColorBrush(NoteStyling.FallbackLine());
+            SetRailGroupActive(false);
         }
 
         if (NodeOf(state.NodeId) is not { } node)
@@ -794,16 +928,16 @@ public sealed partial class MainWindow
             {
                 _groupMenu = null;
 
-                if (_railGroup is { } group)
+                if (_railGroup is not null)
                 {
-                    group.BorderBrush = new SolidColorBrush(NoteStyling.FallbackLine());
+                    SetRailGroupActive(false);
                 }
             }
         };
 
-        if (_railGroup is { } button)
+        if (_railGroup is not null)
         {
-            button.BorderBrush = ChromeStyling.Ring;
+            SetRailGroupActive(true);
         }
 
         menu.ShowAt(_railGroup!, new FlyoutShowOptions { Placement = FlyoutPlacementMode.RightEdgeAlignedTop });
@@ -900,8 +1034,8 @@ public sealed partial class MainWindow
             8,
             Math.Max(8, BoardArea.ActualHeight - height - 8));
 
-        Canvas.SetLeft(_colorPopover, left);
-        Canvas.SetTop(_colorPopover, top);
+        Canvas.SetLeft(_colorPopover, SnapToPixel(left));
+        Canvas.SetTop(_colorPopover, SnapToPixel(top));
     }
 
     private Border SwatchButton(string? preset)

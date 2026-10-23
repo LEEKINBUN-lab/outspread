@@ -119,6 +119,23 @@ public static class Sheet
     /// </summary>
     public const double OuterPx = 4;
 
+    /// <summary>
+    /// 键位清单是一张<b>页面</b>，不是菜单——2026-10-23 他看过原型后定的一档：面板 760 宽、
+    /// 内缩 16、两栏各 15 行、栏距 56、圆角 12。它和菜单的 4/8 不是同一件事：菜单是刚好装下
+    /// 几行的浮层，清单是压在板面上读一分钟的参考页；4px 边距在 680×430 的清单上读起来就是
+    /// "字顶到框上"，而那正是他说的"边距太窄"。
+    /// <para>
+    /// 页面沿用同一枚填充与同一层抬起；变的只有"页面该有多大的边"和"它比菜单更圆"这两格。
+    /// </para>
+    /// </summary>
+    public const double PageWidthPx = 760;
+
+    public const double PagePadPx = 16;
+
+    public const double PageGutterPx = 56;
+
+    public const double PageRadiusPx = 12;
+
     /// <summary>Gap between the name column and the key column.</summary>
     public const double GapPx = 14;
 
@@ -144,16 +161,15 @@ public static class Sheet
     /// A chord is drawn as keys, not as a word — he asked for this on 2026-10-12 ("Ctrl这些文字用按钮图标
     /// 来替换，更美观一点"), one round after the keycaps were dropped to make the sheets read as the menu.
     /// It is the right column's renderer, not a third kind of line: same row, same band, same label.
-    /// The numbers are the prototype's, measured off <c>design/feel.html:425</c> (<c>#cheat .keys kbd</c>):
-    /// a cap came out 28.72×23 with 22 min-width, 1/6 padding, a 1px edge with a 2px bottom lip, radius 4,
-    /// 4 apart, 12px face.
+    /// 2026-10-23 he re-picked the paper cap in the roomy page: 24 high, 7/1 padding, radius 5, 12px face.
+    /// The old 23/6/4 was measured off <c>design/feel.html:425</c>; the page mockup's cap is the newer one.
     /// </summary>
     public const double KeyMinWidth = 22;
 
-    public const double KeyHeight = 23;
-    public const double KeyPadX = 6;
+    public const double KeyHeight = 24;
+    public const double KeyPadX = 7;
     public const double KeyPadY = 1;
-    public const double KeyRadius = 4;
+    public const double KeyRadius = 5;
     public const double KeyGap = 4;
     public const double KeyFont = 12;
 
@@ -202,26 +218,33 @@ public static class TabStrip
 
     public const double TabMaxWidth = 220;
 
-    /// <summary>改名时那枚标签临时放宽；输入框也要有 180 的字面，否则长名字只能看见两个半字。</summary>
+    /// <summary>
+    /// 改名那一枚的**字面下限**（编辑要有地方看：5 个字的框改不了 40 个字的名字）。长名字不靠
+    /// "打字途中一路放宽"看全——每敲一下按内容再长一次，就是他 10-23 报的"文字位置会浮动"。
+    /// 这一跳只在进改名那一拍发生一次，且标签向右长、左沿不动。上限见 <see cref="RenameTabMaxWidth"/>。
+    /// </summary>
+    public const double RenameTabMinWidth = 180;
+
+    /// <summary>字面上限：名字再长也不把整条标签栏挤走。</summary>
     public const double RenameTabMaxWidth = 300;
 
-    public const double RenameBoxMinWidth = 180;
-
-    public const double RenameBoxMaxWidth = 240;
+    /// <summary>量出来的名字宽度再加这一点空气：光标那一格，和"最后一个字后面还敲得进字"的位置。</summary>
+    public const double RenameSlackPx = 16;
 
     public const double FontPx = 13;
 
     /// <summary>标签左内缩。原型量的 12；关闭键占位另算。</summary>
     public const double PadLeft = 12;
 
-    /// <summary>关闭键的视觉方框。命中区在界面侧取 24（他的可访问下限）。</summary>
+    /// <summary>关闭键的视觉方框。命中区在界面侧取 24（他的可访问下限）。
+    /// 2026-10-23：他要 Chrome 式，悬停底改成圆形——半径取半高（24/2），不是方角 6。</summary>
     public const double ClosePx = 20;
 
     public const double CloseHitPx = 24;
 
     public const double CloseGlyphPx = 10;
 
-    public const double CloseRadius = 6;
+    public const double CloseRadius = 12;
 
     /// <summary>关闭键左缘与标签右内缩：没有关闭键的那一档要把这 30 留空，
     /// 否则鼠标一停上去 × 长出来，整枚标签和邻居会横向跳一格。</summary>
@@ -231,12 +254,34 @@ public static class TabStrip
 
     public const double CloseReservePx = CloseHitPx + CloseMarginPx + PadRight;
 
-    /// <summary>加号那一枚：28×28、圆角 6，紧跟最后一枚标签，不再漂到标题条右边。</summary>
-    public const double AddPx = 28;
+    /// <summary>加号那一枚：30×30、圆形悬停（Chrome 式），紧跟最后一枚标签，不再漂到标题条右边。
+    /// 2026-10-23 他看过原型后把 28 的方角换成 30 的圆，并把全角 "＋" 换成系统 Add 字形——
+    /// 字体字符的笔画与站位都不受控，正是他说的"廉价"。</summary>
+    public const double AddPx = 30;
 
-    public const double AddRadius = 6;
+    public const double AddRadius = 15;
 
-    public const double AddGlyphPx = 17;
+    /// <summary>十字的视觉长度（两笔各 12、1.5 粗）——不是字体字号；它是画出来的两根圆头细条。</summary>
+    public const double AddGlyphPx = 12;
+
+    /// <summary>
+    /// 加号在 38 高的条里往下多落 2px：几何居中会让它和标签文字的光学中心差两格，
+    /// 他 10-23 看出来的"加号高了一点"就是这 2px。整枚 30 的圆跟着下移，不是只挪十字。
+    /// </summary>
+    public const double AddOpticalDropPx = 2;
+
+    /// <summary>标题条右端的设置入口：30×30、圆角 6、竖排三点（浏览器式）。</summary>
+    public const double SettingsPx = 30;
+
+    public const double SettingsRadius = 6;
+
+    /// <summary>竖排三点：每枚 2.5px、间距 2.5px——画出来的圆点，不是 "⋮" 字形。</summary>
+    public const double SettingsDotPx = 2.5;
+
+    public const double SettingsDotGapPx = 2.5;
+
+    /// <summary>它与右侧三枚窗口按钮之间留 6px；加号再留 8px，别顶到它。</summary>
+    public const double SettingsInsetPx = 6;
 
     /// <summary>标签之间的发丝线上下各缩多少。</summary>
     public const double SeparatorInset = 9;

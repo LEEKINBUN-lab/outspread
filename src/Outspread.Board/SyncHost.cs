@@ -26,11 +26,21 @@ namespace Outspread.Board;
 /// </remarks>
 internal sealed class SyncHost
 {
-    /// <summary>How long a change on another device may sit unnoticed while this window is open.</summary>
-    private const int PollSeconds = 120;
+    /// <summary>
+    /// How long a change on another device may sit unnoticed while this window is open. A latency
+    /// dial, not a budget: an idle round is one tree request, so eight seconds spends 450 of the
+    /// 5000-per-hour allowance (9%). The phone's side of the same number is only spent while its
+    /// screen is on, so the two ends together still sit under a tenth of the quota.
+    /// </summary>
+    private const int PollSeconds = 8;
+
+    /// <summary>Where a round that did not get through backs off to; an offline machine must not ask every eight seconds.</summary>
+    private const int RetryCeilingSeconds = 120;
 
     private readonly string _boardPath;
     private readonly Action<string> _say;
+    private readonly DispatcherQueue _queue;
+    private readonly Action<string> _onRemoteRename;
     private readonly DispatcherQueueTimer _timer;
 
     private SyncEngine? _engine;
@@ -41,10 +51,21 @@ internal sealed class SyncHost
     private bool _wantedAgain;
     private bool _stopped;
 
-    public SyncHost(string boardPath, Action<string> say, DispatcherQueue queue)
+    /// <summary>Rounds in a row that did not get a real answer; drives the poll's backoff.</summary>
+    private int _failures;
+
+    /// <param name="onRemoteRename">
+    /// 同伴把这块板改了名（契约「改名怎么跨端跟上」）。引擎只负责**拦下那一发**（本地一个字节不动），
+    /// 搬文件、搬账本、换标签是界面的活。这里不当场调用：那一发正跑在这一轮的收尾里，而搬运会
+    /// <c>Stop()</c> 掉当前这个宿主、把它正在用的传输 dispose 掉——所以排到队列的下一拍，等这一轮
+    /// 彻底退出之后再动手。
+    /// </param>
+    public SyncHost(string boardPath, Action<string> say, DispatcherQueue queue, Action<string> onRemoteRename)
     {
         _boardPath = boardPath;
         _say = say;
+        _queue = queue;
+        _onRemoteRename = onRemoteRename;
 
         // WinUI 3 has no DispatcherTimer: the queue's own timer is the one that runs on this
         // window's thread, which is what Say() needs to be allowed to touch the visual tree.
@@ -85,6 +106,8 @@ internal sealed class SyncHost
         _stopped = false;
         _cancel.Dispose();
         _cancel = new CancellationTokenSource();
+        _failures = 0;
+        _timer.Interval = TimeSpan.FromSeconds(PollSeconds);
         _timer.Start();
 
         _ = RoundAsync();
@@ -140,10 +163,44 @@ internal sealed class SyncHost
     /// Call when this disk holds something the far side has not seen — a save landed, or an
     /// agent's write was merged in. Both mean the same thing to a sync: there is something to send.
     /// </summary>
-    public void NotifyChanged() => _ = RoundAsync();
+    public void NotifyChanged() => Wake();
 
     /// <summary>Call when the window comes back: a machine that slept should catch up at once.</summary>
-    public void NotifyForeground() => _ = RoundAsync();
+    public void NotifyForeground() => Wake();
+
+    /// <summary>
+    /// A person (or a save) asked, so the poll goes back to its fast pace even if the last few
+    /// rounds were refused. Without this, an edit made while the network was down would wait out
+    /// the whole backoff before it was even attempted.
+    /// </summary>
+    private void Wake()
+    {
+        _failures = 0;
+        _timer.Interval = TimeSpan.FromSeconds(PollSeconds);
+
+        _ = RoundAsync();
+    }
+
+    /// <summary>
+    /// The poll's interval is a consequence of what the last round got back, not a constant: a
+    /// refused round retries at 16, 32, 64, 120 seconds instead of every eight, and one clean
+    /// answer puts it back. <see cref="SyncOutcome.NothingToDo"/> is a clean answer — it means the
+    /// far side was reached.
+    /// </summary>
+    private void RememberPace(SyncOutcome outcome)
+    {
+        var answered = outcome is SyncOutcome.NothingToDo or SyncOutcome.Pushed or SyncOutcome.Pulled
+            or SyncOutcome.GaveUpConflict or SyncOutcome.DiskMovedUnderneath
+            // 跟到改名不是网络没通：远端答得清清楚楚，只是这块板在别处换了名字。退避到 120 秒
+            // 会让"搬完再补一轮"等得莫名其妙。
+            or SyncOutcome.FollowedRename;
+
+        _failures = answered ? 0 : _failures + 1;
+
+        _timer.Interval = TimeSpan.FromSeconds(_failures == 0
+            ? PollSeconds
+            : Math.Min(RetryCeilingSeconds, PollSeconds << Math.Min(_failures, 4)));
+    }
 
     /// <summary>
     /// One round at a time. A round asked to start while one is in flight is remembered as a
@@ -192,6 +249,7 @@ internal sealed class SyncHost
             }
 
             Say(report);
+            RememberPace(report.Outcome);
         }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
@@ -211,6 +269,8 @@ internal sealed class SyncHost
             _say($"同步没走：{ex.Message}");
 
             Diagnostics.Write($"sync setup failed: {ex.GetType().Name} {ex.Message}");
+
+            RememberPace(SyncOutcome.Offline);
         }
         finally
         {
@@ -262,6 +322,17 @@ internal sealed class SyncHost
     {
         switch (report.Outcome)
         {
+            case SyncOutcome.FollowedRename:
+                // 引擎已经把那一发拦住了（本地未动）。搬是界面的活，排到下一拍再做。
+                if (!string.IsNullOrEmpty(report.RenameTo))
+                {
+                    var stem = report.RenameTo!;
+
+                    _queue.TryEnqueue(() => _onRemoteRename(stem));
+                }
+
+                break;
+
             case SyncOutcome.NothingToDo:
             case SyncOutcome.Pushed:
                 // Nothing moved, or our state is now the far state. A board that is where it

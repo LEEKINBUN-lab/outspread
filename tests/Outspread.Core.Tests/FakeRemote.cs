@@ -31,6 +31,9 @@ public sealed class FakeRemote : IRemoteFiles
     /// </summary>
     public Action<string>? OnWrite { get; set; }
 
+    /// <summary>Same, for a removal: which paths this round asked the far side to take away.</summary>
+    public Action<string>? OnDelete { get; set; }
+
     private string? _refusePath;
     private string? _refuseDetail;
     private WriteOutcome _refuseOutcome;
@@ -218,6 +221,8 @@ public sealed class FakeRemote : IRemoteFiles
     public Task<WriteOutcome> DeleteAsync(string path, string expectToken, CancellationToken cancel)
     {
         DeleteCalls++;
+
+        OnDelete?.Invoke(path);
 
         Refuse();
 

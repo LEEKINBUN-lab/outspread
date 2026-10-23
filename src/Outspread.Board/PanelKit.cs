@@ -278,7 +278,10 @@ internal static class PanelKit
                 Text = text,
                 FontSize = Sheet.KeyFont,
                 TextAlignment = TextAlignment.Center,
-                Foreground = new SolidColorBrush(NoteStyling.ToColor(Sheet.Ink(dark))),
+                VerticalAlignment = VerticalAlignment.Center,
+                // 键帽上的字是右列那一档（96），不是正文墨（27）：30 行里 60 枚键帽用正文墨会把
+                // 整张页读成两张表叠在一起，也和他 10-23 点头的原型（纸键帽、灰字）不是一张。
+                Foreground = new SolidColorBrush(NoteStyling.ToColor(Sheet.HintInk(dark))),
             },
         };
     }

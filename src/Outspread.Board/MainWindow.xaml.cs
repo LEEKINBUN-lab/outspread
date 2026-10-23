@@ -209,6 +209,7 @@ public sealed partial class MainWindow : Window
             // 离开这个窗口＝按住 Tab 的那只手不见了：清单必须收起，否则它会留在一块再也松不开键的板上。
             if (args.WindowActivationState == Microsoft.UI.Xaml.WindowActivationState.Deactivated)
             {
+                CommitWheelPreview();
                 CloseCheatsheet();
                 CloseFilterPanel();
                 CloseSearchPanel();
@@ -230,21 +231,30 @@ public sealed partial class MainWindow : Window
             NoteStyling.IsDark = Root.ActualTheme == ElementTheme.Dark;
             StyleCaptionButtons();
             StyleTabStripChrome();
+            RepaintAllHeaders();
             Rebuild();
         };
 
         Root.KeyDown += OnKeyDown;
         Root.KeyUp += OnCheatKeyUp;
 
-        // Tab 在 XAML 里先被焦点导航吃掉，KeyDown 往往看不到它 ⇒ 用 PreviewKeyDown 截，
-        // 并且只在"板子自己持焦点、且没在编辑任何格子"时截——不然编辑里按 Tab 就该废了。
+        // Tab 在 XAML 里先被焦点导航吃掉，KeyDown 往往看不到它 ⇒ 用 PreviewKeyDown 截。
+        // 守卫在 OnCheatPreviewKeyDown 里：不在编辑/文本/浮层里就归板子，第一下就开；归不了板子
+        // 的那一发也被这一句截住——他 10-23 要的就是"别再去通用地找按钮"。
         Root.PreviewKeyDown += OnCheatPreviewKeyDown;
         Root.PreviewKeyUp += OnSpacePreviewKeyUp;   // 空格：按下时截住，松手时才决定是复位还是平移
+
+        // 任何一次按下都先把滚轮预览落到真布局：手柄/命中区不建立在"缩放层"上。
+        Root.AddHandler(
+            UIElement.PointerPressedEvent,
+            new PointerEventHandler((_, _) => CommitWheelPreview()),
+            handledEventsToo: true);
 
         Closed += (_, _) =>
         {
             var at = Environment.TickCount64;
 
+            CommitWheelPreview();
             _watcher?.Dispose();
             _shotServer?.Dispose();
             _sync?.Stop();
@@ -274,9 +284,69 @@ public sealed partial class MainWindow : Window
     // Loading and saving
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// 启动时开哪块板：命令行／环境变量说得最响，其次是"上次最后打开的那块"，再其次才是首次
+    /// 开屏的教程板，最后落回 <see cref="BoardLocator.Resolve"/> 的老规矩。
+    /// </summary>
+    /// <remarks>
+    /// 只在这一处用记忆：切板（<see cref="SwitchToBoard"/>）照旧由传进来的路径说了算，否则切走
+    /// 一块以后又会被"上次那块"拽回去。记忆过期（文件没了）时 <see cref="BoardSession.ReadLastBoard"/>
+    /// 已经返回 null，所以这里不会打开一个不存在的路径。
+    /// </remarks>
+    private static BoardLocator.Resolution ResolveStartupBoard(string? requested)
+    {
+        var searchStart = AppContext.BaseDirectory;
+
+        if (!string.IsNullOrWhiteSpace(requested)
+            || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(BoardLocator.BoardPathEnvironmentVariable)))
+        {
+            return BoardLocator.Resolve(requested, searchStart);
+        }
+
+        if (BoardSession.ReadLastBoard() is { } last)
+        {
+            return new BoardLocator.Resolution(last, "the board this window was last on");
+        }
+
+        if (BoardLocator.FindQuickStart(searchStart) is { } quickStart)
+        {
+            return new BoardLocator.Resolution(quickStart, "first launch: the quick-start board");
+        }
+
+        return BoardLocator.Resolve(null, searchStart);
+    }
+
+    /// <summary>
+    /// 记住这一次的开屏状态：当前这一块 + 开着的那一排（顺序＝标签顺序），下一次启动整排回来。
+    /// 自检跑在临时副本上，不写这份记忆——否则自检会把它的临时标签排进他下一次开屏。
+    /// </summary>
+    private void RememberLastBoard(string path)
+    {
+        if (App.SelfTest)
+        {
+            return;
+        }
+
+        if (BoardSession.RememberLastBoard(path) is { } problem)
+        {
+            Diagnostics.Write($"记不住上次打开的板（不影响打开这块）：{problem}");
+        }
+
+        // 开着的这一排跟着当前这块一起写：每一次切板/开板/关板都会走到这里，所以不需要在每个
+        // 改动 _openBoards 的地方各插一刀（那正是会漏的地方）。固定的「所有便签」不进记忆：
+        // 它永远排第一，由启动那一段自己插。
+        var open = _openBoards.Where(candidate => candidate != AllNotesKey).ToList();
+
+        if (BoardSession.RememberOpenBoards(open) is { } openProblem)
+        {
+            Diagnostics.Write($"记不住开着的那一排板（不影响这一块）：{openProblem}");
+        }
+    }
+
     /// <param name="explicitPath">
-    /// 切板时传进来的那块板。不给就走原来的搜索规则（命令行 → 环境变量 → 向上找 boards/scratch.canvas）——
-    /// 那条路只在启动时走一次，切板不许掉回它，否则会跳回启动那块板。
+    /// 切板时传进来的那块板。不给就走启动那一条（命令行 → 环境变量 → 上次打开的那块 →
+    /// 首次开屏的教程板 → 向上找 boards/scratch.canvas）——那条路只在启动时走一次，
+    /// 切板不许掉回它，否则会跳回启动那块板。
     /// </param>
     private void LoadBoard(string? explicitPath = null)
     {
@@ -292,7 +362,7 @@ public sealed partial class MainWindow : Window
                 .Skip(1)
                 .FirstOrDefault(argument => argument.EndsWith(CanvasStore.Extension, StringComparison.OrdinalIgnoreCase));
 
-            var resolution = BoardLocator.Resolve(requested, AppContext.BaseDirectory);
+            var resolution = ResolveStartupBoard(requested);
 
             var path = resolution.BoardPath;
 
@@ -310,6 +380,11 @@ public sealed partial class MainWindow : Window
             _boardPath = path;
             _document = document;
             _baseJson = text;
+
+            // 先把上一次开着的那一排**读进局部量**：`RememberLastBoard` 现在两样一起写，而它必须写在
+            // 恢复**之后**——写在前面就会把这一排按"此刻只剩这一块"覆盖掉，于是每开一次软件少一块板
+            // （真机两发都红过：第一发 restore 空手而归，第二发只剩 2 枚标签）。
+            IReadOnlyList<string> remembered = App.SelfTest ? [] : BoardSession.ReadOpenBoards();
 
             var sidecar = BoardViewState.TryLoad(CanvasStore.SidecarPath(_boardPath));
 
@@ -330,10 +405,23 @@ public sealed partial class MainWindow : Window
                 _openBoards.Insert(0, AllNotesKey);
             }
 
+            // 开着的那一排整排回来（2026-10-23 他报"我打开后没有快速入门的页面了"：以前只记当前那一块，
+            // 关一次软件其余标签就凭空没了）。盘上已经不在了的那些不回来；当前这一块排在它原来的位置上。
+            foreach (var board in remembered)
+            {
+                if (!_openBoards.Exists(open => SameBoard(open, board)))
+                {
+                    _openBoards.Add(board);
+                }
+            }
+
             if (!_openBoards.Exists(open => SameBoard(open, _boardPath)))
             {
                 _openBoards.Add(_boardPath);
             }
+
+            // 写记忆放在恢复之后：这一刻 `_openBoards` 才是"开着的这一排"的真相。
+            RememberLastBoard(path);
 
             ResetPerBoardRuntime();
 
@@ -369,7 +457,7 @@ public sealed partial class MainWindow : Window
             // 同步要的是"这块板"，不是"这个窗口"：换板（--board 指过去）之后账本目录也跟着走，
             // 所以每个板子建一个，旧的先停表。没定远端仓库时它自己一声不响。
             _sync?.Stop();
-            _sync = new SyncHost(_boardPath, Say, DispatcherQueue);
+            _sync = new SyncHost(_boardPath, Say, DispatcherQueue, FollowRemoteRename);
             _sync.Start();
         }
         catch (Exception ex) when (ex is CanvasDocumentException or JsonException or IOException
@@ -1018,9 +1106,142 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        ApplyWheel(point.Position, delta);
+        e.Handled = true;
+    }
+
+    // -------------------------------------------------------------------------
+    // Wheel zoom: a transform during the gesture, one crisp rebuild when it stops
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// 手势期间的缩放预览：只缩放整层，不重排、不重画网格、不存盘。
+    /// </summary>
+    /// <remarks>
+    /// 2026-10-23 他报"快速滚轮卡顿"。现读：每一发 zoom+arrange 是 64–83ms（其中节点重排 31–44ms、
+    /// 网格重绘另算，最慢一发 132ms）；滚轮事件只能排在那后面，手一快就攒成一队。macOS 那种丝滑
+    /// 靠的不是把同一件事做快，而是手势期间只动合成变换、停手再落一次真布局。
+    /// <para>
+    /// 所以：滚轮期间 <see cref="PanLayer"/> 套一枚以指针为圆心的 <see cref="ScaleTransform"/>，
+    /// 每一发只改 ScaleX/Y（合成层，不动文字），120ms 没有新滚轮才提交——相机走一次
+    /// <see cref="BoardViewState.ZoomAt"/>、重排一次、网格重绘一次。落定后的画面仍是原来的
+    /// 清晰文字（那条"不用 render transform 缩放"的规矩针对的是落定态，这里是手势预览）。
+    /// </para>
+    /// <para>
+    /// 代价说清楚：手势中文字会暂时被合成缩放（略糊）；缩小预览时，视口外原本被剔除的格子
+    /// 要等提交那一拍才出现。两者都只活到 120ms 的提交点。编辑中或正在拖拽时走旧的一发路径
+    /// （<see cref="WheelZoomStep"/>），不把输入法/手势卷进缩放层。
+    /// </para>
+    /// </remarks>
+    private bool _wheelPreview;
+    private Point _wheelAnchor;
+    private double _wheelStartZoom;
+    private double _wheelTargetZoom;
+    private ScaleTransform? _wheelPanScale;
+    private DispatcherQueueTimer? _wheelSettle;
+
+    private void ApplyWheel(Point position, int delta)
+    {
+        // 编辑中／正在拖／正在平移：这几档对"指针底下的世界"有依赖，走一次到位的旧路径。
+        if (_editingId is not null
+            || _nodeGesture is not null
+            || Math.Abs(PanShift.X) > 0.01
+            || Math.Abs(PanShift.Y) > 0.01)
+        {
+            WheelZoomStep(position, delta);
+            return;
+        }
+
+        EnsureWheelSettle();
+
+        if (!_wheelPreview)
+        {
+            _wheelPreview = true;
+            _wheelAnchor = position;
+            _wheelStartZoom = _view.Zoom;
+            _wheelTargetZoom = _view.Zoom;
+
+            // 只缩放界面层；网格留在原位，提交那一拍才按新缩放重画（缩放中不让点阵去缩，
+            // 那张位图不铺满缩小后的视口，缩了会在边上露出没有点阵的地板）。
+            _wheelPanScale = new ScaleTransform
+            {
+                CenterX = position.X,
+                CenterY = position.Y,
+            };
+
+            PanLayer.RenderTransform = _wheelPanScale;
+        }
+
+        _wheelTargetZoom = Math.Clamp(
+            _wheelTargetZoom * (delta > 0 ? WheelStep : 1 / WheelStep), MinZoom, MaxZoom);
+
+        var scale = _wheelTargetZoom / _wheelStartZoom;
+
+        if (_wheelPanScale is { } preview)
+        {
+            preview.ScaleX = scale;
+            preview.ScaleY = scale;
+        }
+
+        // 比例那一格跟着手势走；提交后 ArrangeAll 会按真相再刷一次。
+        ZoomLevelText.Text = $"{Math.Round(_wheelTargetZoom * 100)}%";
+
+        _wheelSettle!.Stop();
+        _wheelSettle.Start();
+    }
+
+    private void EnsureWheelSettle()
+    {
+        if (_wheelSettle is not null)
+        {
+            return;
+        }
+
+        _wheelSettle = DispatcherQueue.CreateTimer();
+        _wheelSettle.Interval = TimeSpan.FromMilliseconds(120);
+        _wheelSettle.IsRepeating = false;
+        _wheelSettle.Tick += (_, _) => CommitWheelPreview();
+    }
+
+    /// <summary>停手 120ms 后落一次真布局；进拍图、切板、失焦、指针按下时也先落到这里。</summary>
+    private void CommitWheelPreview()
+    {
+        if (!_wheelPreview)
+        {
+            return;
+        }
+
+        _wheelPreview = false;
+        _wheelSettle?.Stop();
+
+        PanLayer.RenderTransform = PanShift;
+        _wheelPanScale = null;
+
+        var factor = _wheelTargetZoom / _wheelStartZoom;
+
+        if (Math.Abs(factor - 1) <= 1e-9)
+        {
+            return;
+        }
+
+        _view.ZoomAt(_wheelAnchor.X, _wheelAnchor.Y, factor, MinZoom, MaxZoom);
+
+        ArrangeAll();
+        ProjectSelection();
+        SaveSoon();
+
+        if (_wheelTargetZoom <= MinZoom + 1e-9 || _wheelTargetZoom >= MaxZoom - 1e-9)
+        {
+            Say($"缩放已到边界（{Percent()}）");
+        }
+    }
+
+    /// <summary>一次到位的旧路径：编辑、拖拽、平移中仍走它（这些场景不允许指针底下的世界先变形）。</summary>
+    private void WheelZoomStep(Point position, int delta)
+    {
         var before = _view.Zoom;
 
-        _view.ZoomAt(point.Position.X, point.Position.Y, delta > 0 ? WheelStep : 1 / WheelStep, MinZoom, MaxZoom);
+        _view.ZoomAt(position.X, position.Y, delta > 0 ? WheelStep : 1 / WheelStep, MinZoom, MaxZoom);
 
         ArrangeAll();
         ProjectSelection();
@@ -1029,8 +1250,6 @@ public sealed partial class MainWindow : Window
         var clamped = Math.Abs(before - _view.Zoom) < double.Epsilon;
 
         Say(clamped ? $"缩放已到边界（{Percent()}）" : string.Empty);
-
-        e.Handled = true;
     }
 
     private int VisibleCount() => _realized.Count(pair => pair.Value.IsHitTestVisible);
@@ -2712,9 +2931,16 @@ public sealed partial class MainWindow : Window
     /// prototype behaves the same way, and a command that vanishes when you have not selected anything
     /// is a command you cannot discover.
     /// </summary>
+    /// <remarks>
+    /// 2026-10-23 他点名把「板子」「换板子」从右键菜单里删掉：这两节管的不是板上那件事，而是
+    /// "窗口现在开哪块板"，顶栏标签、加号与 Ctrl+T/Ctrl+W 已经把它们的入口说全了。命令表本身不动——
+    /// 键盘分发与按住 Tab 的那份清单读的仍是整张表，所以删的只是这一个菜单面，不是能力。
+    /// 同一天「恢复…」也跟着配对/筛选搬去了标题条右端的 ⋮——那三件是整块板/整台设备的动作。
+    /// </remarks>
     private static bool SectionApplies(string section, MenuWhere where) => section switch
     {
         "排布" => where is MenuWhere.ManyNotes or MenuWhere.Group,
+        "板子" or "换板子" => false,
         _ => true,
     };
 
@@ -2801,18 +3027,8 @@ public sealed partial class MainWindow : Window
         reset.Click += (_, _) => ResetView();
         menu.Items.Add(reset);
 
-        // 漏斗那颗按钮按他的意思删了；筛选不能跟着没有门，所以门挪到菜单里（板顶那条横幅仍在，
-        // 点它就是清除——激活态的可见性没有变）。
-        var filter = new MenuFlyoutItem { Text = "筛选：日期与标签…" };
-        filter.Click += (_, _) => SetFilterPanel(true);
-        menu.Items.Add(filter);
-
-        // 配对不开漏斗那一组（那是读板子的），也不放底栏（那是缩放）：它跟"筛选"同类——
-        // 整块板的一个动作，开了会挡画面，所以也归右键这一处。
-        var pair = new MenuFlyoutItem { Text = "配对手机…" };
-        pair.Click += (_, _) => OpenPairingPanel();
-        menu.Items.Add(pair);
-
+        // 筛选 / 恢复 / 配对 2026-10-23 搬到标题条右端的 ⋮（SettingsMenu.cs）：这三件是整块板/
+        // 整台设备的动作，不是"右击这格要改什么"。右键菜单只留板面上能看见的那几件。
         menu.ShowAt(BoardArea, new FlyoutShowOptions { Position = screenPosition });
     }
 
@@ -4331,14 +4547,9 @@ public sealed partial class MainWindow : Window
             {
                 problems.Add("键位清单没有摊成栏");
             }
-            else
+            else if (cheatColumns.Children.Count != 2)
             {
-                var expectedColumns = Root.ActualWidth >= 820 ? 3 : 2;
-
-                if (cheatColumns.Children.Count != expectedColumns)
-                {
-                    problems.Add($"键位清单读到 {cheatColumns.Children.Count} 栏，应 {expectedColumns}（窗宽 {Root.ActualWidth:0}）");
-                }
+                problems.Add($"键位清单读到 {cheatColumns.Children.Count} 栏，应 2（10-23 定的宽裕两栏，窗宽 {Root.ActualWidth:0}）");
             }
 
             // 查找那一层要拿板上真的有的那半句话去搜：命中为 0 的面板只是在演它自己。
@@ -4511,15 +4722,20 @@ public sealed partial class MainWindow : Window
 
             foreach (var sheet in sheets)
             {
-                // 每一块都是 Border 穿同一层皮：外缩只有 Sheet.OuterPx 一份，行里那份是平台给的。
-                if (sheet.Surface is not Border border || Math.Abs(border.Padding.Left - Sheet.OuterPx) > 0.01)
+                // 键位清单是"页面"那一档（760·内缩 16·圆角 12）；其余五枚是菜单/一句话，仍共用 4/8。
+                // 两档共用同一枚填充与同一层抬起，所以"一个组件"这条还在，变的是页面该有多大的边。
+                var page = ReferenceEquals(sheet.Surface, CheatPanel);
+                var expectedPad = page ? Sheet.PagePadPx : Sheet.OuterPx;
+                var expectedRadius = page ? Sheet.PageRadiusPx : Chrome.Radius;
+
+                if (sheet.Surface is not Border border || Math.Abs(border.Padding.Left - expectedPad) > 0.01)
                 {
-                    problems.Add($"{sheet.Where}：面板自己的内缩不是 {Sheet.OuterPx:0.#}px（基准：内空 167 = 4 + 5×32 + 4）");
+                    problems.Add($"{sheet.Where}：面板自己的内缩不是 {expectedPad:0.#}px（{(page ? "页面档" : "菜单档")}）");
                 }
 
-                if (Math.Abs(sheet.Radius - Chrome.Radius) > 0.01)
+                if (Math.Abs(sheet.Radius - expectedRadius) > 0.01)
                 {
-                    problems.Add($"{sheet.Where}：圆角 {sheet.Radius:0.##}，基准是 {Chrome.Radius:0.#}");
+                    problems.Add($"{sheet.Where}：圆角 {sheet.Radius:0.##}，{(page ? "页面档" : "菜单档")}应是 {expectedRadius:0.#}");
                 }
 
                 if (!ReferenceEquals(sheet.Fill, ChromeStyling.PanelSurface))
@@ -4549,7 +4765,9 @@ public sealed partial class MainWindow : Window
                 else
                 {
                     Diagnostics.Write(
-                        $"selftest 皮: {sheets.Length} 块浮层同枚填充、圆角 {Chrome.Radius:0.#}、外缩 {Sheet.OuterPx:0.#}px、各抬 1 件（ThemeShadow，抬起 {Lift.ZPx:0.#}）；浮层出现走 PopupThemeTransition");
+                        $"selftest 皮: {sheets.Length} 块浮层同枚填充、各抬 1 件（ThemeShadow，抬起 {Lift.ZPx:0.#}）；" +
+                        $"键位清单（页面）圆角 {Sheet.PageRadiusPx:0.#}、内缩 {Sheet.PagePadPx:0.#}px，" +
+                        $"其余 {sheets.Length - 1} 块（菜单）圆角 {Chrome.Radius:0.#}、外缩 {Sheet.OuterPx:0.#}px；浮层出现走 PopupThemeTransition");
                 }
             }
         }
@@ -4603,14 +4821,24 @@ public sealed partial class MainWindow : Window
             }
         }
 
+        // 一块丢了图的板子也要开得成：那一格写"未找到"，而不是把窗口打死（10-23 撞上的那一发）。
+        SelfTestMissingImageTile(problems);
+
         // 换板子那一组断言在 BoardTabs.cs：切走必须落盘、历史不跨板、关标签不删板、最后一块拒关。
         SelfTestBoardSwitching(problems);
 
         // 直建与行内改名也走界面自己那两条路；跑在自检副本上，收尾把造出来的板子删掉。
         SelfTestCreateAndRename(problems);
 
+        // 同步"跟上一个改名"的那一发搬的是你的文件，所以它也要有 DOM 级读数：搬对、撞名不搬、正在改名不搬。
+        SelfTestRemoteRenameFollow(problems);
+
         // 关掉一块＝删掉这块板：文件、sidecar、历史与本地同步账本一起走；再点加号会重新建出同名板。
         SelfTestBoardDeletion(problems);
+
+        // 滚轮的一发值多少毫秒：他 10-23 报"快速滚轮卡顿"，先把用户真走的那条路量成一条读数，
+        // 再决定是合并事件、还是把网格/投影的重活挪出每一发。
+        SelfTestWheelBurst();
 
         Diagnostics.Write(
             $"selftest: zoom now {Percent()}, realised {_realized.Count}/{_document.Nodes.Count}, " +
@@ -4625,6 +4853,44 @@ public sealed partial class MainWindow : Window
         SelfTestAllNotesTab(problems);
 
         return problems;
+    }
+
+    /// <summary>
+    /// 滚轮 burst：同一锚点上来回 12 发，量总耗时与每发均值，跑完把相机交回去。
+    /// 这是"手感"的装置读数——它不判过不过，只让"卡不卡"有一枚可复算的数。
+    /// </summary>
+    private void SelfTestWheelBurst()
+    {
+        var savedX = _view.PanX;
+        var savedY = _view.PanY;
+        var savedZoom = _view.Zoom;
+        var at = new Point(BoardArea.ActualWidth / 2, BoardArea.ActualHeight / 2);
+        const int steps = 8;
+
+        var started = Stopwatch.GetTimestamp();
+
+        for (var index = 0; index < steps; index++)
+        {
+            ApplyWheel(at, 120);
+        }
+
+        var previewMs = (Stopwatch.GetTimestamp() - started) * 1000.0 / Stopwatch.Frequency;
+        var committed = Stopwatch.GetTimestamp();
+
+        CommitWheelPreview();
+
+        var commitMs = (Stopwatch.GetTimestamp() - committed) * 1000.0 / Stopwatch.Frequency;
+
+        _view.PanX = savedX;
+        _view.PanY = savedY;
+        _view.Zoom = savedZoom;
+
+        ArrangeAll();
+        ProjectSelection();
+
+        Diagnostics.Write(
+            $"selftest 滚轮: {steps} 发预览共 {previewMs:0.0}ms（均 {previewMs / steps:0.00}ms/发，只改合成缩放）、" +
+            $"停手提交 {commitMs:0.0}ms（一次 ArrangeAll + 网格重绘）");
     }
 
     /// <summary>
@@ -4656,6 +4922,53 @@ public sealed partial class MainWindow : Window
         else
         {
             Diagnostics.Write($"selftest 剔除: {culled.Count} 格已 Collapsed，阴影带不再露");
+        }
+    }
+
+    /// <summary>
+    /// 一块丢了图的板子必须还打得开：那一格写"未找到"，而不是把窗口打死。
+    /// 10-23 拿一块引用着不在盘上的图的板子开屏，撞上的就是这一发——那格字原本挂在 `_label` 上，
+    /// 而 `_label` 已经在 `_textHost` 里，WinUI 对"还有父亲的元素再挂一次"答的是 ArgumentException，
+    /// 整个窗口在构造里就死了（自检副本带着 assets 目录，所以闸门一直看不见这条路）。
+    /// </summary>
+    /// <remarks>
+    /// 这里不叫 Rebuild：相机筛掉看不见的格子，把测试格停到远处就量不到它，停到近处又会污染
+    /// 后面每一步的计数。造一枚真正的 <see cref="NodeVisual"/> 走的仍是同一条构造路（ctor →
+    /// LoadImage），只是不进板子的树，也不动盘。
+    /// </remarks>
+    private void SelfTestMissingImageTile(List<string> problems)
+    {
+        const string id = "umissingimg";
+
+        var node = _document.Add(CanvasNodeKind.File, 0, 0, 240, 160, id: id);
+
+        node.FilePath = "assets/这一张不在盘上.png";
+
+        try
+        {
+            var visual = new NodeVisual(node, _ => null);
+
+            if (!visual.IsBroken)
+            {
+                problems.Add("自检：图没了的那格没把自己标成 broken");
+            }
+            else if (visual.MissingText is null || !visual.MissingText.StartsWith("未找到"))
+            {
+                problems.Add($"自检：丢了图的那格没说出为什么空着（读到「{visual.MissingText ?? "(空)"}」）");
+            }
+            else
+            {
+                Diagnostics.Write($"selftest 丢了图的格子: 开得成，那一格写着「{visual.MissingText!.Replace("\n", "／")}」");
+            }
+        }
+        catch (Exception ex)
+        {
+            // 这一发要写的就是"别打死窗口"：它再抛，就是当年那条路回来了。
+            problems.Add($"自检：造一块丢了图的格子把窗口打死了（{ex.GetType().Name}: {ex.Message}）");
+        }
+        finally
+        {
+            _document.Remove(id);
         }
     }
 
@@ -4788,6 +5101,8 @@ public sealed partial class MainWindow : Window
             return new ShotReply(false, null, Error: "还没有打开板面，画不出图");
         }
 
+        CommitWheelPreview();
+
         var mode = (request.Mode ?? "view").Trim().ToLowerInvariant();
         var savedPanX = _view.PanX;
         var savedPanY = _view.PanY;
@@ -4804,6 +5119,10 @@ public sealed partial class MainWindow : Window
         var panelsOpened = false;
         string? savedPanelTagFilter = null;
         Box? framedBox = null;
+
+        // 拍的是"落定以后长什么样"：操作条那三枚圆钮有 120ms 的入场动效，不关掉它，
+        // 取证图永远停在 0ms 的三枚透明圆上——那不是用户看到的界面。
+        _capturingShot = true;
 
         try
         {
@@ -5178,6 +5497,8 @@ public sealed partial class MainWindow : Window
                 ArrangeAll();
                 ProjectSelection();
             }
+
+            _capturingShot = false;
         }
     }
 

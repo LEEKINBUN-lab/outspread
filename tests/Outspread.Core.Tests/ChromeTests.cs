@@ -96,12 +96,22 @@ public class ChromeTests
         Assert.True(ink.R < hint.R && hint.R < quiet.R, "正文要比右列实，右列要比静默行实");
         Assert.Equal(12, Sheet.HintPx);
 
-        // 键帽（同日他要回来的那一发）：数仍是原型量出来的（feel.html:425），
-        // 且必须矮过它站着的带，否则会把行撑开——那是"两种线"的另一条来路。
-        Assert.Equal(23, Sheet.KeyHeight);
+        // 键帽（10-23 他在原型里重新点的纸键帽那一版）：24 高、7/1 内距、圆角 5，且必须矮过
+        // 它站着的带，否则会把行撑开——那是"两种线"的另一条来路。
+        Assert.Equal(24, Sheet.KeyHeight);
+        Assert.Equal(5, Sheet.KeyRadius);
+        Assert.Equal(7, Sheet.KeyPadX);
         Assert.Equal(12, Sheet.KeyFont);
         Assert.True(Sheet.KeyMinWidth + (2 * Sheet.KeyPadX) >= 24, "一枚键也得按得到");
         Assert.True(Sheet.KeyHeight < Sheet.RowPx, "键帽不能比它站的带还高");
+
+        // 键位清单是页面，不是菜单：760 宽、内缩 16、栏距 56、圆角 12；菜单仍是 4/8。
+        Assert.Equal(760, Sheet.PageWidthPx);
+        Assert.Equal(16, Sheet.PagePadPx);
+        Assert.Equal(56, Sheet.PageGutterPx);
+        Assert.Equal(12, Sheet.PageRadiusPx);
+        Assert.True(Sheet.PageRadiusPx > Chrome.Radius, "页面比菜单更圆，这是 10-23 定下的一档");
+        Assert.True(Sheet.PagePadPx > Sheet.OuterPx, "页面的边必须比菜单大，边距窄就是被这一条挤出来的");
     }
 
     [Fact]
@@ -123,11 +133,18 @@ public class ChromeTests
         Assert.Equal(34, TabStrip.TabHeight);
         Assert.True(TabStrip.StripHeight > TabStrip.TabHeight, "标签条要比标签高，上沿才有那 4 像素的空气");
 
-        // 可访问下限：关闭键的视觉是 20，命中区取 24；加号本身 28。
+        // 可访问下限：关闭键的视觉是 20，命中区取 24；加号本身 30。
         Assert.Equal(20, TabStrip.ClosePx);
         Assert.True(TabStrip.CloseHitPx >= 24, "关闭键的命中区不能低于 24");
+        Assert.Equal(30, TabStrip.AddPx);
         Assert.True(TabStrip.AddPx >= 24, "加号也要按得到");
-        Assert.True(TabStrip.CloseRadius > 0 && TabStrip.AddRadius > 0);
+
+        // 10-23 他看原型选的 Chrome 式：× 的悬停底是正圆（半径＝半高），加号也是圆底。
+        Assert.Equal(TabStrip.CloseHitPx / 2, TabStrip.CloseRadius);
+        Assert.Equal(TabStrip.AddPx / 2, TabStrip.AddRadius);
+        Assert.Equal(12, TabStrip.AddGlyphPx);
+        Assert.Equal(30, TabStrip.SettingsPx);
+        Assert.Equal(6, TabStrip.SettingsRadius);
 
         // 没有关闭键的那一档必须把整格留空；否则悬停长出 × 时整枚标签会变宽、邻居跟着跳。
         Assert.Equal(TabStrip.CloseHitPx + TabStrip.CloseMarginPx + TabStrip.PadRight, TabStrip.CloseReservePx);

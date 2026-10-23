@@ -85,6 +85,7 @@ public sealed partial class MainWindow
         TitleBarHost.ContextFlyout = BuildStripFlyout();
         AddBoardButton.ContextFlyout = BuildStripFlyout();
         AddBoardButton.Click += (_, _) => CreateNewBoard();
+        SettingsButton.Click += (_, _) => OpenSettingsMenu();
 
         // 加号的位置跟着最后一枚标签走：标题、语言、DPI 一变就要重量。LayoutUpdated 会在
         // 排版之后发，量到的 item.ActualWidth 才是真的；PositionAddBoardButton 自己带防自激门闩。
@@ -117,10 +118,12 @@ public sealed partial class MainWindow
             // 是 Collapsed 的，若两档内缩不一样，鼠标移上去整枚标签会横向长一截。
             ["TabViewItemHeaderPaddingWithCloseButton"] = new Thickness(TabStrip.PadLeft, 0, TabStrip.PadRight, 0),
             ["TabViewItemHeaderPaddingWithoutCloseButton"] = new Thickness(TabStrip.PadLeft, 0, TabStrip.CloseReservePx, 0),
-            ["TabViewItemHeaderCloseButtonWidth"] = TabStrip.CloseHitPx,
-            ["TabViewItemHeaderCloseButtonHeight"] = TabStrip.CloseHitPx,
+            // 原生关闭键整格归零：× 改由表头里的覆盖层画（不参与布局，悬停只切透明度）。
+            // 这样"有/没有 ×"不再改变标签宽度，也就没有悬停时宽度抖动带来的闪烁。
+            ["TabViewItemHeaderCloseButtonWidth"] = 0,
+            ["TabViewItemHeaderCloseButtonHeight"] = 0,
             ["TabViewItemHeaderCloseFontSize"] = TabStrip.CloseGlyphPx,
-            ["TabViewItemHeaderCloseMargin"] = new Thickness(TabStrip.CloseMarginPx, 0, 0, 0),
+            ["TabViewItemHeaderCloseMargin"] = new Thickness(0),
             ["TabViewItemSeparatorMargin"] = new Thickness(0, TabStrip.SeparatorInset, 0, TabStrip.SeparatorInset),
             ["TabViewItemBorderThickness"] = new Thickness(0),
             ["TabViewSelectedItemBorderThickness"] = new Thickness(1, 1, 1, 0),
@@ -145,8 +148,75 @@ public sealed partial class MainWindow
         // TabView 的 Padding 只落在自己的 TabListView 上。
         BoardTabs.Padding = new Thickness(8, TabStrip.StripHeight - TabStrip.TabHeight, 0, 0);
 
+        // 点到别处＝这一格改名到此为止。**不能只等 LostFocus**：这一版按一块不持焦点的区域（板面、
+        // 条上的空白、别的标签）不会把焦点从 TextBox 拿走，所以"点了别处还在改名"是必然不是偶发
+        // ——板子那侧的编辑器早就为同一条写过注释（MainWindow.xaml.cs:700-706）。
+        // handledEventsToo：标签/按钮自己会把这一发吃掉，那条路径也要能收。
+        Root.AddHandler(
+            UIElement.PointerPressedEvent,
+            new Microsoft.UI.Xaml.Input.PointerEventHandler(EndRenameOnPress),
+            handledEventsToo: true);
+
         StyleAddBoardButton(dark);
+        StyleSettingsButton(dark);
         PositionAddBoardButton();
+    }
+
+    /// <summary>
+    /// 标题条右端的设置入口。形状与加号同一套（30 高、圆角、透明底、悬停才有底色），
+    /// 但它是"更多/设置"那一格：竖排三点、靠窗口按钮那边，和浏览器一致。
+    /// </summary>
+    private void StyleSettingsButton(bool dark)
+    {
+        var transparent = new SolidColorBrush(Colors.Transparent);
+        var hover = Alpha(TabStrip.Hover(dark), TabStrip.HoverAlpha(dark));
+        var pressed = Alpha(TabStrip.Line(dark), TabStrip.HoverAlpha(dark) * 1.8);
+        var muted = new SolidColorBrush(NoteStyling.ToColor(TabStrip.InactiveInk(dark)));
+        var ink = new SolidColorBrush(NoteStyling.ToColor(TabStrip.ActiveInk(dark)));
+
+        SettingsButton.Width = TabStrip.SettingsPx;
+        SettingsButton.Height = TabStrip.SettingsPx;
+        SettingsButton.CornerRadius = new CornerRadius(TabStrip.SettingsRadius);
+        SettingsButton.Padding = new Thickness(0);
+        SettingsButton.BorderThickness = new Thickness(0);
+        SettingsButton.Background = transparent;
+        SettingsButton.Foreground = muted;
+
+        // 竖排三点：画三枚 2.5px 的圆点，不用 "⋮" 字形——W 字体里那个字形的点是方的，
+        // 2px 的方块在 30px 钮里就是"廉价"的来源。圆点跟横排/竖排的间距都由这里定。
+        var dots = new StackPanel
+        {
+            Spacing = TabStrip.SettingsDotGapPx,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+        };
+
+        for (var index = 0; index < 3; index++)
+        {
+            dots.Children.Add(new Microsoft.UI.Xaml.Shapes.Ellipse
+            {
+                Width = TabStrip.SettingsDotPx,
+                Height = TabStrip.SettingsDotPx,
+                Fill = muted,
+                IsHitTestVisible = false,
+            });
+        }
+
+        SettingsButton.Content = dots;
+
+        SettingsButton.Resources["ButtonBackground"] = transparent;
+        SettingsButton.Resources["ButtonBackgroundPointerOver"] = hover;
+        SettingsButton.Resources["ButtonBackgroundPressed"] = pressed;
+        SettingsButton.Resources["ButtonBackgroundDisabled"] = transparent;
+        SettingsButton.Resources["ButtonBorderBrush"] = transparent;
+        SettingsButton.Resources["ButtonBorderBrushPointerOver"] = transparent;
+        SettingsButton.Resources["ButtonBorderBrushPressed"] = transparent;
+        SettingsButton.Resources["ButtonBorderBrushDisabled"] = transparent;
+        SettingsButton.Resources["ButtonForeground"] = muted;
+        SettingsButton.Resources["ButtonForegroundPointerOver"] = ink;
+        SettingsButton.Resources["ButtonForegroundPressed"] = ink;
+        SettingsButton.Resources["ButtonForegroundDisabled"] = new SolidColorBrush(NoteStyling.ToColor(Sheet.Quiet(dark)));
     }
 
     /// <summary>加号是宿主里一枚真 Button（不是 TabView 模板里那枚）：位置由我们量、皮由令牌给。</summary>
@@ -162,13 +232,16 @@ public sealed partial class MainWindow
         AddBoardButton.Height = TabStrip.AddPx;
         AddBoardButton.CornerRadius = new CornerRadius(TabStrip.AddRadius);
         AddBoardButton.FontFamily = NoteStyling.NoteFont;
-        AddBoardButton.FontSize = TabStrip.AddGlyphPx;
         AddBoardButton.Padding = new Thickness(0);
         AddBoardButton.BorderThickness = new Thickness(0);
         AddBoardButton.Background = transparent;
         AddBoardButton.Foreground = muted;
         AddBoardButton.HorizontalContentAlignment = HorizontalAlignment.Center;
         AddBoardButton.VerticalContentAlignment = VerticalAlignment.Center;
+
+        // 2026-10-23：全角 "＋" 换成画出来的十字。字体字符的笔画粗细和光学中心都不归我们管，
+        // 在 30px 的圆里就会"看着有点歪、又有点贵"；两根 1.5px 的条由我们自己定。
+        AddBoardButton.Content = PlusIcon();
 
         // 默认 Button 模板的几枚状态刷子：不覆盖就是微软的灰底和边框压在我们的条上。
         AddBoardButton.Resources["ButtonBackground"] = transparent;
@@ -215,10 +288,12 @@ public sealed partial class MainWindow
             left = box.Right + 4;
         }
 
-        var available = TitleBarHost.ActualWidth - TitleBarHost.Padding.Right;
+        // 右端那枚设置入口也占地方：加号最多停到它左边 8px，别在标签多的时候钻到它底下。
+        var available = TitleBarHost.ActualWidth - TitleBarHost.Padding.Right
+            - TabStrip.SettingsInsetPx - TabStrip.SettingsPx - 8;
         left = Math.Clamp(left, 8, Math.Max(8, available - TabStrip.AddPx - 4));
 
-        var top = (TabStrip.StripHeight - TabStrip.AddPx) / 2;
+        var top = (TabStrip.StripHeight - TabStrip.AddPx) / 2 + TabStrip.AddOpticalDropPx;
         var current = AddBoardButton.Margin;
 
         if (Math.Abs(current.Left - left) < 0.5 && Math.Abs(current.Top - top) < 0.5)
@@ -328,6 +403,24 @@ public sealed partial class MainWindow
     private static SolidColorBrush Alpha(Rgb rgb, double alpha)
         => new(NoteStyling.WithAlpha(rgb, alpha));
 
+    /// <summary>加号：两根 1.2px 的细条，12×12。画出来而不是写 "＋"——后者是字体排出来的，
+    /// 笔画和光学中心都不受控；画画的那一枚在 30px 圆里才稳。</summary>
+    private static PathIcon PlusIcon()
+    {
+        var plus = new GeometryGroup();
+        plus.Children.Add(new RectangleGeometry { Rect = new Rect(0, 5.4, 12, 1.2) });
+        plus.Children.Add(new RectangleGeometry { Rect = new Rect(5.4, 0, 1.2, 12) });
+
+        return new PathIcon
+        {
+            Data = plus,
+            Width = TabStrip.AddGlyphPx,
+            Height = TabStrip.AddGlyphPx,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+    }
+
     private static string BoardName(string boardPath)
         => IsAllNotes(boardPath) ? "所有便签" : Path.GetFileNameWithoutExtension(boardPath);
 
@@ -415,8 +508,8 @@ public sealed partial class MainWindow
 
                 if (_renamingPath is not null && SameBoard(_renamingPath, path) && item.Header is TextBox)
                 {
-                    item.MaxWidth = TabStrip.RenameTabMaxWidth;
-
+                    // 改名途中这一枚的宽度由 BeginRenameTab 钉住（见 FreezeRenameSlot）：这里一次都不许碰，
+                    // 否则每一趟 Rebuild 都会把 300 压回 220，字又跳一次。
                     continue;
                 }
 
@@ -591,6 +684,7 @@ public sealed partial class MainWindow
         }
 
         Add(AddBoardButton);
+        Add(SettingsButton);
         Add(MinimizeButton);
         Add(MaximizeButton);
         Add(CloseButton);
@@ -634,7 +728,7 @@ public sealed partial class MainWindow
         _passthroughSignature = signature;
 
         Diagnostics.Write(
-            $"标题栏: 交互区 {rects.Count} 块（标签 {BoardTabs.TabItems.Count} 枚 + 加号 + 3 枚标题按钮），" +
+            $"标题栏: 交互区 {rects.Count} 块（标签 {BoardTabs.TabItems.Count} 枚 + 加号 + 设置 + 3 枚标题按钮），" +
             $"第一块 {rects[0].X},{rects[0].Y} {rects[0].Width}×{rects[0].Height}");
 
         void Add(FrameworkElement element)
@@ -672,7 +766,7 @@ public sealed partial class MainWindow
 
     private void SetHeader(TabViewItem item, string name)
     {
-        var header = new TextBlock
+        var text = new TextBlock
         {
             Text = name,
             FontFamily = NoteStyling.NoteFont,
@@ -680,17 +774,96 @@ public sealed partial class MainWindow
             TextTrimming = TextTrimming.CharacterEllipsis,
             TextWrapping = TextWrapping.NoWrap,
             VerticalAlignment = VerticalAlignment.Center,
+
+            // 可关的标签始终给 × 留出这一格：它不再"悬停时长出来"，标签宽度所以在悬停前后
+            // 一个像素都不变；标题也停在 × 左侧，不会被那一枚盖掉最后一个字。
+            Margin = item.IsClosable ? new Thickness(0, 0, TabStrip.CloseHitPx, 0) : new Thickness(0),
         };
+
+        // × 与标题同格：覆盖层压在字上面，不占一格宽度。标签宽只由标题决定，
+        // 悬停时只换它的 Opacity/命中，所以宽度不会跳，也不会闪。
+        var header = new Grid { VerticalAlignment = VerticalAlignment.Center };
+        header.Children.Add(text);
+        header.Children.Add(BuildHeaderClose(item, name));
 
         item.Header = header;
         PaintHeader(item, hovered: false);
     }
 
-    /// <summary>标题没变就只重刷墨色，不把 TextBlock 换掉——整条重建时换头会把鼠标正停着
+    /// <summary>
+    /// 表头里的 ×。原生 TabView 关闭键把宽度算进标签布局，悬停一显一隐就改宽度，
+    /// 指针被挤出去再回来——他看到的"边缘闪烁"就是这么来的。这枚覆盖层始终在表头里，
+    /// 只切 Opacity 与 IsHitTestVisible；可以盖住标题的尾巴，但标签宽度一个像素不动。
+    /// </summary>
+    private Button BuildHeaderClose(TabViewItem item, string name)
+    {
+        var dark = NoteStyling.IsDark;
+        var transparent = new SolidColorBrush(Colors.Transparent);
+        var hover = Alpha(TabStrip.Line(dark), TabStrip.CloseHoverAlpha(dark));
+        var pressed = Alpha(TabStrip.Line(dark), TabStrip.CloseHoverAlpha(dark) * 1.8);
+        var muted = new SolidColorBrush(NoteStyling.ToColor(TabStrip.InactiveInk(dark)));
+        var ink = new SolidColorBrush(NoteStyling.ToColor(TabStrip.ActiveInk(dark)));
+
+        var close = new Button
+        {
+            Name = "TabCloseButton",
+            Width = TabStrip.CloseHitPx,
+            Height = TabStrip.CloseHitPx,
+            MinWidth = 0,
+            MinHeight = 0,
+            Padding = new Thickness(0),
+            BorderThickness = new Thickness(0),
+            Background = transparent,
+            Foreground = muted,
+            CornerRadius = new CornerRadius(TabStrip.CloseRadius),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsTabStop = false,
+            Opacity = 0,
+            IsHitTestVisible = false,
+            Tag = item,
+            Content = new FontIcon
+            {
+                Glyph = "",
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = TabStrip.CloseGlyphPx,
+            },
+        };
+
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(close, $"关闭 {name}");
+        ToolTipService.SetToolTip(close, $"关闭 {name}");
+
+        close.Resources["ButtonBackground"] = transparent;
+        close.Resources["ButtonBackgroundPointerOver"] = hover;
+        close.Resources["ButtonBackgroundPressed"] = pressed;
+        close.Resources["ButtonBackgroundDisabled"] = transparent;
+        close.Resources["ButtonBorderBrush"] = transparent;
+        close.Resources["ButtonBorderBrushPointerOver"] = transparent;
+        close.Resources["ButtonBorderBrushPressed"] = transparent;
+        close.Resources["ButtonBorderBrushDisabled"] = transparent;
+        close.Resources["ButtonForeground"] = muted;
+        close.Resources["ButtonForegroundPointerOver"] = ink;
+        close.Resources["ButtonForegroundPressed"] = ink;
+        close.Resources["ButtonForegroundDisabled"] = new SolidColorBrush(NoteStyling.ToColor(Sheet.Quiet(dark)));
+
+        close.Click += (_, _) =>
+        {
+            if (item.IsClosable && item.Tag is string path)
+            {
+                CloseTab(path);
+            }
+        };
+
+        return close;
+    }
+
+    /// <summary>标题没变就只重刷墨色，不把表头换掉——整条重建时换头会把鼠标正停着
     /// 那一枚的悬停墨打回静音，下一次 PointerEntered 又不一定会来。</summary>
     private void UpdateHeader(TabViewItem item, string name)
     {
-        if (item.Header is TextBlock header && string.Equals(header.Text, name, StringComparison.Ordinal))
+        if (item.Header is Grid header
+            && header.Children.OfType<TextBlock>().FirstOrDefault() is { } text
+            && string.Equals(text.Text, name, StringComparison.Ordinal))
         {
             PaintHeader(item, hovered: false);
 
@@ -700,10 +873,11 @@ public sealed partial class MainWindow
         SetHeader(item, name);
     }
 
-    /// <summary>活动那一枚用正文墨、其余退回静音墨；悬停的静音标签临时提成正文墨。</summary>
+    /// <summary>活动那一枚用正文墨、其余退回静音墨；悬停的静音标签临时提成正文墨。
+    /// × 只在"可关 且（活动或悬停）"时出现，位置与宽度始终占着，不参与布局。</summary>
     private void PaintHeader(TabViewItem item, bool hovered)
     {
-        if (item.Header is not TextBlock header || item.Tag is not string path)
+        if (item.Header is not Grid header || item.Tag is not string path)
         {
             return;
         }
@@ -711,9 +885,28 @@ public sealed partial class MainWindow
         var active = SameBoard(path, _boardPath ?? string.Empty);
         var dark = NoteStyling.IsDark;
 
-        header.Foreground = new SolidColorBrush(
-            NoteStyling.ToColor(active || hovered ? TabStrip.ActiveInk(dark) : TabStrip.InactiveInk(dark)));
-        header.FontWeight = active ? Microsoft.UI.Text.FontWeights.Medium : Microsoft.UI.Text.FontWeights.Normal;
+        if (header.Children.OfType<TextBlock>().FirstOrDefault() is { } text)
+        {
+            text.Foreground = new SolidColorBrush(
+                NoteStyling.ToColor(active || hovered ? TabStrip.ActiveInk(dark) : TabStrip.InactiveInk(dark)));
+            text.FontWeight = active ? Microsoft.UI.Text.FontWeights.Medium : Microsoft.UI.Text.FontWeights.Normal;
+        }
+
+        if (header.Children.OfType<Button>().FirstOrDefault() is { } close)
+        {
+            // × 也在这条皮上：换主题时它的本地刷子要跟着换，否则深色下还是浅色那只。
+            var transparent = new SolidColorBrush(Colors.Transparent);
+            close.Resources["ButtonBackground"] = transparent;
+            close.Resources["ButtonBackgroundPointerOver"] = Alpha(TabStrip.Line(dark), TabStrip.CloseHoverAlpha(dark));
+            close.Resources["ButtonBackgroundPressed"] = Alpha(TabStrip.Line(dark), TabStrip.CloseHoverAlpha(dark) * 1.8);
+            close.Resources["ButtonForeground"] = new SolidColorBrush(NoteStyling.ToColor(TabStrip.InactiveInk(dark)));
+            close.Resources["ButtonForegroundPointerOver"] = new SolidColorBrush(NoteStyling.ToColor(TabStrip.ActiveInk(dark)));
+            close.Resources["ButtonForegroundPressed"] = new SolidColorBrush(NoteStyling.ToColor(TabStrip.ActiveInk(dark)));
+
+            var show = item.IsClosable && (active || hovered);
+            close.Opacity = show ? 1 : 0;
+            close.IsHitTestVisible = show;
+        }
     }
 
     private void RepaintAllHeaders()
@@ -844,6 +1037,7 @@ public sealed partial class MainWindow
     /// <summary>切走之前把这一块板交回去：定时器里那半秒的改动不能跟着人走。</summary>
     private void FlushCurrentBoard()
     {
+        CommitWheelPreview();
         _saveTimer?.Stop();
 
         if (_boardPath is null || _document is null)
@@ -1203,14 +1397,22 @@ public sealed partial class MainWindow
             FontFamily = NoteStyling.NoteFont,
             FontSize = TabStrip.FontPx,
             FontWeight = Microsoft.UI.Text.FontWeights.Medium,
-            MinWidth = TabStrip.RenameBoxMinWidth,
-            MaxWidth = TabStrip.RenameBoxMaxWidth,
-            Height = 26,
+
+            // 框自己不带字面：宽度全由那一枚标签钉住（见 FreezeRenameSlot）。留 180/240 在框上，
+            // 打字时每敲一下标签就跟着内容长一次——他 10-23 报的"文字位置会浮动"。
+            //
+            // 高度两头都不许有：写死 26 会把字顶高，留着主题那枚最小高也一样高——真机量过两遍，
+            // 标题的墨迹中心在第 20.8 行、改名框在 16.2 行，差 4.6px（他 10-23 第二条"双击编辑时
+            // 还是会往上动一下"）。模板把字长在内容宿主顶上，`VerticalContentAlignment=Center`
+            // 管不到它；只有让框收到"一行字自己那么高"再整枚居中，字才回到标题原来那条线上。
+            MinWidth = 0,
+            MinHeight = 0,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Center,
             Padding = new Thickness(0),
             BorderThickness = new Thickness(0),
             Background = new SolidColorBrush(Colors.Transparent),
             Foreground = new SolidColorBrush(NoteStyling.ToColor(TabStrip.ActiveInk(NoteStyling.IsDark))),
-            VerticalContentAlignment = VerticalAlignment.Center,
             IsSpellCheckEnabled = false,
         };
 
@@ -1229,21 +1431,175 @@ public sealed partial class MainWindow
         _renamingPath = path;
         _renameBox = box;
 
-        item.MaxWidth = TabStrip.RenameTabMaxWidth;
+        FreezeRenameSlot(item, BoardName(path));
         item.IsClosable = false;
         item.Header = box;
 
         box.KeyDown += OnRenameKeyDown;
         box.LostFocus += OnRenameLostFocus;
 
-        DispatcherQueue.TryEnqueue(() =>
+        // TextBox 默认模板在"有字且聚焦"时会在右边亮一枚圆形清除按钮（× 那枚）。它在模板的视觉状态里，
+        // 不在 Border* 上，所以那几枚主题资源管不着。真机截图里它就长在标签的改名框里，既吃宽度又像
+        // 一个能一键清空名字的按钮——这里按模板件的名字把它收掉，不重写整份模板。
+        // 收两次：状态机在"有字/没字"翻转时会把 Visibility 设回去，而打字正是它翻转的那一拍。
+        box.Loaded += (_, _) => HideRenameClearButton(box);
+        box.TextChanged += (_, _) => HideRenameClearButton(box);
+
+        FocusRenameBox(box);
+    }
+
+    /// <summary>把改名框模板里那枚清除按钮收掉（模板件要到第一次排版之后才在树里）。</summary>
+    private static void HideRenameClearButton(DependencyObject root)
+    {
+        if (root is FrameworkElement { Name: "DeleteButton" } clear)
         {
-            if (ReferenceEquals(_renameBox, box))
+            clear.Visibility = Visibility.Collapsed;
+
+            return;
+        }
+
+        var children = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root);
+
+        for (var index = 0; index < children; index++)
+        {
+            HideRenameClearButton(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, index));
+        }
+    }
+
+    /// <summary>
+    /// 开始改名时把这一枚标签的宽度**量一次、钉住**（`Min/Max/Width` 给同一个数），之后打字不再改。
+    /// 旧写法是"临时放宽到 300"＋输入框自带 180/240 的字面：标签先跳一次宽，然后每敲一下按内容再长
+    /// 一次——那就是他看到的"文字位置会浮动"。钉住以后长名字在框里自己滚，Chrome 也是这一条。
+    /// <para>
+    /// 钉在哪个数：至少给 <see cref="TabStrip.RenameTabMinWidth"/> 的字面（编辑要有地方看，
+    /// 5 个字的框改不了 40 个字的名字），名字更长就一次放宽到放得下（上限 300）。这一跳只发生在
+    /// **进改名那一拍**，而且是向右长——标签的左沿不动，标题的字不动，所以它不是"浮动"；
+    /// 每敲一下再长一次才是。
+    /// </para>
+    /// </summary>
+    private void FreezeRenameSlot(TabViewItem item, string name)
+    {
+        var wanted = Math.Ceiling(MeasureTabName(name)) + (TabStrip.PadLeft * 2) + TabStrip.RenameSlackPx;
+        var from = item.ActualWidth > 0 ? item.ActualWidth : TabStrip.RenameTabMinWidth;
+
+        var slot = Math.Clamp(Math.Max(wanted, from), TabStrip.RenameTabMinWidth, TabStrip.RenameTabMaxWidth);
+
+        item.MinWidth = slot;
+        item.MaxWidth = slot;
+        item.Width = slot;
+    }
+
+    private static void ReleaseRenameSlot(TabViewItem item)
+    {
+        item.MinWidth = TabStrip.TabMinWidth;
+        item.MaxWidth = TabStrip.TabMaxWidth;
+        item.Width = double.NaN;
+    }
+
+    private TextBlock? _renameProbe;
+
+    /// <summary>名字在这一套标签字（<see cref="TabStrip.FontPx"/>＋便签同族）下有多宽。</summary>
+    private double MeasureTabName(string name)
+    {
+        _renameProbe ??= new TextBlock
+        {
+            FontFamily = NoteStyling.NoteFont,
+            FontSize = TabStrip.FontPx,
+            FontWeight = Microsoft.UI.Text.FontWeights.Medium,
+            TextWrapping = TextWrapping.NoWrap,
+        };
+
+        _renameProbe.Text = name;
+        _renameProbe.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+
+        return _renameProbe.DesiredSize.Width;
+    }
+
+    /// <summary>
+    /// 把**键盘**焦点交给那一行字。只调 <c>Focus(FocusState.Programmatic)</c> 换不来光标：双击那一下
+    /// 的焦点还挂在 <c>TabViewItem</c>（它是 Selector）上，程序化"占个位"不产生光标，他 10-23 报的
+    /// "没有光标"就是这一条。<c>FocusManager.TryFocusAsync(box, FocusState.Keyboard)</c> 走框架自己那趟
+    /// 焦点移动，光标会亮；它失败（那一刻窗口没激活之类）再退回 Programmatic——至少字还打得进去。
+    /// 全选放在焦点之后。
+    /// </summary>
+    private void FocusRenameBox(TextBox box)
+    {
+        _ = DispatcherQueue.TryEnqueue(async () =>
+        {
+            if (!ReferenceEquals(_renameBox, box))
+            {
+                return;
+            }
+
+            var moved = false;
+
+            try
+            {
+                // 这一版的形状：`FocusManager.TryFocusAsync(element, FocusState)` 回 `FocusMovementResult`，
+                // 判"移没移成"看它的 `Succeeded`（`UIElement.TryFocusAsync` 与 `WasFocusMoved` 都不在这份投影里）。
+                var movedResult = await Microsoft.UI.Xaml.Input.FocusManager.TryFocusAsync(box, FocusState.Keyboard);
+
+                moved = movedResult?.Succeeded == true;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+            {
+                moved = false;
+            }
+
+            if (!ReferenceEquals(_renameBox, box))
+            {
+                return;
+            }
+
+            if (!moved)
             {
                 box.Focus(FocusState.Programmatic);
-                box.SelectAll();
             }
+
+            box.SelectAll();
         });
+    }
+
+    /// <summary>
+    /// 窗口里任何一处按下，只要落点不在这一行字里，改名就到此为止（按提交处理，失败在回执里说为什么）。
+    /// 触发改名那一下不会被误收：<c>DoubleTapped</c> 在第二发 <c>PointerPressed</c> **之后**才到，
+    /// 那一刻 <c>_renamingPath</c> 还是空的。
+    /// </summary>
+    private void EndRenameOnPress(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (!EndRenameOnPress(e.OriginalSource as DependencyObject))
+        {
+            return;
+        }
+
+        TryCommitRename(fromBlur: true);
+    }
+
+    /// <summary>
+    /// 这一发按下该不该结束改名？落在框里（含框自己的模板零件）＝不该；落在**同一枚标签**的
+    /// 上下那条空气里＝也不该——框现在只有一行字那么高，标签比它高，点在自己那枚标签上不该被
+    /// 当成"点了别处"。别的任何地方＝收。
+    /// </summary>
+    private bool EndRenameOnPress(DependencyObject? source)
+    {
+        if (_renamingPath is null || _renameBusy || _renamePreview || _renameBox is null)
+        {
+            return false;
+        }
+
+        var own = TabItemFor(_renamingPath);
+
+        while (source is not null)
+        {
+            if (ReferenceEquals(source, _renameBox) || (own is not null && ReferenceEquals(source, own)))
+            {
+                return false;
+            }
+
+            source = VisualTreeHelper.GetParent(source);
+        }
+
+        return true;
     }
 
     private void OnRenameKeyDown(object sender, KeyRoutedEventArgs e)
@@ -1296,8 +1652,7 @@ public sealed partial class MainWindow
                 return;
             }
 
-            box.Focus(FocusState.Programmatic);
-            box.SelectAll();
+            FocusRenameBox(box);
 
             return;
         }
@@ -1313,82 +1668,302 @@ public sealed partial class MainWindow
 
         _renameBusy = true;
 
-        var current = SameBoard(oldPath, _boardPath ?? string.Empty);
-        var syncWasOn = _sync?.Enabled == true;
         var item = TabItemFor(oldPath);
+
+        _renamingPath = null;
+        _renameBox = null;
 
         try
         {
-            if (current)
+            var problem = ApplyBoardRename(oldPath, newPath);
+
+            if (problem is not null)
             {
-                FlushCurrentBoard();
-                StopBoardServicesForRename();
-            }
+                Say($"改名没成：{problem}");
 
-            MoveBoardFiles(oldPath, newPath);
+                if (item is not null)
+                {
+                    item.Tag = oldPath;
+                    ReleaseRenameSlot(item);
+                    item.IsClosable = true;
+                    SetHeader(item, oldName);
+                }
 
-            // 一旦改了名，这块板就是用户的命名板了；关标签时不再清内容。
-            var index = _openBoards.FindIndex(open => SameBoard(open, oldPath));
-
-            if (index >= 0)
-            {
-                _openBoards[index] = newPath;
-            }
-
-            if (current)
-            {
-                _boardPath = newPath;
-            }
-
-            if (item is not null)
-            {
-                item.Tag = newPath;
-                item.MaxWidth = TabStrip.TabMaxWidth;
-                item.IsClosable = true;
-            }
-
-            _renamingPath = null;
-            _renameBox = null;
-
-            RebuildTabs();
-
-            if (current)
-            {
-                StartBoardServicesAfterRename();
-            }
-
-            Say(syncWasOn
-                ? $"改名为 {BoardName(newPath)}｜同步会把新名字当另一块板，旧名那份留在远端"
-                : $"改名为 {BoardName(newPath)}");
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Say($"改名没成：{ex.Message}");
-
-            _renamingPath = null;
-            _renameBox = null;
-
-            if (item is not null)
-            {
-                item.Tag = oldPath;
-                item.MaxWidth = TabStrip.TabMaxWidth;
-                item.IsClosable = true;
-                SetHeader(item, oldName);
-            }
-
-            if (current)
-            {
-                StartBoardServicesAfterRename();
-            }
-
-            if (!File.Exists(_boardPath ?? string.Empty))
-            {
-                Diagnostics.Write($"rename left the current board path missing: {_boardPath}");
+                if (!File.Exists(_boardPath ?? string.Empty))
+                {
+                    Diagnostics.Write($"rename left the current board path missing: {_boardPath}");
+                }
             }
         }
         finally
         {
             _renameBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// 本机这一侧的改名：文件与相机 sidecar 一起搬、账本跟着搬（祖先与待发标记跟着走）、标签换名、
+    /// 当前这块的话务按新路径重启。
+    /// <para>
+    /// **两条路共用这一份**：改名框提交（人打的字）与同步跟上的改名（同伴发的标记）。一个名字两处
+    /// 真相，正是会漏改的地方——少搬 sidecar 会丢相机，少搬账本会把改名读成"首轮没祖先"并丢内容。
+    /// </para>
+    /// </summary>
+    /// <returns>null＝搬好了；否则是那句"为什么没搬成"，怎么收场归调用方。</returns>
+    /// <param name="publishMarker">
+    /// 只有**改名的那一台**欠仓里一条标记（第 5 条的 ③④）。跟着别人的标记搬过来那一台传 false：
+    /// 仓里那条就是它搬的理由，再补一条同名的进去只会让 `by` 不再等于"谁改的名"。
+    /// </param>
+    private string? ApplyBoardRename(string oldPath, string newPath, bool publishMarker = true)
+    {
+        var current = SameBoard(oldPath, _boardPath ?? string.Empty);
+        var syncWasOn = _sync?.Enabled == true;
+        var item = TabItemFor(oldPath);
+
+        if (current)
+        {
+            FlushCurrentBoard();
+            StopBoardServicesForRename();
+        }
+
+        try
+        {
+            MoveBoardFiles(oldPath, newPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (current)
+            {
+                StartBoardServicesAfterRename();
+            }
+
+            return ex.Message;
+        }
+
+        // 账本跟着搬（契约「改名怎么跨端跟上」第 4 条）：祖先、`publishedSha`、`rev` 带过去，
+        // 两个令牌清掉（它们属于旧路径），并留下 `pendingRename` 让下一轮去补那条标记。
+        var ledgerProblem = SyncLayout.RenameLedger(oldPath, newPath, publishMarker: publishMarker);
+
+        if (ledgerProblem is not null)
+        {
+            Diagnostics.Write($"改名的账本没搬过去：{ledgerProblem}");
+        }
+
+        // 一旦改了名，这块板就是用户的命名板了；关标签时不再清内容。
+        var index = _openBoards.FindIndex(open => SameBoard(open, oldPath));
+
+        if (index >= 0)
+        {
+            _openBoards[index] = newPath;
+        }
+
+        if (current)
+        {
+            _boardPath = newPath;
+
+            // 启动记忆存的是路径：改名以后旧路径就没了，不跟着改，下次开屏会落回首次那一条。
+            RememberLastBoard(newPath);
+        }
+
+        if (item is not null)
+        {
+            item.Tag = newPath;
+            ReleaseRenameSlot(item);
+            item.IsClosable = true;
+        }
+
+        RebuildTabs();
+
+        if (current)
+        {
+            StartBoardServicesAfterRename();
+        }
+
+        Say(syncWasOn
+            ? ledgerProblem is null
+                ? $"改名为 {BoardName(newPath)}｜下一轮同步把改名发到远端，仓里旧名那两份跟着删（同伴那一台会自己搬过来）"
+                : $"改名为 {BoardName(newPath)}｜远端还没跟上：{ledgerProblem}"
+            : $"改名为 {BoardName(newPath)}");
+
+        // 账本没搬成不是"改名失败"：文件已经搬了、本机改名已经成了，只是同步这一轮跟不上——
+        // 那句话已经写进日志与回执，这里不把它升级成回滚（回滚会把一块已经改好的板子搬回旧名）。
+        return null;
+    }
+
+    /// <summary>
+    /// 同步发现这块板在别处被改了名（契约第 4 条"跟的人先搬自己的盘，再走正常一轮"）。
+    /// 两种情况**不搬**，因为都不可逆：本机已经有一块同名板（覆盖它等于删掉一块板），
+    /// 或者你正在改名框里打字（那一发的手归你）。
+    /// </summary>
+    private void FollowRemoteRename(string newStem)
+    {
+        var oldPath = _boardPath;
+
+        if (oldPath is null)
+        {
+            return;
+        }
+
+        if (_renameBusy || _renamingPath is not null)
+        {
+            Say($"远端把这块板改名为 {newStem}｜你正在改名，先不动，下一轮再跟");
+
+            return;
+        }
+
+        var folder = Path.GetDirectoryName(oldPath) ?? ".";
+        var newPath = Path.Combine(folder, newStem + CanvasStore.Extension);
+
+        if (File.Exists(newPath) || SameBoard(newPath, oldPath))
+        {
+            Say($"远端把这块板改名为 {newStem}，但本机已经有同名的一块：没动，两块都还在，你自己挑");
+
+            return;
+        }
+
+        var problem = ApplyBoardRename(oldPath, newPath, publishMarker: false);
+
+        Say(problem is null
+            ? $"这块板在别处被改名为 {newStem}，本机跟着搬好了"
+            : $"远端把这块板改名为 {newStem}，本机没跟上：{problem}");
+
+        // 搬完了按新名字立刻再来一轮：这一发要把本地那份带上新名字发上去，不该等下一次轮询。
+        _sync?.NotifyChanged();
+    }
+
+    /// <summary>
+    /// 同步跟上一个改名的那一发（契约「改名怎么跨端跟上」第 4 条）。这里不碰网络：引擎那半边由核心
+    /// 测试 <c>A_board_the_far_side_renamed_leaves_this_disk_alone</c> 钉；这一发钉的是**动手搬的这半边**，
+    /// 因为它搬的是你的文件。三种情况都要有读数：正常搬（含 sidecar 与标签）、本机已有同名板不搬、
+    /// 你正在改名框里打字不搬。跑在 %TEMP% 的自检副本上。
+    /// </summary>
+    private void SelfTestRemoteRenameFollow(List<string> problems)
+    {
+        if (_boardPath is null)
+        {
+            problems.Add("自检跟随改名：窗口没有当前板子，这一发不适用");
+
+            return;
+        }
+
+        var home = _boardPath;
+        var before = problems.Count;
+        var folder = Path.GetDirectoryName(home)!;
+        var oldPath = Path.Combine(folder, "selftest-rename-from.canvas");
+        var newPath = Path.Combine(folder, "selftest-rename-to.canvas");
+
+        void Clean(params string[] paths)
+        {
+            foreach (var path in paths)
+            {
+                File.Delete(path);
+                File.Delete(CanvasStore.SidecarPath(path));
+            }
+        }
+
+        Clean(oldPath, newPath);
+
+        try
+        {
+            CanvasStore.Write(oldPath, CanvasDocument.CreateNew().ToJson());
+            SwitchToBoard(oldPath);
+
+            _document.Add(CanvasNodeKind.Text, 40, 40, 240, 120, id: "urename1");
+            SaveNow();
+            File.WriteAllText(CanvasStore.SidecarPath(oldPath), "{ \"zoom\": 1.5 }");
+
+            FollowRemoteRename("selftest-rename-to");
+
+            if (File.Exists(oldPath))
+            {
+                problems.Add("跟随改名：旧名那份还在，等于搬成了两份");
+            }
+
+            if (!File.Exists(newPath))
+            {
+                problems.Add("跟随改名：新名那份没出现");
+            }
+            else
+            {
+                if (CanvasDocument.Parse(CanvasStore.ReadAllText(newPath), newPath).Nodes.Count != 1)
+                {
+                    problems.Add("跟随改名：那一格没跟着搬过去");
+                }
+
+                if (!File.Exists(CanvasStore.SidecarPath(newPath)))
+                {
+                    problems.Add("跟随改名：相机 sidecar 没搬，视野会回到默认");
+                }
+
+                if (!SameBoard(_boardPath ?? string.Empty, newPath))
+                {
+                    problems.Add($"跟随改名：当前路径还是 {_boardPath}");
+                }
+
+                if (TabItemFor(newPath) is null || !Title.Contains("selftest-rename-to", StringComparison.Ordinal))
+                {
+                    problems.Add("跟随改名：标签或任务栏那行没换名");
+                }
+            }
+
+            // 本机已经有一块同名板 ⇒ 一个字都不搬（覆盖它是不可逆的）。
+            var clashFrom = Path.Combine(folder, "selftest-clash-a.canvas");
+            var clashTo = Path.Combine(folder, "selftest-clash-b.canvas");
+
+            Clean(clashFrom, clashTo);
+
+            CanvasStore.Write(clashFrom, CanvasDocument.CreateNew().ToJson());
+            SwitchToBoard(clashFrom);
+            _document.Add(CanvasNodeKind.Text, 10, 10, 100, 100, id: "uclash1");
+            SaveNow();
+
+            CanvasStore.Write(clashTo, CanvasDocument.CreateNew().ToJson());
+            SwitchToBoard(clashTo);
+            _document.Add(CanvasNodeKind.Text, 20, 20, 100, 100, id: "uclash2");
+            SaveNow();
+
+            var clashBefore = CanvasStore.ReadAllText(clashTo);
+
+            SwitchToBoard(clashFrom);
+            FollowRemoteRename("selftest-clash-b");
+
+            if (!SameBoard(_boardPath ?? string.Empty, clashFrom) || File.Exists(clashFrom) is false
+                || CanvasStore.ReadAllText(clashTo) != clashBefore)
+            {
+                problems.Add("跟随改名撞上了本机同名板：不该搬，那一发搬了或改动了东西");
+            }
+
+            // 正在改名 ⇒ 不搬（那一发的手归你）。
+            BeginRenameTab(clashFrom);
+
+            FollowRemoteRename("selftest-clash-c");
+
+            if (_renamingPath is null || !SameBoard(_boardPath ?? string.Empty, clashFrom))
+            {
+                problems.Add("正在改名时被跟随改名打断了：那一发该等");
+            }
+
+            CancelRename();
+
+            SwitchToBoard(clashTo);
+            CloseCurrentBoard();
+            SwitchToBoard(clashFrom);
+            CloseCurrentBoard();
+
+            // 搬过去那一块也得关掉再走：留着它，后面几条自检会看到一枚指向已删文件的标签
+            // （"所有便签往返"就是这么炸的）。
+            SwitchToBoard(newPath);
+            CloseCurrentBoard();
+
+            SwitchToBoard(home);
+
+            Diagnostics.Write(problems.Count == before
+                ? "selftest 跟随改名: 搬好了（含 sidecar 与标签）；本机同名板不搬；正在改名不搬"
+                : $"selftest 跟随改名: 这一发有 {problems.Count - before} 条没过（见上面的 FAIL 行）");
+        }
+        finally
+        {
+            Clean(oldPath, newPath, Path.Combine(folder, "selftest-clash-a.canvas"), Path.Combine(folder, "selftest-clash-b.canvas"));
         }
     }
 
@@ -1407,7 +1982,7 @@ public sealed partial class MainWindow
 
         if (item is not null)
         {
-            item.MaxWidth = TabStrip.TabMaxWidth;
+            ReleaseRenameSlot(item);
             item.IsClosable = true;
             SetHeader(item, BoardName(name));
         }
@@ -1487,7 +2062,7 @@ public sealed partial class MainWindow
         StartWatching();
         StartShotServer();
 
-        _sync = new SyncHost(_boardPath, Say, DispatcherQueue);
+        _sync = new SyncHost(_boardPath, Say, DispatcherQueue, FollowRemoteRename);
         _sync.Start();
     }
 
@@ -1688,12 +2263,12 @@ public sealed partial class MainWindow
 
         var passthrough = _tabPassthrough?.GetRegionRects(NonClientRegionKind.Passthrough) ?? [];
         var caption = _tabPassthrough?.GetRegionRects(NonClientRegionKind.Caption) ?? [];
-        var expectedRegions = BoardTabs.TabItems.Count + 4;
+        var expectedRegions = BoardTabs.TabItems.Count + 5;
 
         if (passthrough.Length < expectedRegions)
         {
             problems.Add(
-                $"标题栏交互区只标了 {passthrough.Length} 块，应至少 {expectedRegions} 块（{BoardTabs.TabItems.Count} 枚标签 + 加号 + 3 枚标题按钮）：输入会被非客户区吞掉");
+                $"标题栏交互区只标了 {passthrough.Length} 块，应至少 {expectedRegions} 块（{BoardTabs.TabItems.Count} 枚标签 + 加号 + 设置 + 3 枚标题按钮）：输入会被非客户区吞掉");
         }
 
         if (caption.Length == 0)
@@ -1758,6 +2333,11 @@ public sealed partial class MainWindow
                 $"加号没紧跟最后一枚标签：最后一枚右缘 {lastBox.Right:0.##}，加号左缘 {addBox.Left:0.##}，差 {gap:0.##}");
         }
 
+        if (add.Content is not PathIcon plus || plus.Width != TabStrip.AddGlyphPx || plus.Height != TabStrip.AddGlyphPx)
+        {
+            problems.Add("加号不是那枚 12×12 画出来的十字（字体字符会让笔画与站位失控）");
+        }
+
         var expectedFill = NoteStyling.ToColor(TabStrip.ActiveFill(NoteStyling.IsDark));
         var selectedPath = FindDescendant<Microsoft.UI.Xaml.Shapes.Path>(selected, "SelectedBackgroundPath");
         var selectedFill = (selectedPath?.Fill as SolidColorBrush)?.Color;
@@ -1779,14 +2359,59 @@ public sealed partial class MainWindow
             problems.Add($"关闭键的显示方式读到 {BoardTabs.CloseButtonOverlayMode}，应在悬停/活动时才出现");
         }
 
-        var selectedClose = FindDescendant<Button>(selected, "CloseButton");
-        var inactiveClose = FindDescendant<Button>(inactive, "CloseButton");
+        var nativeClose = FindDescendant<Button>(selected, "CloseButton");
+        var selectedClose = FindDescendant<Button>(selected, "TabCloseButton");
+        var inactiveClose = FindDescendant<Button>(inactive, "TabCloseButton");
         var selectedContainer = FindDescendant<Grid>(selected, "TabContainer");
         var transition = selectedContainer?.BackgroundTransition;
 
-        if (selectedClose is null || selectedClose.Visibility != Visibility.Visible)
+        // 原生关闭键整格归零；× 是表头里的覆盖层，不占布局宽度。
+        if (nativeClose is { ActualWidth: > 0.5 })
         {
-            problems.Add("活动标签上的关闭键没出现");
+            problems.Add($"原生关闭键还占着 {nativeClose.ActualWidth:0.#}px 宽：× 又会撑标签");
+        }
+
+        if (selectedClose is null)
+        {
+            problems.Add("活动标签的表头里没有关闭覆盖层（TabCloseButton）");
+        }
+        else
+        {
+            if (selected.IsClosable && selectedClose.Opacity < 0.99)
+            {
+                problems.Add($"可关的活动标签上 × 没显出来：Opacity {selectedClose.Opacity:0.##}");
+            }
+
+            if (selectedClose.CornerRadius.TopLeft != TabStrip.CloseRadius
+                || selectedClose.Width != TabStrip.CloseHitPx)
+            {
+                problems.Add($"关闭覆盖层读到 {selectedClose.Width:0.#}×{selectedClose.Height:0.#}、圆角 {selectedClose.CornerRadius.TopLeft}，应 {TabStrip.CloseHitPx}×{TabStrip.CloseHitPx} 正圆");
+            }
+
+            if (selectedClose.Content is not FontIcon)
+            {
+                problems.Add("关闭覆盖层的内容不是那枚 × 字形");
+            }
+        }
+
+        // 宽度的回归锁：同一枚标签，× 显示/隐藏只许改 Opacity，ActualWidth 必须一个像素不动。
+        if (inactiveClose is not null)
+        {
+            var hiddenWidth = inactive.ActualWidth;
+            inactiveClose.Opacity = 1;
+            inactiveClose.IsHitTestVisible = true;
+            BoardTabs.UpdateLayout();
+            var shownWidth = inactive.ActualWidth;
+
+            PaintHeader(inactive, hovered: false);
+            BoardTabs.UpdateLayout();
+            var backWidth = inactive.ActualWidth;
+
+            if (Math.Abs(shownWidth - hiddenWidth) > 0.01 || Math.Abs(backWidth - hiddenWidth) > 0.01)
+            {
+                problems.Add(
+                    $"× 显示/隐藏改了标签宽度：{hiddenWidth:0.##} → {shownWidth:0.##} → {backWidth:0.##}（悬停闪烁就是这么来的）");
+            }
         }
 
         if (transition is null)
@@ -1804,11 +2429,9 @@ public sealed partial class MainWindow
 
         SelfTestTabMenus(problems);
 
-        // 非活动那一枚的 × 归平台按 PointerOver 管；自检这一拍没法知道真鼠标在哪一格上，
-        // 所以这里只记读数、不断言它必须 Collapsed。真手验证走 chrome 截图与悬停。
         Diagnostics.Write(
             $"selftest 标签条: 两枚标签、活动填充 {selectedFill?.R}、{selectedFill?.G}、{selectedFill?.B}（板底 {expectedFill.R}、{expectedFill.G}、{expectedFill.B}）、" +
-            $"活动关闭键 {selectedClose?.Visibility}、非活动关闭键 {inactiveClose?.Visibility}（真鼠标若正停在它上面就是 Visible）、" +
+            $"关闭键覆盖层 活动 Opacity {selectedClose?.Opacity:0.##} / 非活动 {inactiveClose?.Opacity:0.##}、宽度不动 {inactive.ActualWidth:0.##}、" +
             $"悬停过渡 {(transition is null ? "没挂" : $"{transition.Duration.TotalMilliseconds:0}ms")}、" +
             $"交互区 {passthrough.Length} 块（应 {expectedRegions}）、Caption {caption.Length} 块、" +
             $"最后一枚右缘 {lastBox.Right:0.##}、加号左缘 {addBox.Left:0.##}、差 {gap:0.##}、" +
@@ -1864,8 +2487,30 @@ public sealed partial class MainWindow
             problems.Add($"加号右键菜单应只有『新板块』：读到 {string.Join(" / ", stripLabels)}");
         }
 
+        // 设置菜单：配对/恢复/筛选 三行 + 一条分隔 + 三枚图标。右键菜单里已经没有它们了，
+        // 所以这条如果断了，那三件就真的没有入口——不是"少一个捷径"。
+        var settings = BuildSettingsMenu();
+        var settingsLabels = settings.Items.OfType<MenuFlyoutItem>().Select(row => row.Text).ToList();
+        var settingsSeparators = settings.Items.OfType<MenuFlyoutSeparator>().Count();
+
+        if (!settingsLabels.Contains("配对手机…") || !settingsLabels.Contains("恢复…") || !settingsLabels.Contains("筛选：日期与标签…"))
+        {
+            problems.Add($"设置菜单缺行：读到 {string.Join(" / ", settingsLabels)}");
+        }
+
+        if (settingsSeparators != 1)
+        {
+            problems.Add($"设置菜单的分隔读到 {settingsSeparators} 条，应 1 条（配对与板面两件之间）");
+        }
+
+        if (settings.Items.OfType<MenuFlyoutItem>().Any(row => row.Icon is null))
+        {
+            problems.Add("设置菜单有行没图标：浏览器图标式是他 10-23 选的");
+        }
+
         Diagnostics.Write(
-            $"selftest 标签菜单: tab [{string.Join(" / ", tabLabels)}]、strip [{string.Join(" / ", stripLabels)}]" +
+            $"selftest 标签菜单: tab [{string.Join(" / ", tabLabels)}]、strip [{string.Join(" / ", stripLabels)}]、" +
+            $"settings [{string.Join(" / ", settingsLabels)}]（图标 {settings.Items.OfType<MenuFlyoutItem>().Count(row => row.Icon is not null)}、分隔 {settingsSeparators}）" +
             $"、打开盘上的板子 {(hasOpenSubmenu || stripHasOpen ? "仍在" : "已撤")}");
     }
 
@@ -1944,8 +2589,65 @@ public sealed partial class MainWindow
             return;
         }
 
+        // 改名途中这一枚的宽度必须钉死（他 10-23 报"文字位置会浮动"：标签先跳一次宽、打字时每敲
+        // 一下再按内容长一次）。三把尺同一个数才算钉住；输入框自己不许再带字面。
+        var renaming = TabItemFor(createdPath);
+
+        if (renaming is null)
+        {
+            problems.Add("改名途中那一枚标签找不回来了");
+        }
+        else
+        {
+            if (double.IsNaN(renaming.Width) || renaming.Width != renaming.MinWidth || renaming.Width != renaming.MaxWidth)
+            {
+                problems.Add($"改名途中宽度没钉住：Width={renaming.Width:0.#} Min={renaming.MinWidth:0.#} Max={renaming.MaxWidth:0.#}");
+            }
+
+            if (_renameBox.MinWidth > 0d)
+            {
+                problems.Add($"输入框自己还带字面 MinWidth={_renameBox.MinWidth:0.#}：它会按内容把标签撑大");
+            }
+
+            // 他 10-23 第二条"双击编辑时还是会往上动一下"：真机量过，写死 Height=26 时框里的字
+            // 比它替掉的标题高 4.6px（模板把字长在 ScrollViewer 顶上，VerticalContentAlignment 管不到）。
+            if (!double.IsNaN(_renameBox.Height) || _renameBox.MinHeight > 0d || _renameBox.VerticalAlignment != VerticalAlignment.Center)
+            {
+                problems.Add($"改名框的高度不是「一行字自己那么高、整枚居中」：Height={_renameBox.Height:0.#} MinHeight={_renameBox.MinHeight:0.#} 对齐={_renameBox.VerticalAlignment}");
+            }
+
+            if (EndRenameOnPress(renaming))
+            {
+                problems.Add("按在自己那一枚标签的空气上也算「点了别处」：字只有一行高，标签比它高");
+            }
+        }
+
+        // "点到别处退出改名"的规则。接线那一发要他的眼睛（L4），这里锁的是判据本身：
+        // 落点在框外＝收，落在框里（含框自己的模板零件）＝不收——字还没打完不许提交。
+        if (!EndRenameOnPress(BoardArea))
+        {
+            problems.Add("按在板子上这一发不结束改名：『点了别处还在编辑』那条没修掉");
+        }
+
+        if (EndRenameOnPress(_renameBox))
+        {
+            problems.Add("按在改名框里也会结束改名：打字途中会被自己提交掉");
+        }
+
+        // 这一行是"这三条判据真的跑了"的凭据，顺便把钉住的数报出来（绿灯本身不说明它量过）。
+        Diagnostics.Write(
+            $"selftest 改名: 钉住 {renaming?.Width ?? double.NaN:0.#}px（名字 {MeasureTabName(BoardName(createdPath)):0.#}px）、" +
+            $"框自己 MinWidth={_renameBox.MinWidth:0.#}、按板子收＝{EndRenameOnPress(BoardArea)}、按框里不收＝{!EndRenameOnPress(_renameBox)}");
+
         _renameBox.Text = targetName;
         TryCommitRename(fromBlur: false);
+
+        var renamed = TabItemFor(targetPath);
+
+        if (renamed is not null && !double.IsNaN(renamed.Width))
+        {
+            problems.Add($"改名结束以后这一枚还钉在 {renamed.Width:0.#}px：ReleaseRenameSlot 没跑");
+        }
 
         if (!File.Exists(targetPath) || File.Exists(createdPath))
         {
@@ -2077,13 +2779,13 @@ public sealed partial class MainWindow
             return;
         }
 
-        if (item.Header is not TextBlock header)
+        if (item.Header is not Grid header || header.Children.OfType<TextBlock>().FirstOrDefault() is not { } headerText)
         {
-            problems.Add("新标签的头不是我们的 TextBlock");
+            problems.Add("新标签的头不是我们的标题格（TextBlock + 关闭覆盖层）");
         }
-        else if (header.Text != expectedName)
+        else if (headerText.Text != expectedName)
         {
-            problems.Add($"新标签在建出来那一刻名字不是 {expectedName}：读到『{header.Text}』");
+            problems.Add($"新标签在建出来那一刻名字不是 {expectedName}：读到『{headerText.Text}』");
         }
 
         if (item.ContentTransitions is not { Count: 0 })

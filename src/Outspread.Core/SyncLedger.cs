@@ -52,6 +52,24 @@ public sealed class SyncState
     /// so this is where this device's own unfinished business waits.
     /// </summary>
     public List<string> PendingDeletions { get; set; } = [];
+
+    /// <summary>
+    /// 这块板在本机改了名、远端还没跟上（契约「改名怎么跨端跟上」第 6 条）：`{from,to}` 一对，
+    /// 发出去之前任何一步没走完就留着，下一轮开头先补完。只在本机——与 <see cref="PendingDeletions"/>
+    /// 同一格理由：仓里的账本要靠"远端还活着"才读得到，而这件事恰恰在远端没跟上时才需要接着做。
+    /// </summary>
+    public string? PendingRenameFrom { get; set; }
+
+    public string? PendingRenameTo { get; set; }
+
+    /// <summary>
+    /// 这条改名的 ④（删掉仓里旧名那两份）的凭据：**改名当时**旧路径的令牌（契约第 5 条）。
+    /// 留着旧令牌而不是删的时候现读一份，是为了"那两份已经不是我们发出去的了"那一格——条件不过
+    /// 就不删。跟改名的人不填它：它既不发标记，也不该去删别人的那份。
+    /// </summary>
+    public string? PendingRenameDocToken { get; set; }
+
+    public string? PendingRenameManifestToken { get; set; }
 }
 
 /// <summary>
@@ -77,8 +95,86 @@ public static class SyncLayout
         "TanKai",
         "sync");
 
-    public static string LedgerFolder(string boardPath)
-        => Path.Combine(Root, Path.GetFileNameWithoutExtension(boardPath).ToLowerInvariant());
+    public static string LedgerFolder(string boardPath, string? root = null)
+        => Path.Combine(root ?? Root, Path.GetFileNameWithoutExtension(boardPath).ToLowerInvariant());
+
+    /// <summary>
+    /// 本机改了名，这块板的账本跟着搬过去（契约「改名怎么跨端跟上」第 4 条——改名的人和跟的人是
+    /// 同一个动作）：文件夹 `<旧名小写>` → `<新名小写>`，`docToken`/`manifestToken` 清掉（那两个令牌
+    /// 属于旧路径，留着会让下一发空转误判"还是我上次写的"），祖先、`publishedSha`、`rev` 原样带过去。
+    /// <para>
+    /// 只有这块板**真的上过仓**（有 `publishedSha`）才留 `pendingRename`：从没发出去的板在仓里没有
+    /// 旧名那份，标记是纯噪音（第 7 条）。新名字的账本目录已经在了 ⇒ 一字不动、把这句话报回去：
+    /// 两块板撞进同一本账，比"这次改名没跟上同步"严重得多。
+    /// </para>
+    /// </summary>
+    /// <param name="publishMarker">
+    /// 只有**改名的那一台**要发标记（第 5 条的 ③④）。跟别人改名的那一台传 false：仓里那条标记就是
+    /// 它跟着搬的理由，再补一条同名的进去只会让 `by` 不再等于"谁改的名"，还每台多花一发请求。
+    /// </param>
+    /// <returns>null＝搬好了（或本来就没得搬）；否则是那句"为什么没搬"。</returns>
+    public static string? RenameLedger(string oldBoardPath, string newBoardPath, string? root = null, bool publishMarker = true)
+    {
+        var from = LedgerFolder(oldBoardPath, root);
+        var to = LedgerFolder(newBoardPath, root);
+        var sameFolder = string.Equals(from, to, StringComparison.OrdinalIgnoreCase);
+
+        if (!sameFolder)
+        {
+            if (!Directory.Exists(from))
+            {
+                return null;
+            }
+
+            if (Directory.Exists(to))
+            {
+                return $"新名字的账本目录已经在了：{to}";
+            }
+
+            try
+            {
+                Directory.Move(from, to);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return ex.Message;
+            }
+        }
+
+        if (!Directory.Exists(to))
+        {
+            return null;
+        }
+
+        var ledger = new SyncLedger(to);
+        var state = ledger.Load();
+
+        // ④ 的凭据要在清掉之前拿：那两个令牌属于旧路径，正是"仓里旧名那两份还是我们那份"的凭据。
+        var oldDocToken = state.DocToken;
+        var oldManifestToken = state.ManifestToken;
+
+        state.DocToken = null;
+        state.ManifestToken = null;
+
+        if (publishMarker && state.PublishedSha is not null)
+        {
+            state.PendingRenameFrom = SyncPaths.BoardStem(oldBoardPath);
+            state.PendingRenameTo = SyncPaths.BoardStem(newBoardPath);
+            state.PendingRenameDocToken = oldDocToken;
+            state.PendingRenameManifestToken = oldManifestToken;
+        }
+        else
+        {
+            state.PendingRenameFrom = null;
+            state.PendingRenameTo = null;
+            state.PendingRenameDocToken = null;
+            state.PendingRenameManifestToken = null;
+        }
+
+        ledger.Save(state);
+
+        return null;
+    }
 
     private static string? migratedOnce;
 
@@ -261,16 +357,24 @@ public sealed class SyncWorkspace
 /// <summary>Where a board lives on the far side. Derived from the file name so several boards can share one folder.</summary>
 public sealed record SyncPaths(string DocPath, string ManifestPath)
 {
-    public static SyncPaths ForBoard(string boardPath)
+    /// <summary>仓里那份板文件的键：板名（文件名去掉 `.canvas`）。改名标记存的就是它。</summary>
+    public static string BoardStem(string boardPath)
     {
         var stem = Path.GetFileNameWithoutExtension(boardPath);
 
-        if (string.IsNullOrEmpty(stem))
-        {
-            stem = "scratch";
-        }
+        return string.IsNullOrEmpty(stem) ? "scratch" : stem;
+    }
 
-        return new SyncPaths($"boards/{stem}.canvas", $"boards/.sync/{stem}.manifest.json");
+    public static string DocPathFor(string stem) => $"boards/{stem}.canvas";
+
+    /// <summary>仓里那份板账本的路径（改名第 ④ 步要连它一起删）。</summary>
+    public static string ManifestPathFor(string stem) => $"boards/.sync/{stem}.manifest.json";
+
+    public static SyncPaths ForBoard(string boardPath)
+    {
+        var stem = BoardStem(boardPath);
+
+        return new SyncPaths(DocPathFor(stem), ManifestPathFor(stem));
     }
 }
 

@@ -42,6 +42,13 @@ public enum SyncOutcome
 
     /// <summary>This device's own board file is not readable. Nothing was sent.</summary>
     LocalUnreadable,
+
+    /// <summary>
+    /// 这块板在别的设备上被改了名：远端旧名那份不在了，改名标记指着一个还在仓里的新名字。
+    /// 本轮**一个字节都没动本地**（这是这条存在的意义：把"改名"和"远端删了"分开），
+    /// 搬本地文件与账本是宿主（界面）的活，它做完会按新名字再来一轮。
+    /// </summary>
+    FollowedRename,
 }
 
 /// <summary>
@@ -64,7 +71,10 @@ public sealed record SyncReport(
     int Rounds,
     IReadOnlyList<MergeVerdict> Verdicts,
     string? ConflictCopy = null,
-    AssetReport? Assets = null)
+    AssetReport? Assets = null,
+
+    /** 只在 <see cref="SyncOutcome.FollowedRename"/> 那一格有值：改名标记指着的新板名。 */
+    string? RenameTo = null)
 {
     /// <summary>
     /// The one line a status bar shows. Readings, not adjectives: "synced" is not a
@@ -86,6 +96,7 @@ public sealed record SyncReport(
             SyncOutcome.RemoteGone => "远端不见了：本地是唯一副本",
             SyncOutcome.RemoteUnreadable => "远端那份读不懂：已停用同步",
             SyncOutcome.LocalUnreadable => "未同步：本地文件不可读",
+            SyncOutcome.FollowedRename => "这块板被改了名，本地未动",
             _ => "同步",
         };
 
@@ -141,7 +152,18 @@ public sealed class SyncEngine
 
         try
         {
-            return await RoundAsync(state, cancel);
+            var report = await RoundAsync(state, cancel);
+
+            // 改名标记是这一轮**发完自己的板之后**才补的那一发（契约第 5 条的 ③）：新名那份没上去
+            // 之前先把标记写进去，同伴会跟到一个仓里还不存在的名字上。发不上去就留着 `pendingRename`
+            // 下一轮再补——本机改名已经成了，不因此回滚（第 6 条）。
+            if (report.Outcome is SyncOutcome.Pushed or SyncOutcome.Pulled or SyncOutcome.NothingToDo
+                && !string.IsNullOrEmpty(state.PendingRenameTo))
+            {
+                await FinishRenameAsync(state, cancel);
+            }
+
+            return report;
         }
         catch (Exception e) when (e is HttpRequestException or IOException or TaskCanceledException)
         {
@@ -232,7 +254,12 @@ public sealed class SyncEngine
         // Both tokens come from the single tree call, so proving nothing moved cost one
         // request and zero file reads. That is what lets the interval be short without
         // spending quota to sit still.
-        if (docToken == state.DocToken && manifestToken == state.ManifestToken && digest == state.PublishedSha)
+        // `docToken == state.DocToken` 在**两边都是 null** 时会成立，而"都是 null"意思是"这个路径下
+        // 根本没有文件"——不是"没人动过"。改名以后新名字那份就是这一格（2026-10-23 真机排练抓到：
+        // 标记发出去了、新名那份一直没上传，同伴跟过去会落在一个不存在的名字上）。所以空转的判据
+        // 多一条：这一台确实往这个路径发过东西。
+        if (docToken == state.DocToken && docToken is not null
+            && manifestToken == state.ManifestToken && digest == state.PublishedSha)
         {
             // Idle is not the same as carried: the board can have been up there since before
             // this asset layer existed, and the picture it points at must still catch up. The
@@ -248,7 +275,8 @@ public sealed class SyncEngine
         }
 
         var ancestor = _ledger.ReadBase(state);
-        var farStillOurs = docToken == state.DocToken && ancestor is not null;
+        // 同一个洞：两个 null 不等于"远端还是我们写的那份"。
+        var farStillOurs = docToken == state.DocToken && docToken is not null && ancestor is not null;
 
         CanvasDocument far;
         SyncManifest? manifest;
@@ -270,6 +298,23 @@ public sealed class SyncEngine
         {
             var read = await ReadFarAsync(state, localDoc, cancel);
 
+            if (read.RenamedTo is not null)
+            {
+                // 契约第 1、2 条要拦的就是这一发：这块板在别的设备上改了名，本地一个字节都不许动。
+                // 没有这条的话，安卓会拿空文档去合并（把整块板清空再推回去），桌面会把它当
+                // "第一次上传"重新发一份。搬文件与账本是宿主的活，它搬完会按新名字再来一轮。
+                Note($"远端把这块板改名为 {read.RenamedTo}：本地未动，等宿主搬完再来一轮");
+
+                return Finish(state, new SyncReport(
+                    SyncOutcome.FollowedRename,
+                    read.RenamedTo,
+                    state.Rev,
+                    pending,
+                    0,
+                    [],
+                    RenameTo: read.RenamedTo));
+            }
+
             if (read.Unreadable)
             {
                 return Finish(state, new SyncReport(
@@ -283,6 +328,15 @@ public sealed class SyncEngine
 
             far = read.Doc;
             manifest = read.Manifest;
+
+            // 远端**这个路径下没有文件**不等于"远端把每一格都删了"：那是"远端对这条路没意见"。
+            // 不补这一句，改名以后的第一发会拿搬过来的祖先去比一份空的远端，每一格都被判成
+            // "另一端删了"，于是把本地清空再推上去（2026-10-23 真机排练抓到，排练乙 1 格 → 0 格）。
+            // 判据退回"首轮没有祖先"那一条：拿远端当基线，本地有的格子就是本地新增。
+            if (read.FarMissing)
+            {
+                ancestor = null;
+            }
             docToken = read.DocToken ?? docToken;
 
             var merge = Merge3.Between(
@@ -659,6 +713,15 @@ public sealed class SyncEngine
         {
             var tree = await _remote.ReadTreeAsync(cancel);
 
+            // 契约第 1 条：只有"我确实跟这块板同步过"才去查改名标记（多发一发读，只在这一格）。
+            // 从没上过仓的板走的是老路——这一份就是第一次上传。
+            var renamed = await FollowRenameAsync(state, tree, cancel);
+
+            if (renamed is not null)
+            {
+                return new FarState(CanvasDocument.CreateNew(), RenamedTo: renamed);
+            }
+
             Note("远端还没有这块板，这一份是第一次上传");
 
             return new FarState(
@@ -667,7 +730,8 @@ public sealed class SyncEngine
                 null,
                 tree?.TokenFor(_paths.ManifestPath),
                 Unreadable: false,
-                Detail: null);
+                Detail: null,
+                FarMissing: true);
         }
 
         CanvasDocument far;
@@ -791,5 +855,179 @@ public sealed class SyncEngine
         SyncManifest? Manifest = null,
         string? ManifestToken = null,
         bool Unreadable = false,
-        string? Detail = null);
+        string? Detail = null,
+
+        /// <summary>远端这个路径下根本没有文件（"没意见"，不是"删光了"）。</summary>
+        bool FarMissing = false,
+
+        /// <summary>改名标记指着的新板名（非空 ⇒ 本轮必须原地停下，见 <see cref="SyncOutcome.FollowedRename"/>）。</summary>
+        string? RenamedTo = null);
+
+    /// <summary>
+    /// 我这块板的远端那份不见了：是被删了，还是被改了名？只有改名标记能分这一格。
+    /// 答 null 的四种情形都退回今天已知的路（把"不见了"当删除）：从没同步过这块板、仓里没有这份
+    /// 日志、读不懂它、链没解出一个**还在仓里**的名字（契约第 2 条）。
+    /// </summary>
+    private async Task<string?> FollowRenameAsync(SyncState state, RemoteTree? tree, CancellationToken cancel)
+    {
+        if (tree is null || (state.PublishedSha is null && state.BaseFile is null))
+        {
+            return null;
+        }
+
+        var marker = await _remote.ReadAsync(RenameLog.RepoPath, cancel);
+
+        if (marker is null)
+        {
+            return null;
+        }
+
+        var log = RenameLog.Parse(Encoding.UTF8.GetString(marker.Content), out var problem);
+
+        if (log is null || problem is not null)
+        {
+            Note($"改名标记读不懂，这一轮按\u201c远端删了\u201d走老路：{problem}");
+
+            return null;
+        }
+
+        var stem = SyncPaths.BoardStem(_boardPath);
+
+        var target = log.Follow(stem, name => tree.TokenFor(SyncPaths.DocPathFor(name)) is not null);
+
+        return target is not null && target != stem ? target : null;
+    }
+
+    /// <summary>
+    /// 一条本机改名的收尾（契约第 5 条的 ③→④）：先把标记追加进仓，再把仓里旧名那两份删掉。
+    /// <para>
+    /// 次序是硬要求：③ 没落定之前不许做 ④，否则同伴看到的是"旧文件没了"而没有标记可查，那一发
+    /// 就成了一次真的删除。两样都落了才清 pending——任何一样没成，下一轮开头再补，而补的时候
+    /// ③ 认得自己那条已经在仓里了（不重写第二份），④ 只删还没删成的那一份。
+    /// </para>
+    /// <para>
+    /// 发不上去**不**改本轮的结论、也不回滚本机改名（第 6 条）：留着 <c>pendingRename</c>、把原因
+    /// 记进账本——与 <c>pendingDeletions</c> 同一形状。读不懂现有那份标记时**不覆盖**：那里面可能
+    /// 有条别人的改名，用我这一条去顶掉它是不可逆的。
+    /// </para>
+    /// </summary>
+    private async Task FinishRenameAsync(SyncState state, CancellationToken cancel)
+    {
+        var from = state.PendingRenameFrom!;
+        var to = state.PendingRenameTo!;
+
+        if (!await MarkerIsInAsync(state, from, to, cancel))
+        {
+            return;
+        }
+
+        if (!await ReapOldNameAsync(state, from, cancel))
+        {
+            return;
+        }
+
+        state.PendingRenameFrom = null;
+        state.PendingRenameTo = null;
+        state.PendingRenameDocToken = null;
+        state.PendingRenameManifestToken = null;
+        state.LastError = null;
+        state.LastErrorKind = null;
+        _ledger.Save(state);
+    }
+
+    /// <summary>第 5 条的 ③：这条改名在仓里了吗？没有就追加一发（条件写，撞一次就重读再试）。</summary>
+    private async Task<bool> MarkerIsInAsync(SyncState state, string from, string to, CancellationToken cancel)
+    {
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var file = await _remote.ReadAsync(RenameLog.RepoPath, cancel);
+            var log = RenameLog.Parse(file is null ? null : Encoding.UTF8.GetString(file.Content), out var problem);
+
+            if (log is null || problem is not null)
+            {
+                state.LastError = $"改名标记读不懂，没往里追加：{problem}";
+                _ledger.Save(state);
+                Note(state.LastError);
+
+                return false;
+            }
+
+            if (log.Has(from, to, state.DeviceId))
+            {
+                // 上一轮发出去了、只是 ④ 没走完：这一发不重写第二份（重写是一个空提交）。
+                Note($"改名标记早在仓里了，只欠删旧名那两份：{from} → {to}");
+
+                return true;
+            }
+
+            log.Append(new RenameEntry(from, to, state.DeviceId, RenameLog.Stamp(DateTimeOffset.UtcNow)));
+
+            var written = await _remote.WriteAsync(RenameLog.RepoPath, RenameLog.ToBytes(log), file?.Token, cancel);
+
+            if (written.Outcome is WriteOutcome.Written)
+            {
+                Note($"改名标记已发到远端：{from} → {to}");
+
+                return true;
+            }
+
+            if (attempt == 1)
+            {
+                // 两轮都挤不进去：留着待发，下一轮再补。这不是"改名失败"，本机已经改完了。
+                state.LastError = $"改名标记这轮没发出去：{written.Detail}";
+                _ledger.Save(state);
+                Note(state.LastError);
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 第 5 条的 ④：删掉仓里旧名那两份，各带**改名当时**的令牌。
+    /// <para>
+    /// 拿旧令牌而不是删的时候现读一份，是为了"那两份已经不是我们发出去的了"那一格：别人在旧名字上
+    /// 又建了一块板，条件不过就不删（<see cref="WriteOutcome.Conflict"/>）。没有凭据的那一路（旧版本
+    /// 留下的 pending、从没写过的 manifest）也按"不删"办——宁多留一份，不删错一份。
+    /// </para>
+    /// </summary>
+    /// <returns>true＝两份都清掉了（或本来就没得清）；false＝还有一份没删成，下一轮再补。</returns>
+    private async Task<bool> ReapOldNameAsync(SyncState state, string from, CancellationToken cancel)
+    {
+        var owed = new List<string>();
+        var done = true;
+
+        foreach (var (path, token) in new[]
+                 {
+                     (SyncPaths.DocPathFor(from), state.PendingRenameDocToken),
+                     (SyncPaths.ManifestPathFor(from), state.PendingRenameManifestToken),
+                 })
+        {
+            if (token is null)
+            {
+                continue;
+            }
+
+            var outcome = await _remote.DeleteAsync(path, token, cancel);
+
+            if (outcome is WriteOutcome.Written or WriteOutcome.Missing)
+            {
+                Note($"仓里旧名那份清了：{path}");
+
+                continue;
+            }
+
+            done = false;
+            owed.Add(path);
+        }
+
+        if (!done)
+        {
+            state.LastError = $"旧名那份没删成：{string.Join("、", owed)}";
+            _ledger.Save(state);
+            Note(state.LastError);
+        }
+
+        return done;
+    }
 }

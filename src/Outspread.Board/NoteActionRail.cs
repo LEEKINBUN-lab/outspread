@@ -684,6 +684,12 @@ public sealed partial class MainWindow
     /// </summary>
     private bool JoinByGrowingFrame(IReadOnlyList<string> draggedIds, string? startGroupId)
     {
+        // 并集下不准"长框罩住"：那会跨文件改某块板的组框。分组只在各子页里做。
+        if (IsAllNotes(_boardPath))
+        {
+            return false;
+        }
+
         var dragged = draggedIds
             .Select(id => NodeOf(id))
             .Where(n => n is not null)
@@ -1043,6 +1049,12 @@ public sealed partial class MainWindow
     /// </summary>
     private void KeepDraggedMemberInFrame(NodeGesture gesture)
     {
+        // 并集下不写任何组框（见 RefitFrames 说明）：sticky 会长/缩组框，跨文件会污染源文件。
+        if (IsAllNotes(_boardPath))
+        {
+            return;
+        }
+
         if (gesture.GroupMode || gesture.StartGroupId is not { } gid || gesture.StartMembers is not { } ids)
         {
             return;

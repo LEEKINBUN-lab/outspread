@@ -280,6 +280,12 @@ public sealed partial class MainWindow : Window
     /// </param>
     private void LoadBoard(string? explicitPath = null)
     {
+        if (IsAllNotes(explicitPath))
+        {
+            LoadAllNotes();
+            return;
+        }
+
         try
         {
             var requested = explicitPath ?? Environment.GetCommandLineArgs()
@@ -317,6 +323,12 @@ public sealed partial class MainWindow : Window
 
             NoteStyling.IsDark = Root.ActualTheme == ElementTheme.Dark;
             StyleTabStripChrome();
+
+            // 固定的「所有便签」永远排第一：只在它还没入列时插到 0，之后它关不掉、也不重插。
+            if (!_openBoards.Contains(AllNotesKey))
+            {
+                _openBoards.Insert(0, AllNotesKey);
+            }
 
             if (!_openBoards.Exists(open => SameBoard(open, _boardPath)))
             {
@@ -380,6 +392,13 @@ public sealed partial class MainWindow : Window
     {
         if (_boardPath is null || _nodeGesture is not null || _resizeGesture is not null)
         {
+            return;
+        }
+
+        // 「所有便签」是投影：存盘＝按归属拆回各真实文件写，父集本身没有文件。
+        if (IsAllNotes(_boardPath))
+        {
+            SaveAllNotes();
             return;
         }
 
@@ -1805,6 +1824,13 @@ public sealed partial class MainWindow : Window
         const double width = 260;
 
         var node = _document.Add(CanvasNodeKind.Text, worldAt.X - (width / 2), worldAt.Y - 20, width, 60);
+
+        // 在「所有便签」里新建＝落进未归档文件：给它打上未归档的命名空间，拆分回写时才归得对。
+        if (IsAllNotes(_boardPath))
+        {
+            node.Id = BoardMerge.MergeId(UnfiledPath, node.Id);
+        }
+
         node.Text = text;
         FitNoteHeight(node);
 
@@ -1815,7 +1841,9 @@ public sealed partial class MainWindow : Window
 
     private CanvasNode CreateImageNote(byte[] bytes, string extension, int naturalWidth, int naturalHeight, Point worldAt)
     {
-        var relative = AssetStore.WriteImage(_boardPath!, bytes, extension, out var reused);
+        // 并集里贴图也归未归档：资源写进未归档那块板旁边的 assets，拆分后路径仍解得开。
+        var boardForAsset = IsAllNotes(_boardPath) ? UnfiledPath : _boardPath!;
+        var relative = AssetStore.WriteImage(boardForAsset, bytes, extension, out var reused);
 
         Diagnostics.Write(reused ? $"image already on disk: {relative}" : $"wrote {relative} ({bytes.Length} bytes)");
 
@@ -1831,6 +1859,12 @@ public sealed partial class MainWindow : Window
         var height = naturalWidth > 0 && naturalHeight > 0 ? naturalHeight * scale : width * 0.6;
 
         var node = _document.Add(CanvasNodeKind.File, worldAt.X - (width / 2), worldAt.Y - (height / 2), width, height);
+
+        if (IsAllNotes(_boardPath))
+        {
+            node.Id = BoardMerge.MergeId(UnfiledPath, node.Id);
+        }
+
         node.FilePath = relative;
 
         Rebuild();

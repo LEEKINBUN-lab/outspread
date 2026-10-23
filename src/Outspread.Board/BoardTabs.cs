@@ -328,7 +328,8 @@ public sealed partial class MainWindow
     private static SolidColorBrush Alpha(Rgb rgb, double alpha)
         => new(NoteStyling.WithAlpha(rgb, alpha));
 
-    private static string BoardName(string boardPath) => Path.GetFileNameWithoutExtension(boardPath);
+    private static string BoardName(string boardPath)
+        => IsAllNotes(boardPath) ? "所有便签" : Path.GetFileNameWithoutExtension(boardPath);
 
     /// <summary>
     /// 标签条就是标题栏，所以它必须给系统那三枚按钮（最小化／最大化／关闭）让出宽度，并把让了多少
@@ -531,7 +532,7 @@ public sealed partial class MainWindow
         var item = new TabViewItem
         {
             Tag = path,
-            IsClosable = true,
+            IsClosable = !IsAllNotes(path), // 「所有便签」固定、关不掉
             CornerRadius = new CornerRadius(TabStrip.TopRadius, TabStrip.TopRadius, 0, 0),
             MinWidth = TabStrip.TabMinWidth,
             MaxWidth = TabStrip.TabMaxWidth,
@@ -853,7 +854,12 @@ public sealed partial class MainWindow
         try
         {
             _view.Prune(_document.Nodes.Select(node => node.Id));
-            _view.Save(CanvasStore.SidecarPath(_boardPath));
+
+            // 哨兵没有自己的文件，别拿它拼一个 sidecar 路径。
+            if (!IsAllNotes(_boardPath))
+            {
+                _view.Save(CanvasStore.SidecarPath(_boardPath));
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -894,7 +900,13 @@ public sealed partial class MainWindow
             return;
         }
 
-        if (_openBoards.Count <= 1)
+        if (IsAllNotes(_boardPath))
+        {
+            Say("『所有便签』是固定的总览页，关不掉");
+            return;
+        }
+
+        if (RealBoardCount <= 1)
         {
             Say("最后一块板不给关：先按 Ctrl+T 起一块，再关它——关掉一块＝从本机删掉这块板");
 
@@ -907,7 +919,7 @@ public sealed partial class MainWindow
         var closingPath = _openBoards[closing];
         var closedName = BoardName(closingPath);
         var syncWasOn = _sync?.Enabled == true;
-        var neighbour = _openBoards[closing > 0 ? closing - 1 : 1];
+        var neighbour = NeighbourBoard(closing);
 
         SwitchToBoard(neighbour);
 
@@ -934,12 +946,18 @@ public sealed partial class MainWindow
 
     private void CloseTab(string path)
     {
+        if (IsAllNotes(path))
+        {
+            Say("『所有便签』是固定的总览页，关不掉");
+            return;
+        }
+
         if (_boardPath is null)
         {
             return;
         }
 
-        if (_openBoards.Count <= 1)
+        if (RealBoardCount <= 1)
         {
             Say("最后一块板不给关：先按 Ctrl+T 起一块，再关它——关掉一块＝从本机删掉这块板");
 
@@ -973,7 +991,7 @@ public sealed partial class MainWindow
 
     private void CloseOtherBoards(string path)
     {
-        if (_openBoards.Count <= 1)
+        if (RealBoardCount <= 1)
         {
             Say("只开着这一块板，没有别的可关");
 
@@ -992,7 +1010,7 @@ public sealed partial class MainWindow
 
         CancelRename();
 
-        var closedPaths = _openBoards.Where(open => !SameBoard(open, path)).ToList();
+        var closedPaths = _openBoards.Where(open => !SameBoard(open, path) && !IsAllNotes(open)).ToList();
         var syncWasOn = _sync?.Enabled == true;
         var deleted = new List<string>();
         var failures = new List<string>();
@@ -1159,6 +1177,12 @@ public sealed partial class MainWindow
     /// </summary>
     private void BeginRenameTab(string path)
     {
+        if (IsAllNotes(path))
+        {
+            Say("『所有便签』是固定的总览页，没有名字可改");
+            return;
+        }
+
         if (_boardPath is null)
         {
             return;
@@ -1536,14 +1560,14 @@ public sealed partial class MainWindow
             problems.Add($"切板没切过去：_boardPath 读到 {_boardPath}");
         }
 
-        if (BoardTabs.TabItems.Count != 2 || _openBoards.Count != 2)
+        if (BoardTabs.TabItems.Count != 3 || _openBoards.Count != 3)
         {
-            problems.Add($"两块板开着时标签条读到 {BoardTabs.TabItems.Count} 枚标签、列表里 {_openBoards.Count} 块");
+            problems.Add($"两块板开着时标签条读到 {BoardTabs.TabItems.Count} 枚标签、列表里 {_openBoards.Count} 块（应为 2 块板 + 固定『所有便签』=3）");
         }
 
-        if (BoardTabs.SelectedIndex != 1)
+        if (BoardTabs.SelectedIndex != 2)
         {
-            problems.Add($"切过去以后选中的不是第二枚标签，读到第 {BoardTabs.SelectedIndex} 枚");
+            problems.Add($"切过去以后选中的不是第二块板那枚标签（哨兵占 0，第二块在 2），读到第 {BoardTabs.SelectedIndex} 枚");
         }
 
         if (!Title.Contains("selftest-second", StringComparison.Ordinal))
@@ -1573,7 +1597,7 @@ public sealed partial class MainWindow
 
         SwitchToBoard(firstPath);
 
-        if (BoardTabs.TabItems.Count != 2 || !SameBoard(_boardPath ?? string.Empty, firstPath))
+        if (BoardTabs.TabItems.Count != 3 || !SameBoard(_boardPath ?? string.Empty, firstPath))
         {
             problems.Add($"切回第一块没切回来：标签 {BoardTabs.TabItems.Count} 枚，_boardPath {_boardPath}");
         }
@@ -1581,10 +1605,10 @@ public sealed partial class MainWindow
         // 关掉非当前那块：文件与 sidecar 必须一起走，当前这块一个字不动。
         CloseTab(secondPath);
 
-        if (BoardTabs.TabItems.Count != 1 || _openBoards.Count != 1
+        if (BoardTabs.TabItems.Count != 2 || _openBoards.Count != 2
             || !SameBoard(_boardPath ?? string.Empty, firstPath))
         {
-            problems.Add($"关掉第二块以后应只剩第一块：标签 {BoardTabs.TabItems.Count} 枚、列表 {_openBoards.Count} 块，_boardPath {_boardPath}");
+            problems.Add($"关掉第二块以后应只剩『所有便签』＋第一块：标签 {BoardTabs.TabItems.Count} 枚、列表 {_openBoards.Count} 块，_boardPath {_boardPath}");
         }
 
         if (File.Exists(secondPath) || File.Exists(CanvasStore.SidecarPath(secondPath)))
@@ -1613,7 +1637,7 @@ public sealed partial class MainWindow
 
         CloseCurrentBoard();
 
-        if (BoardTabs.TabItems.Count != 1 || _openBoards.Count != 1 || !File.Exists(firstPath))
+        if (BoardTabs.TabItems.Count != 2 || _openBoards.Count != 2 || !File.Exists(firstPath))
         {
             problems.Add($"最后一块板被关掉了/文件被删了：标签 {BoardTabs.TabItems.Count} 枚、文件 {File.Exists(firstPath)}");
         }
@@ -1906,9 +1930,9 @@ public sealed partial class MainWindow
             problems.Add($"直建那一发名字不是未命名板：{BoardName(createdPath)}");
         }
 
-        if (_openBoards.Count != 2 || BoardTabs.TabItems.Count != 2)
+        if (_openBoards.Count != 3 || BoardTabs.TabItems.Count != 3)
         {
-            problems.Add($"直建以后标签条读到 {BoardTabs.TabItems.Count} 枚、列表 {_openBoards.Count} 块，应各 2");
+            problems.Add($"直建以后标签条读到 {BoardTabs.TabItems.Count} 枚、列表 {_openBoards.Count} 块，应为『所有便签』＋2 块=3");
         }
 
         BeginRenameTab(createdPath);
@@ -2039,9 +2063,9 @@ public sealed partial class MainWindow
             problems.Add($"未命名板第一发没落到 {expectedName}：_boardPath 读到 {_boardPath}");
         }
 
-        if (BoardTabs.TabItems.Count != 2 || _openBoards.Count != 2)
+        if (BoardTabs.TabItems.Count != 3 || _openBoards.Count != 3)
         {
-            problems.Add($"建出未命名板以后标签 {BoardTabs.TabItems.Count} 枚、列表 {_openBoards.Count} 块，应各 2");
+            problems.Add($"建出未命名板以后标签 {BoardTabs.TabItems.Count} 枚、列表 {_openBoards.Count} 块，应为『所有便签』＋2 块=3");
         }
 
         var item = TabItemFor(expectedPath);
@@ -2080,7 +2104,7 @@ public sealed partial class MainWindow
 
         CloseCurrentBoard();
 
-        if (BoardTabs.TabItems.Count != 1 || _openBoards.Count != 1
+        if (BoardTabs.TabItems.Count != 2 || _openBoards.Count != 2
             || !SameBoard(_boardPath ?? string.Empty, firstPath))
         {
             problems.Add(

@@ -26,6 +26,30 @@ public sealed partial class MainWindow
 
     private static bool IsAllNotes(string? path) => path == AllNotesKey;
 
+    /// <summary>真实板子的数量（哨兵不算）——"最后一块不给关"按这个数。</summary>
+    private int RealBoardCount => _openBoards.Count(open => !IsAllNotes(open));
+
+    /// <summary>关掉 closing 这一枚后回到哪块：最近的、且不是哨兵的一块真实板。</summary>
+    private string NeighbourBoard(int closing)
+    {
+        for (var distance = 1; distance < _openBoards.Count; distance++)
+        {
+            var down = closing - distance;
+            if (down >= 0 && !IsAllNotes(_openBoards[down]))
+            {
+                return _openBoards[down];
+            }
+
+            var up = closing + distance;
+            if (up < _openBoards.Count && !IsAllNotes(_openBoards[up]))
+            {
+                return _openBoards[up];
+            }
+        }
+
+        return _openBoards[closing];
+    }
+
     /// <summary>父集里"不属于任何子页"的格子落在这块真实文件里（它自己也能同步）。</summary>
     private string UnfiledPath
     {
@@ -63,6 +87,12 @@ public sealed partial class MainWindow
     /// <summary>选中「所有便签」那一拍：把各子文件 + 未归档并成一张内存文档。不装 watch、不起 sync。</summary>
     private void LoadAllNotes()
     {
+        // 父集没有自己的文件：停掉上一块板的文件监视与同步，也不给哨兵建它们。
+        _watcher?.Dispose();
+        _watcher = null;
+        _sync?.Stop();
+        _sync = null;
+
         EnsureUnfiled();
 
         var boards = new List<(string OwnerKey, CanvasDocument Doc)>();

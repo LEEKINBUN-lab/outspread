@@ -248,9 +248,12 @@ public sealed partial class MainWindow
         Undo();
 
         // 落进组框里的那一点，FreeOfGroups 必须把它推到框外——新建不该被组接住、组框不该因此长、
-        // 名牌不该跳。取板上第一枚组的中心当"框内一点"来量。
-        if (GroupRects().FirstOrDefault() is { } probe)
+        // 名牌不该跳。取板上第一枚组的中心当"框内一点"来量（板上没有组就跳过，别拿 default(0,0,0,0) 当框）。
+        var probeFrames = GroupRects();
+
+        if (probeFrames.Count > 0)
         {
+            var probe = probeFrames[0];
             var inside = new Windows.Foundation.Point(probe.CenterX, probe.CenterY);
             var pushed = FreeOfGroups(inside);
 
@@ -317,6 +320,14 @@ public sealed partial class MainWindow
     /// </summary>
     private void RefitFrames()
     {
+        // 「所有便签」是跨文件并集：组框写入若跑起来，会把 B 板格子坐标写进 A 板组框（几何成员跨文件），
+        // 存盘就污染 A。并集下不重派生任何组框——分组只在各子页里做。
+        if (IsAllNotes(_boardPath))
+        {
+            _derivedFramesAtBegin = null;
+            return;
+        }
+
         if (_derivedFramesAtBegin is null)
         {
             return;

@@ -1,0 +1,148 @@
+<!doctype html>
+<!--
+  操作条那三枚圆钮的图标集比稿（组 / 换色 / 删）。10-24 他判现在那枚红垃圾桶"有些丑，可能需要重新设计图标集"。
+
+  这一页只做一件事：把三档流派摆在他眼前，同一枚皮、同一档尺寸、同一套色，
+  让他指一格，而不是读一段描述。选中之后的 1:1 搬法写在每档的"落到实物"那一行。
+
+  尺寸不是随手写的：30 = 圆钮本体（Core/Chrome.cs 的 Badge），命中 24 是 WCAG 2.5.8 那扇门，
+  16 = 万一要缩到标签条那一档。三档都画，是因为图标最容易在缩小时塌。
+-->
+<meta charset="utf-8">
+<title>操作条图标集比稿</title>
+<style>
+  :root {
+    --board: 249,250,251;
+    --panel: 251,252,253;
+    --ink: 27,27,27;
+    --muted: 96,96,96;
+    --line: 224,224,226;
+    --danger: 196,43,28;
+    --accent: 49,130,237;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px 32px 48px;
+    background: rgb(var(--board));
+    color: rgb(var(--ink));
+    font: 13px/1.55 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  .lede { color: rgb(var(--muted)); margin: 0 0 22px; max-width: 76ch; }
+  h2 { font-size: 14px; margin: 26px 0 2px; }
+  .src { color: rgb(var(--muted)); font-size: 12px; margin: 0 0 12px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .rail { display: flex; flex-direction: column; gap: 2px; }
+  button {
+    width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%;
+    background: transparent; color: rgb(var(--ink)); cursor: default;
+    display: grid; place-items: center;
+  }
+  button:hover { background: rgba(var(--ink), .07); }
+  button.danger { color: rgb(var(--danger)); }
+  .card {
+    background: rgb(var(--panel)); border: 1px solid rgb(var(--line));
+    border-radius: 8px; padding: 14px 16px; margin-bottom: 10px;
+  }
+  .sizes { display: flex; gap: 18px; align-items: flex-end; margin-top: 10px; }
+  .sizes figure { margin: 0; text-align: center; }
+  .sizes figcaption { color: rgb(var(--muted)); font-size: 11px; margin-top: 4px; }
+  .note { color: rgb(var(--muted)); font-size: 12px; margin: 10px 0 0; max-width: 74ch; }
+  .glyph { font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets"; font-size: 15px; line-height: 1; }
+  svg { display: block; }
+</style>
+
+<h1>操作条图标集比稿 · 四档</h1>
+<p class="lede">
+  现在实物用的是 A 档（系统字形），他判"丑"的是那枚垃圾桶。四档用同一枚圆钮、同一套色、
+  同一组尺寸摆出来；每档下面写清来源、维护成本，以及选中后 1:1 搬到实物要动哪几行。
+</p>
+
+<h2>A · 系统原生字形（实物现在这档）</h2>
+<p class="src">
+  来源：Windows 自带 <span class="glyph"></span> Segoe Fluent Icons / Segoe MDL2 Assets 码位表
+  （这里摆的是 People E716 / Color E790 / Delete E74D 三枚，码位以本机字表为准）。<b>零文件、零授权、零维护</b>；
+  代价是笔画与站位不受我们控制，且**换主题/换系统版本时字表会变**——他 10-23 判加号那枚
+  "全角＋字形不受控"就是同一件事。
+</p>
+<div class="card">
+  <div class="row">
+    <div class="rail">
+      <button title="组"><span class="glyph">&#xE716;</span></button>
+      <button title="换色"><span class="glyph">&#xE790;</span></button>
+      <button class="danger" title="删"><span class="glyph">&#xE74D;</span></button>
+    </div>
+    <p class="note">
+      换色那枚（E790）与组那枚（E716）在同一字表里笔画粗细不一致——这正是"三枚看起来不像一组"的成因。
+      要留在这一档，能做的只有<b>换码位</b>，改不了笔画。
+    </p>
+  </div>
+</div>
+
+<h2>B · 细线自绘（Lucide / Tabler 那一派）</h2>
+<p class="src">
+  来源：24×24 网格、1.5 描边、圆头线帽——与 <span class="glyph"></span> Lucide（ISC）/ Tabler Icons
+  （MIT）同一套规矩；下面这三枚是<b>我们在仓里自绘</b>的 SVG path（不引第三方包，不引运行时）。
+  维护成本＝三个 path 字符串；好处是三枚同一网格、同一粗细，缩放不塌。
+</p>
+<div class="card">
+  <div class="row">
+    <div class="rail">
+      <button title="组"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/><path d="M13 7h6a2 2 0 0 1 2 2v2"/></svg></button>
+      <button title="换色"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18h1.5a2 2 0 0 0 1.5-3.3 2 2 0 0 1 1.5-3.3H19a3 3 0 0 0 3-3A9 9 0 0 0 12 3Z"/><circle cx="8" cy="10" r="1.1" fill="currentColor" stroke="none"/><circle cx="12" cy="7.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="16" cy="10" r="1.1" fill="currentColor" stroke="none"/></svg></button>
+      <button class="danger" title="删"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M10 11v6M14 11v6"/></svg></button>
+    </div>
+    <div class="sizes">
+      <figure><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M10 11v6M14 11v6"/></svg><figcaption>24</figcaption></figure>
+      <figure><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M10 11v6M14 11v6"/></svg><figcaption>16</figcaption></figure>
+      <figure><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="background:rgb(196,43,28);border-radius:50%;padding:3px"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M10 11v6M14 11v6"/></svg><figcaption>反白</figcaption></figure>
+    </div>
+  </div>
+  <p class="note">
+    落到实物：WinUI 里没有 SVG 运行时，这一档要用 <b>PathGeometry（XAML Path 的 Data 串）</b>画——
+    和加号那枚"画出来的两根圆头细条"同一条路（他 10-23 选过的写法）。三枚各一段 path，
+    粗细/端点写死在令牌里，深浅两档共用。
+  </p>
+</div>
+
+<h2>C · 实心剪影（Fluent 填充派 / Material Symbols Rounded 那一派）</h2>
+<p class="src">
+  来源：同一网格但填色，视觉更"重"。好处是在淡底圆钮上更容易被看见；代价是三枚挤在一列时
+  显得闷，而且"删"填成实心红块会盖过它只是<b>可撤销</b>这件事的分量。
+</p>
+<div class="card">
+  <div class="row">
+    <div class="rail">
+      <button title="组"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="9" height="9" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/><path d="M14 6h6a2 2 0 0 1 2 2v6h-6a2 2 0 0 1-2-2z" opacity=".45"/></svg></button>
+      <button title="换色"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20h1.6a2 2 0 0 0 1.5-3.3 2 2 0 0 1 1.5-3.3H20a2.4 2.4 0 0 0 2.4-2.4A10 10 0 0 0 12 2Z"/><circle cx="8" cy="10" r="1.4" fill="#fff"/><circle cx="12" cy="7.2" r="1.4" fill="#fff"/><circle cx="16" cy="10" r="1.4" fill="#fff"/></svg></button>
+      <button class="danger" title="删"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9.5 3h5a1.5 1.5 0 0 1 1.5 1.5V6H8V4.5A1.5 1.5 0 0 1 9.5 3Z"/><path d="M4 6h16v1.5H4z"/><path d="M6 8.5h12l-.9 11A2.5 2.5 0 0 1 14.6 22H9.4a2.5 2.5 0 0 1-2.5-2.3z"/></svg></button>
+    </div>
+    <p class="note">
+      落到实物：与 B 同一画法（PathGeometry），只是 fill 不 stroke。若选这档，建议<b>"删"不填红</b>——
+      保留细线红，只把组/色两枚填实，避免三枚一起变重。
+    </p>
+  </div>
+</div>
+
+<h2>D · 干脆不用图标（文字胶囊）</h2>
+<p class="src">
+  来源：把三枚圆钮换成一行小字（组 · 色 · 删）。判据是"图标认不出来时，字一定认得"——
+  他 10-12 判漏斗按钮"看不懂是什么"删掉它，是同一条路。<b>代价</b>：操作条变宽、鼠标热点少一层直觉。
+</p>
+<div class="card">
+  <div class="row">
+    <div class="rail" style="gap:4px">
+      <span style="border:1px solid rgb(var(--line));border-radius:999px;padding:2px 9px;background:#fff">组</span>
+      <span style="border:1px solid rgb(var(--line));border-radius:999px;padding:2px 9px;background:#fff">色</span>
+      <span style="border:1px solid rgba(var(--danger),.4);border-radius:999px;padding:2px 9px;color:rgb(var(--danger));background:#fff">删</span>
+    </div>
+    <p class="note">这一档不需要图标集，也就不需要维护；但它改的是操作条的形态，不只是图标。</p>
+  </div>
+</div>
+
+<p class="note" style="margin-top:22px">
+  <b>我的推荐：B（细线自绘）。</b>理由三条：① 三枚同一网格同一粗细，"不像一组"这一格从根上没了；
+  ② 笔画不受字表版本影响（A 的那条风险是系统升级就变样）；③ 与加号那枚同一条画法，仓里已有先例，
+  不新增运行时。判据：缩到 16 还认得出各是谁——这一页只把"删"那一枚摆到 16 量过，另两枚要选这档时同法补一发再搬。
+  若他要的是"少写代码"，那就选 A 并只换垃圾桶那枚的码位——那是 5 分钟的改法，但改不了笔画不一致。
+</p>

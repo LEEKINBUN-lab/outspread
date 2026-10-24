@@ -437,6 +437,14 @@ public sealed partial class MainWindow : Window
                 }
             }
 
+            // 教程板只要文件还在，就保证有一枚标签：它被"关掉＝删除"拿走过一次之后，
+            // 记忆里已经没有它了；文件恢复/同步回来时不开这一步就永远回不到标签条上。
+            if (!App.SelfTest && BoardLocator.FindQuickStart(AppContext.BaseDirectory) is { } quickStart
+                && !_openBoards.Exists(open => SameBoard(open, quickStart)))
+            {
+                _openBoards.Add(quickStart);
+            }
+
             if (!_openBoards.Exists(open => SameBoard(open, _boardPath)))
             {
                 _openBoards.Add(_boardPath);
@@ -3219,7 +3227,8 @@ public sealed partial class MainWindow : Window
     private static bool SectionApplies(string section, MenuWhere where) => section switch
     {
         "排布" => where is MenuWhere.ManyNotes or MenuWhere.Group,
-        "板子" or "换板子" => false,
+        "板子" => where is MenuWhere.Empty,
+        "换板子" => false,
         _ => true,
     };
 
@@ -3227,7 +3236,9 @@ public sealed partial class MainWindow : Window
     /// verbs need two cards. On empty board only the whole-board and view commands survive.</summary>
     private static bool CommandApplies(Command command, MenuWhere where) => where switch
     {
-        MenuWhere.Empty => command.Section is "排列" or "板子",
+        // 空板上只剩"能对整块板做、又不要求选中"的两件：粘贴、恢复。
+        // （新建与排列分别去了双击和圆钮，10-25 他点名的；菜单不许因此变成一张空白纸。）
+        MenuWhere.Empty => command.Section == "板子" && command.Label is "粘贴剪贴板" or "恢复…",
         MenuWhere.OneNote => command.Label is not ("成组" or "拆组"),
         _ => true,
     };
@@ -3306,6 +3317,21 @@ public sealed partial class MainWindow : Window
             .Concat(Texts(BuildBoardMenu(MenuWhere.Group)))
             .Concat(Texts(BuildBoardMenu(MenuWhere.Empty)))
             .ToList();
+
+        foreach (var where in Enum.GetValues<MenuWhere>())
+        {
+            if (BuildBoardMenu(where).Items.Count == 0)
+            {
+                problems.Add($"右键菜单在 {where} 这一档是空的——右键弹出来一张空白纸");
+            }
+        }
+
+        var emptyMenu = Texts(BuildBoardMenu(MenuWhere.Empty));
+
+        if (!emptyMenu.Contains("粘贴剪贴板") || !emptyMenu.Contains("恢复…"))
+        {
+            problems.Add($"空板右键菜单应至少留着粘贴与恢复，读到 {string.Join(" / ", emptyMenu)}");
+        }
         string[] gone = ["叠放", "提到最前", "压到最后", "上移一格", "下移一格", "左移一格", "右移一格", "从边缘拉一根线", "回到 100%", "在这里新建一格", "按颜色排列", "按标签排列"];
         var leaked = gone.Where(all.Contains).Distinct().ToList();
 

@@ -266,9 +266,10 @@ public sealed partial class MainWindow
                 }
             }
 
-            if (ordered.Count < 2)
+            // 只开着一块板时量不出"分带"，那是不适用，不是红；两块以上才必须每条带各占一段。
+            if (ordered.Count < 2 && _openBoards.Count(open => !IsAllNotes(open)) >= 2)
             {
-                problems.Add($"所有便签: 只读到 {ordered.Count} 块板的区域，这一发量不出分带");
+                problems.Add($"所有便签: 开着 {_openBoards.Count(open => !IsAllNotes(open))} 块板，却只读到 {ordered.Count} 块板的区域");
             }
 
             // 写回要减掉带偏移：把并集里的一格挪 (+7,+9)，源文件里的坐标也只该动 (+7,+9)。

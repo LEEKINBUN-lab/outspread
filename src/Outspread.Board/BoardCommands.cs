@@ -75,7 +75,7 @@ public sealed partial class MainWindow
         new("纵向均分", "Alt+K", "排布", () => Arrange("纵向均分", items => Aligning.Distribute(items, horizontal: false))),
         new("堆叠", "Alt+L", "排布", () => Arrange("堆叠", Aligning.Stack)),
         new("按颜色排列", "Alt+Y", "排列", () => ArrangeByKey("按颜色排列", node => node.Color ?? "无颜色"), Menu: false),
-        new("按标签排列", "Alt+T", "排列", () => ArrangeByKey("按标签排列", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签"), Menu: false),
+        new("按标签排列", "Alt+T", "排列", () => ArrangeByKey("按标签排列", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签", "#无标签"), Menu: false),
         new("成组", "Ctrl+G", "组织", GroupOrDissolve),
         new("拆组", string.Empty, "组织", UngroupSelection, Sheet: false),
         new("复制", "Ctrl+D", "组织", DuplicateSelection),
@@ -417,22 +417,22 @@ public sealed partial class MainWindow
     /// 排列的入口：选中了至少两格就只排选中的那些（就近找空地），没选中就是整块板
     /// （10-25 他："只选中一部分标签，然后点击排列"）。
     /// </summary>
-    private void ArrangeByKey(string label, Func<CanvasNode, string> keyOf)
+    private void ArrangeByKey(string label, Func<CanvasNode, string> keyOf, string? lastKey = null)
     {
         var selected = SelectedNotes();
 
         if (selected.Count >= 2)
         {
-            ArrangeNotes(label, selected, keyOf);
+            ArrangeNotes(label, selected, keyOf, lastKey);
 
             return;
         }
 
-        ArrangeWholeBoard(label, keyOf);
+        ArrangeWholeBoard(label, keyOf, lastKey);
     }
 
     /// <summary>只排选中的这些格子：排成块后就近找一块不压人的空地落下去。</summary>
-    private void ArrangeNotes(string label, IReadOnlyList<CanvasNode> notes, Func<CanvasNode, string> keyOf)
+    private void ArrangeNotes(string label, IReadOnlyList<CanvasNode> notes, Func<CanvasNode, string> keyOf, string? lastKey)
     {
         var items = notes.Select(PlacedOf).ToList();
         var keys = notes.Select(keyOf).ToList();
@@ -444,7 +444,7 @@ public sealed partial class MainWindow
             .Select(edge => (edge.FromNode, edge.ToNode))
             .ToList();
 
-        var outcome = Aligning.Arrange(items, keys, priorities, links);
+        var outcome = Aligning.Arrange(items, keys, priorities, links, lastKey);
 
         if (!outcome.Ok)
         {
@@ -521,7 +521,7 @@ public sealed partial class MainWindow
     }
 
     /// <summary>整块板：组算一件、颜色/标签分块、矩阵与小间距都在 Core 里。</summary>
-    private void ArrangeWholeBoard(string label, Func<CanvasNode, string> keyOf)
+    private void ArrangeWholeBoard(string label, Func<CanvasNode, string> keyOf, string? lastKey)
     {
         var units = Groups().UnitsOf();
 
@@ -560,7 +560,7 @@ public sealed partial class MainWindow
             .Select(pair => (pair.From!, pair.To!))
             .ToList();
 
-        ApplyUnitMoves(label, units, Aligning.Arrange([.. units.Select(PlacedOf)], keys, priorities, links));
+        ApplyUnitMoves(label, units, Aligning.Arrange([.. units.Select(PlacedOf)], keys, priorities, links, lastKey));
     }
 
     /// <summary>"无日期"那一档的下标；排列的优先级越小越靠前。</summary>
@@ -763,7 +763,7 @@ public sealed partial class MainWindow
             problems.Add("自检排列选中: 圆钮的菜单不是「按颜色 / 按标签」两行");
         }
 
-        ArrangeByKey("按标签排列", note => Tags.Of(note.Text).FirstOrDefault() ?? "#无标签");
+        ArrangeByKey("按标签排列", note => Tags.Of(note.Text).FirstOrDefault() ?? "#无标签", "#无标签");
 
         foreach (var (id, (x, y)) in untouched)
         {

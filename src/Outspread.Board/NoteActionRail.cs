@@ -90,14 +90,15 @@ public sealed partial class MainWindow
         // 排列钮只在选中多枚时插进来；先同步，外壳高度与落位都跟着这一发的钮数走。
         SyncRailArrange(SelectedNotes().Count >= 2);
 
-        var shellHeight = RailShellHeight(RailButtons().Length);
+        var cellCount = RailButtons().Length;
+        var shellHeight = RailShellHeight(cellCount);
         var screenLeft = _view.ToScreenX(box.X);
         var flip = screenLeft < 60;
-        // 外壳比圆盘宽 2×晕影、上沿还多留了下压那一截：落位把这层内缩抵消掉，
-        // 圆盘仍贴在原来那条 12 像素的缝上、第一枚的顶边仍是离包围盒中心 64。
+        // 外壳比圆盘宽 2×晕影：落位把这层内缩抵消掉，圆盘仍贴在原来那条 12 像素的缝上。
         var x = (flip ? _view.ToScreenX(box.Right) + 12 : screenLeft - 50) - ControlKit.VignetteSpreadPx;
+        // 圆盘列的中心对准选区的中心（不是固定往下 64）：四枚时原来会整体偏低 27px。
         var y = Math.Clamp(
-            _view.ToScreenY(box.Y + box.Height / 2) - 64 - RailTopInsetPx,
+            _view.ToScreenY(box.Y + (box.Height / 2)) - RailTopInsetPx - (RailColumnHeight(cellCount) / 2),
             8,
             Math.Max(8, BoardArea.ActualHeight - shellHeight - 8));
 
@@ -259,8 +260,11 @@ public sealed partial class MainWindow
     /// <summary>外壳：晕影那一圈在左右各扩 10；高度按此刻的钮数算（上下各扩 10）。</summary>
     private const double RailShellWidthPx = RailButtonPx + (2 * ControlKit.VignetteSpreadPx);
 
+    private static double RailColumnHeight(int cells)
+        => (cells * RailButtonPx) + (Math.Max(0, cells - 1) * RailGapPx);
+
     private static double RailShellHeight(int cells)
-        => (cells * RailButtonPx) + (Math.Max(0, cells - 1) * RailGapPx) + (2 * ControlKit.VignetteSpreadPx);
+        => RailColumnHeight(cells) + (2 * ControlKit.VignetteSpreadPx);
 
     /// <summary>圆盘列在外壳里的顶边：上面留 10 给影，下压 2 由外壳底边多出的那截补。</summary>
     private const double RailTopInsetPx = ControlKit.VignetteSpreadPx - ControlKit.VignetteDropPx;
@@ -749,6 +753,31 @@ public sealed partial class MainWindow
         if (buttons.Length != 4 || buttons.All(button => button.Name != "NoteRailArrange"))
         {
             problems.Add($"自检状态层: 选中 2 格时操作条应 4 枚、且含排列钮，读到 {buttons.Length} 枚");
+        }
+
+        // 圆盘列的中心要落在选区中心上（四枚时原来会低 27px）。
+        _rail.UpdateLayout();
+
+        if (SelectionBox() is { } chosen && buttons.Length > 0)
+        {
+            var top = double.MaxValue;
+            var bottom = double.MinValue;
+
+            foreach (var button in buttons)
+            {
+                var box = button.TransformToVisual(BoardArea)
+                    .TransformBounds(new Rect(0, 0, button.ActualWidth, button.ActualHeight));
+                top = Math.Min(top, box.Top);
+                bottom = Math.Max(bottom, box.Bottom);
+            }
+
+            var wanted = _view.ToScreenY(chosen.Y + (chosen.Height / 2));
+            var got = (top + bottom) / 2;
+
+            if (Math.Abs(got - wanted) > 1.5)
+            {
+                problems.Add($"自检状态层: {buttons.Length} 枚钮的竖向中心 {got:0.#} 没对准选区中心 {wanted:0.#}（差 {got - wanted:0.#}）");
+            }
         }
 
         // 每一枚都必须恒为可见：入场不再逐枚淡入（见 AnimateRailIn 那段说明），
@@ -1559,7 +1588,7 @@ public sealed partial class MainWindow
         menu.Items.Add(byColor);
 
         var byTag = new MenuFlyoutItem { Text = "按标签排列" };
-        byTag.Click += (_, _) => ArrangeByKey("按标签排列", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签");
+        byTag.Click += (_, _) => ArrangeByKey("按标签排列", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签", "#无标签");
         menu.Items.Add(byTag);
 
         return menu;

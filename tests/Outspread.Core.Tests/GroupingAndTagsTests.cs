@@ -430,4 +430,36 @@ public class GroupingAndTagsTests
             || spot.Y >= 210 + 10,
             $"放到 ({spot.X},{spot.Y})，整块还在障碍里");
     }
+
+    [Fact]
+    public void Arrange_can_put_one_bucket_last_so_untagged_notes_read_below_the_tagged_ones()
+    {
+        // 无标签那档即使最大、也连得最多，设了 lastKey 就必须垫底。
+        var items = new[]
+        {
+            new Aligning.Placed("a", 0, 0, 100, 60),
+            new Aligning.Placed("b", 0, 0, 100, 60),
+            new Aligning.Placed("c", 0, 0, 100, 60),
+            new Aligning.Placed("d", 0, 0, 100, 60),
+            new Aligning.Placed("e", 0, 0, 100, 60),
+        };
+
+        var outcome = Aligning.Arrange(
+            items,
+            ["#无标签", "#无标签", "#无标签", "#周会", "#周会"],
+            [4, 4, 4, 4, 4],
+            [("a", "d")],
+            lastKey: "#无标签");
+
+        var moves = outcome.Moves.ToDictionary(move => move.Id, move => move.Y);
+        var taggedBottom = Math.Max(moves["d"], moves["e"]);
+
+        Assert.All(new[] { "a", "b", "c" }, id => Assert.True(moves[id] > taggedBottom, $"{id} 应排在带标签的两格下面"));
+    }
+
+    [Fact]
+    public void Arrange_bucket_gap_is_visibly_larger_than_the_inside_gap()
+    {
+        Assert.True(Aligning.BucketGapPx >= 3 * Aligning.MinGapPx, "块间距至少是块内的三倍，才看得出分组");
+    }
 }

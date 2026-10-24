@@ -132,6 +132,7 @@ public static class Aligning
     /// <param name="keys">每件东西的归类键；空字符串也算一个键（“无标签”是一种标签）。</param>
     /// <param name="priorities">每件东西的到期优先级，越小越靠前。</param>
     /// <param name="links">东西之间的连线（A→B 与 B→A 等价）。</param>
+    /// <param name="lastKey">哪一档排到最后（按标签排时把“无标签”放底部，读起来才顺）。</param>
     /// <remarks>
     /// 矩阵的列数取 ⌈√n⌉：5 格排成 3+2，而不是一条 5 格的长行。列宽/行高逐列逐行取最大，
     /// 所以块内既不重叠也不留出大洞。块从 (40, 40) 起、自上而下叠，块间距 <see cref="BucketGapPx"/>。
@@ -140,7 +141,8 @@ public static class Aligning
         IReadOnlyList<Placed> items,
         IReadOnlyList<string> keys,
         IReadOnlyList<int> priorities,
-        IReadOnlyList<(string A, string B)> links)
+        IReadOnlyList<(string A, string B)> links,
+        string? lastKey = null)
     {
         if (items.Count < 2 || keys.Count != items.Count || priorities.Count != items.Count)
         {
@@ -295,6 +297,23 @@ public static class Aligning
             }
         }
 
+        // 有标签的在上、没标签的垫底（10-25 他：这样才像人读的顺序）。
+        if (lastKey is not null)
+        {
+            var tail = buckets.FindIndex(bucket => bucket.Key == lastKey);
+
+            if (tail >= 0)
+            {
+                var bucket = order.IndexOf(tail);
+
+                if (bucket >= 0)
+                {
+                    order.RemoveAt(bucket);
+                    order.Add(tail);
+                }
+            }
+        }
+
         const double origin = 40;
         var moves = new List<Move>(items.Count);
         var blockTop = origin;
@@ -407,7 +426,7 @@ public static class Aligning
     }
 
     /// <summary>不同颜色 / 不同标签之间留的空：比块内的 <see cref="MinGapPx"/> 宽一倍半以上，才看得出分组。</summary>
-    public const double BucketGapPx = 64;
+    public const double BucketGapPx = 96;
 
     public static Box Bounds(IReadOnlyList<Placed> items)
     {

@@ -1122,6 +1122,19 @@ public sealed partial class MainWindow : Window
 
         // 正在写那一格时，滚轮不再是"缩放整块板子"：那一发要把正在编辑的内容滚进视野
         // （他 10-24 点的）。一格走多少屏幕像素是手感，所以这个数留在界面，几何在 Core。
+        RouteWheel(point.Position, delta);
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// 滚轮那一发的落点：编辑中＝滚这一格，其余＝缩放整块板子。
+    /// </summary>
+    /// <remarks>
+    /// 事件那一层只负责"拿到 delta ＋ 交出去"，判据全在这里——界面自检走的也是这一句，
+    /// 所以"编辑中不许缩放"这条接线被摘掉时红的是自检，不是一句注释。
+    /// </remarks>
+    private void RouteWheel(Point position, int delta)
+    {
         if (_editingId is not null)
         {
             if (!ScrollEditorIntoView(delta))
@@ -1129,13 +1142,10 @@ public sealed partial class MainWindow : Window
                 Say("这一格已经全部看得见：编辑中滚轮不缩放整块板子");
             }
 
-            e.Handled = true;
-
             return;
         }
 
-        ApplyWheel(point.Position, delta);
-        e.Handled = true;
+        ApplyWheel(position, delta);
     }
 
     /// <summary>
@@ -4970,6 +4980,9 @@ public sealed partial class MainWindow : Window
         // 一份片段贴两遍＝两套名字，组与线头各自跟着换；撤销两发交回原样。
         SelfTestCopyPaste(problems);
 
+        // 编辑中那一发滚轮走的是"滚这一格"，不是"缩放整块板子"（10-24 他点的）。
+        SelfTestEditingWheel(problems);
+
         // 一块丢了图的板子也要开得成：那一格写"未找到"，而不是把窗口打死（10-23 撞上的那一发）。
         SelfTestMissingImageTile(problems);
 
@@ -5085,6 +5098,118 @@ public sealed partial class MainWindow : Window
         {
             problems.Add($"点阵重画一发 {paintMs:0.0}ms，比两拍间隔（{GridTweenMinIntervalMs * 2}ms）还长：缓动中逐发重画这个选择不成立，该退回提交时画一张");
         }
+    }
+
+    /// <summary>
+    /// 编辑中那一发滚轮：把正在写的那一格滚进视野，缩放一档不许动；走到边就明着"没地方可滚"。
+    /// </summary>
+    /// <remarks>
+    /// 为什么放在界面自检而不是 Core 测试里：Core 那九项钉的是几何，这一发要钉的是**接线**——
+    /// 自检走的就是 <see cref="RouteWheel"/> 那一句（与 <c>OnWheel</c> 同一扇门），所以把
+    /// "编辑中"那一档摘掉，红的是"缩放被这一发改掉了"那条断言，不是一句注释。
+    /// 真机上量不成：Computer Use 发滚轮之前必须先拍一张图，而那一发截图会把焦点从编辑框拿走，
+    /// 编辑框一失焦就提交（那是设计），"正在编辑"这一档在装置里活不过一次观测——
+    /// 10-24 试了两轮都是这样折的。
+    /// </remarks>
+    private void SelfTestEditingWheel(List<string> problems)
+    {
+        if (_document.Nodes.FirstOrDefault(node => node.Kind == CanvasNodeKind.Text) is not { } node)
+        {
+            problems.Add("selftest 编辑中滚轮: 这块板上没有文字格，这一发不适用");
+
+            return;
+        }
+
+        var savedPanX = _view.PanX;
+        var savedPanY = _view.PanY;
+        var savedZoom = _view.Zoom;
+        var viewport = BoardArea.ActualHeight;
+
+        BeginEdit(node.Id);
+
+        if (_editor is null)
+        {
+            problems.Add("selftest 编辑中滚轮: BeginEdit 之后没有编辑框");
+
+            return;
+        }
+
+        // 把编辑框撑到比视口高 200 像素，并把它的顶边钉在视口最上沿：
+        // 这样"上面没得滚"与"下面探出 200"两档同时在场，判据不用猜方向。
+        _editorGrownWorld = (viewport + 200) / _view.Zoom;
+        _view.PanY = -(node.Y * _view.Zoom);
+        PlaceEditor();
+
+        var top = Canvas.GetTop(_editor);
+        var height = _editor.Height;
+        var zoomBefore = _view.Zoom;
+
+        if (Math.Abs(top) > 1 || height <= viewport)
+        {
+            problems.Add($"selftest 编辑中滚轮: 摆不出那一档（顶边 {top:0.#}、高 {height:0.#}、视口 {viewport:0.#}）");
+        }
+        else
+        {
+            var at = new Point(Canvas.GetLeft(_editor) + 40, top + 40);
+
+            // 往上滚：顶边已经贴住视口上沿，上面没东西可滚 ⇒ 画面一格都不许动。
+            var panBefore = _view.PanY;
+
+            RouteWheel(at, 120);
+
+            if (Math.Abs(_view.PanY - panBefore) > 0.5)
+            {
+                problems.Add("selftest 编辑中滚轮: 顶边贴住视口上沿时往上滚，那一发不该搬任何东西（它倒着滚了）");
+            }
+
+            var total = 0d;
+            var notches = 0;
+
+            // 往下滚：一格一格搬到"编辑框底边贴住视口底"为止；搬不动那一发就是走到头。
+            while (notches < 40)
+            {
+                var before = _view.PanY;
+
+                RouteWheel(at, -120);
+
+                var moved = before - _view.PanY;
+
+                if (moved <= 0.5)
+                {
+                    break;
+                }
+
+                total += moved;
+                notches++;
+            }
+
+            if (notches >= 40)
+            {
+                problems.Add("selftest 编辑中滚轮: 滚了 40 发还没到头，钳位那一头不成立");
+            }
+            else if (Math.Abs(total - 200) > 0.5)
+            {
+                problems.Add($"selftest 编辑中滚轮: 一共搬了 {total:0.##} 像素，应为 200（编辑框高出视口的那一截）");
+            }
+
+            if (Math.Abs(_view.Zoom - zoomBefore) > 1e-9)
+            {
+                problems.Add($"selftest 编辑中滚轮: 缩放被这一发改掉了（{zoomBefore:0.###} → {_view.Zoom:0.###}）——编辑中那一发不该缩放整块板子");
+            }
+
+            Diagnostics.Write(
+                $"selftest 编辑中滚轮: 探出 200 像素、{notches} 发滚完（一格上限 {EditorScrollPxPerNotch:0}）、" +
+                $"缩放钉在 {Percent()}；顶边贴住上沿那一发往上滚＝明着 no-op，不静默");
+        }
+
+        CloseEditor(commit: false);
+
+        _editorGrownWorld = 0;
+        _view.PanX = savedPanX;
+        _view.PanY = savedPanY;
+        _view.Zoom = savedZoom;
+
+        Rebuild();
     }
 
     /// <summary>

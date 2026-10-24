@@ -3227,7 +3227,7 @@ public sealed partial class MainWindow : Window
     /// verbs need two cards. On empty board only the whole-board and view commands survive.</summary>
     private static bool CommandApplies(Command command, MenuWhere where) => where switch
     {
-        MenuWhere.Empty => command.Section is "聚拢" or "板子",
+        MenuWhere.Empty => command.Section is "排列" or "板子",
         MenuWhere.OneNote => command.Label is not ("成组" or "拆组"),
         _ => true,
     };
@@ -3242,13 +3242,7 @@ public sealed partial class MainWindow : Window
             menu.Items.Add(new MenuFlyoutItem { Text = $"整组 · {_selection.Count} 格", IsEnabled = false });
         }
 
-        if (where == MenuWhere.Empty)
-        {
-            var here = new MenuFlyoutItem { Text = "在这里新建一格", KeyboardAcceleratorTextOverride = "双击空白" };
-            here.Click += (_, _) => NewNoteAt(screenPosition);
-            menu.Items.Add(here);
-        }
-        else
+        if (where != MenuWhere.Empty)
         {
             // 换色不再走右键菜单——它长在便签操作条的色板弹层上（NoteActionRail.cs），
             // 一处入口比两处各摆一份更好维护，也避免"菜单里能选、条上不能选"这种两套语义。
@@ -3271,7 +3265,7 @@ public sealed partial class MainWindow : Window
             menu.Items.Add(ungroup);
         }
 
-        // 排布／聚拢／组织：菜单项由那张表生成，和键盘读的是同一份 ⇒ 一条命令不可能只在其中
+        // 排布／排列／组织：菜单项由那张表生成，和键盘读的是同一份 ⇒ 一条命令不可能只在其中
         // 一处存在（单键快捷没做之前，菜单就是 WCAG 2.5.7 要求的那个替代面）。
         foreach (var section in Sections())
         {
@@ -5342,6 +5336,9 @@ public sealed partial class MainWindow : Window
 
         // Ctrl＋G 是开关：全散＝成组、混选＝散格入组、全在组里＝解散（10-24 他点的）。
         SelfTestGroupToggle(problems);
+
+        // 排列：矩阵、块间距、到期优先级、连线顺序（10-24 他把"聚拢"改名并换了排法）。
+        SelfTestArrange(problems);
 
         // 一块丢了图的板子也要开得成：那一格写"未找到"，而不是把窗口打死（10-23 撞上的那一发）。
         SelfTestMissingImageTile(problems);

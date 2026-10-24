@@ -75,8 +75,8 @@ public sealed partial class MainWindow
         new("下移一格", "↓", "排布", () => Nudge(0, NudgePx), Dispatched: false, Sheet: false),
         new("左移一格", "←", "排布", () => Nudge(-NudgePx, 0), Dispatched: false, Sheet: false),
         new("右移一格", "→", "排布", () => Nudge(NudgePx, 0), Dispatched: false, Sheet: false),
-        new("按颜色聚拢", "Alt+Y", "聚拢", () => Cluster("按颜色聚拢", node => node.Color ?? "none")),
-        new("按标签聚拢", "Alt+T", "聚拢", () => Cluster("按标签聚拢", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签")),
+        new("按颜色排列", "Alt+Y", "排列", () => ArrangeByKey("按颜色排列", node => node.Color ?? "无颜色")),
+        new("按标签排列", "Alt+T", "排列", () => ArrangeByKey("按标签排列", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签")),
         new("成组", "Ctrl+G", "组织", GroupOrDissolve),
         new("拆组", string.Empty, "组织", UngroupSelection, Sheet: false),
         new("复制", "Ctrl+D", "组织", DuplicateSelection),
@@ -415,19 +415,64 @@ public sealed partial class MainWindow
     /// Re-flow the whole board by a key, not just the selection — the command's promise is "put
     /// like with like", which means nothing over a subset.
     /// </summary>
-    private void Cluster(string label, Func<CanvasNode, string> keyOf)
+    /// <summary>
+    /// 排列：同一颜色 / 同一标签的合成一块、块内排成矩阵、块间距更大；块内按到期优先级，
+    /// 并尽量把有连线的排在一起（块也按连线多少相邻），这样线不会横穿整块板。
+    /// </summary>
+    private void ArrangeByKey(string label, Func<CanvasNode, string> keyOf)
     {
-        var notes = BoardNotes();
         var units = Groups().UnitsOf();
 
-        // 一个组跟着它第一格走：聚拢要的是"同类放一起"，而组是一件东西，不能为了分色把它劈成两半。
-        // 所以那一簇由组里最先出现的那格决定，回执里也会说出搬了几件是整块。
+        // 一个组跟着它第一格走：排列要的是"同类放一起"，而组是一件东西，不能为了分色把它劈成两半。
+        // 所以那一块由组里最先出现的那格决定，回执里也会说出搬了几件是整块。
         var keys = units
             .Select(unit => NodeOf(unit.MemberIds[0]) is { } first ? keyOf(first) : string.Empty)
             .ToList();
 
-        ApplyUnitMoves(label, units, Aligning.Cluster([.. units.Select(PlacedOf)], keys));
+        // 组里有一格逾期，这个组就按逾期那一档排：时间是"这一件东西有多急"，不是某一格的事。
+        var priorities = units
+            .Select(unit => unit.MemberIds
+                .Select(NodeOf)
+                .Where(note => note is not null)
+                .Select(note => DuePriority(note!))
+                .DefaultIfEmpty(DuePriorityOfNone)
+                .Min())
+            .ToList();
+
+        // 连线按"件"算：组里任何一格连到别件，都算这个组连到那一件。
+        var unitOf = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var unit in units)
+        {
+            foreach (var member in unit.MemberIds)
+            {
+                unitOf[member] = unit.Id;
+            }
+        }
+
+        var links = _document.Edges
+            .Select(edge => (
+                From: unitOf.GetValueOrDefault(edge.FromNode),
+                To: unitOf.GetValueOrDefault(edge.ToNode)))
+            .Where(pair => pair.From is not null && pair.To is not null && pair.From != pair.To)
+            .Select(pair => (pair.From!, pair.To!))
+            .ToList();
+
+        ApplyUnitMoves(label, units, Aligning.Arrange([.. units.Select(PlacedOf)], keys, priorities, links));
     }
+
+    /// <summary>"无日期"那一档的下标；排列的优先级越小越靠前。</summary>
+    private const int DuePriorityOfNone = 4;
+
+    /// <summary>到期优先级：逾期 → 今天 → 将来 → 日期读不出 → 无日期。</summary>
+    private int DuePriority(CanvasNode note) => NoteMarks.StateOf(Tags.Read(note.Text), _view.Today) switch
+    {
+        NoteMarks.DueState.Late => 0,
+        NoteMarks.DueState.Today => 1,
+        NoteMarks.DueState.Upcoming => 2,
+        NoteMarks.DueState.Malformed => 3,
+        _ => DuePriorityOfNone,
+    };
 
     /// <summary>
     /// Ctrl＋G 是一枚开关：全散＝新建；混选＝把散格并进已有的那个组；全在组里＝解散。
@@ -514,6 +559,62 @@ public sealed partial class MainWindow
         else
         {
             Diagnostics.Write("selftest 成组开关: 全散新建、混选并入、全在组里解散、选中一路保住；三发撤销回原样");
+        }
+
+        ClearSelection();
+        ProjectSelection();
+    }
+
+    /// <summary>
+    /// 排列这一发的界面接线：排完不许有格子重叠；整发是一步撤销，撤销后文档回到原样。
+    /// 矩阵、优先级、连线顺序是 Core 那几条单测的事，这里只钉"界面上真的按新算法排了"。
+    /// </summary>
+    private void SelfTestArrange(List<string> problems)
+    {
+        var before = _document.ToJson();
+        var notes = BoardNotes();
+
+        if (notes.Count < 4)
+        {
+            problems.Add("自检排列: 板上不足四格，这一发不适用");
+
+            return;
+        }
+
+        ArrangeByKey("按颜色排列", note => note.Color ?? "无颜色");
+
+        var placed = BoardNotes().ConvertAll(RectOf);
+        var overlaps = 0;
+
+        for (var i = 0; i < placed.Count; i++)
+        {
+            for (var j = i + 1; j < placed.Count; j++)
+            {
+                var a = placed[i];
+                var b = placed[j];
+
+                if (a.X < b.X + b.Width && b.X < a.X + a.Width && a.Y < b.Y + b.Height && b.Y < a.Y + a.Height)
+                {
+                    overlaps++;
+                }
+            }
+        }
+
+        if (overlaps > 0)
+        {
+            problems.Add($"自检排列: 排完有 {overlaps} 对格子重叠");
+        }
+
+        Undo();
+        Rebuild();
+
+        if (_document.ToJson() != before)
+        {
+            problems.Add("自检排列: 撤销一发以后文档没回到原样");
+        }
+        else
+        {
+            Diagnostics.Write($"selftest 排列: {placed.Count} 格无重叠、按颜色排成矩阵（块内 {Aligning.MinGapPx}／块间 {Aligning.BucketGapPx}）、撤销回原样");
         }
 
         ClearSelection();

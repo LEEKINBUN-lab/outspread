@@ -125,60 +125,233 @@ public static class Aligning
     }
 
     /// <summary>
-    /// Re-flow a set into one row per key — colour or first tag — rows stacked top to bottom in the
-    /// order each key first appears (which is z-order, so the pile reads the way the board did).
+    /// 排列（原“聚拢”）：同 key（颜色 / 第一个标签）的合成一块，每块排成矩阵而不是一条长龙；
+    /// 块与块之间留得比块内更大；块内按到期优先级（逾期 → 今天 → 将来 → 读不出 → 无日期），
+    /// 同一档里按连线把有关系的排在一起；块与块之间也按连线多少排序，免得线横穿整块板。
     /// </summary>
+    /// <param name="keys">每件东西的归类键；空字符串也算一个键（“无标签”是一种标签）。</param>
+    /// <param name="priorities">每件东西的到期优先级，越小越靠前。</param>
+    /// <param name="links">东西之间的连线（A→B 与 B→A 等价）。</param>
     /// <remarks>
-    /// The prototype clusters the <b>whole board</b>, not the selection, and so does this: the
-    /// command's promise is "put like with like", which is meaningless over a subset. Row and
-    /// column gaps are 48 and <see cref="MinGapPx"/> — the same floor the other commands use.
+    /// 矩阵的列数取 ⌈√n⌉：5 格排成 3+2，而不是一条 5 格的长行。列宽/行高逐列逐行取最大，
+    /// 所以块内既不重叠也不留出大洞。块从 (40, 40) 起、自上而下叠，块间距 <see cref="BucketGapPx"/>。
     /// </remarks>
-    public static Outcome Cluster(IReadOnlyList<Placed> items, IReadOnlyList<string> keys)
+    public static Outcome Arrange(
+        IReadOnlyList<Placed> items,
+        IReadOnlyList<string> keys,
+        IReadOnlyList<int> priorities,
+        IReadOnlyList<(string A, string B)> links)
     {
-        if (items.Count < 2 || keys.Count != items.Count)
+        if (items.Count < 2 || keys.Count != items.Count || priorities.Count != items.Count)
         {
             return new Outcome(false, [], Needed: 2, Have: items.Count);
         }
 
-        var clusters = new List<(string Key, List<Placed> Items)>();
+        var indexOf = new Dictionary<string, int>(StringComparer.Ordinal);
 
         for (var i = 0; i < items.Count; i++)
         {
-            var key = keys[i];
-            var found = clusters.FindIndex(cluster => cluster.Key == key);
+            indexOf[items[i].Id] = i;
+        }
 
-            if (found < 0)
+        var neighbours = new List<HashSet<int>>(items.Count);
+
+        for (var i = 0; i < items.Count; i++)
+        {
+            neighbours.Add([]);
+        }
+
+        var bucketLinks = new Dictionary<(string A, string B), int>();
+
+        foreach (var (a, b) in links)
+        {
+            if (!indexOf.TryGetValue(a, out var ia) || !indexOf.TryGetValue(b, out var ib) || ia == ib)
             {
-                clusters.Add((key, [items[i]]));
+                continue;
+            }
+
+            neighbours[ia].Add(ib);
+            neighbours[ib].Add(ia);
+
+            var ka = keys[ia];
+            var kb = keys[ib];
+
+            if (ka != kb)
+            {
+                var pair = string.CompareOrdinal(ka, kb) <= 0 ? (ka, kb) : (kb, ka);
+                bucketLinks[pair] = bucketLinks.GetValueOrDefault(pair) + 1;
+            }
+        }
+
+        var buckets = new List<(string Key, List<int> Members)>();
+        var bucketOfKey = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (bucketOfKey.TryGetValue(keys[i], out var found))
+            {
+                buckets[found].Members.Add(i);
             }
             else
             {
-                clusters[found].Items.Add(items[i]);
+                bucketOfKey[keys[i]] = buckets.Count;
+                buckets.Add((keys[i], [i]));
+            }
+        }
+
+        foreach (var (_, members) in buckets)
+        {
+            var ordered = new List<int>();
+
+            foreach (var tier in members.GroupBy(index => priorities[index]).OrderBy(group => group.Key))
+            {
+                var left = new SortedSet<int>(tier);
+
+                while (left.Count > 0)
+                {
+                    var seed = left.Min;
+                    left.Remove(seed);
+                    ordered.Add(seed);
+
+                    while (true)
+                    {
+                        int? next = null;
+
+                        foreach (var candidate in left)
+                        {
+                            if (neighbours[seed].Contains(candidate))
+                            {
+                                next = candidate;
+                                break;
+                            }
+                        }
+
+                        if (next is not { } picked)
+                        {
+                            break;
+                        }
+
+                        left.Remove(picked);
+                        ordered.Add(picked);
+                        seed = picked;
+                    }
+                }
+            }
+
+            members.Clear();
+            members.AddRange(ordered);
+        }
+
+        var order = new List<int>();
+        var taken = new bool[buckets.Count];
+
+        if (buckets.Count > 0)
+        {
+            var start = Enumerable.Range(0, buckets.Count)
+                .OrderByDescending(index => buckets[index].Members.Count)
+                .ThenBy(index => index)
+                .First();
+
+            order.Add(start);
+            taken[start] = true;
+
+            while (order.Count < buckets.Count)
+            {
+                var next = -1;
+                var best = -1;
+
+                for (var index = 0; index < buckets.Count; index++)
+                {
+                    if (taken[index])
+                    {
+                        continue;
+                    }
+
+                    var linked = 0;
+
+                    foreach (var placed in order)
+                    {
+                        var a = buckets[index].Key;
+                        var b = buckets[placed].Key;
+                        var pair = string.CompareOrdinal(a, b) <= 0 ? (a, b) : (b, a);
+                        linked += bucketLinks.GetValueOrDefault(pair);
+                    }
+
+                    if (linked > best
+                        || (linked == best && next >= 0 && buckets[index].Members.Count > buckets[next].Members.Count))
+                    {
+                        best = linked;
+                        next = index;
+                    }
+                }
+
+                if (next < 0)
+                {
+                    next = Enumerable.Range(0, buckets.Count).First(index => !taken[index]);
+                }
+
+                order.Add(next);
+                taken[next] = true;
             }
         }
 
         const double origin = 40;
-        const double rowGap = 48;
-
         var moves = new List<Move>(items.Count);
-        var y = origin;
+        var blockTop = origin;
 
-        foreach (var (_, members) in clusters)
+        foreach (var bucketIndex in order)
         {
-            var x = origin;
-            var tallest = members.Max(member => member.Height);
+            var members = buckets[bucketIndex].Members;
 
-            foreach (var member in members)
+            if (members.Count == 0)
             {
-                moves.Add(new Move(member.Id, x, y));
-                x += member.Width + MinGapPx;
+                continue;
             }
 
-            y += tallest + rowGap;
+            var columns = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(members.Count)));
+            var rows = (members.Count + columns - 1) / columns;
+            var columnWidths = new double[columns];
+            var rowHeights = new double[rows];
+
+            for (var position = 0; position < members.Count; position++)
+            {
+                var item = items[members[position]];
+                var column = position % columns;
+                var row = position / columns;
+
+                columnWidths[column] = Math.Max(columnWidths[column], item.Width);
+                rowHeights[row] = Math.Max(rowHeights[row], item.Height);
+            }
+
+            var lefts = new double[columns];
+
+            for (var column = 0; column < columns; column++)
+            {
+                lefts[column] = column == 0 ? origin : lefts[column - 1] + columnWidths[column - 1] + MinGapPx;
+            }
+
+            var tops = new double[rows];
+            var top = blockTop;
+
+            for (var row = 0; row < rows; row++)
+            {
+                tops[row] = top;
+                top += rowHeights[row] + MinGapPx;
+            }
+
+            for (var position = 0; position < members.Count; position++)
+            {
+                moves.Add(new Move(items[members[position]].Id, lefts[position % columns], tops[position / columns]));
+            }
+
+            blockTop = top - MinGapPx + BucketGapPx;
         }
 
         return new Outcome(true, moves, Needed: 2, Have: items.Count);
     }
+
+    /// <summary>不同颜色 / 不同标签之间留的空：比块内的 <see cref="MinGapPx"/> 宽一倍半以上，才看得出分组。</summary>
+    public const double BucketGapPx = 64;
 
     public static Box Bounds(IReadOnlyList<Placed> items)
     {

@@ -79,6 +79,14 @@ public sealed partial class MainWindow
 
         if (e.Key != Windows.System.VirtualKey.Tab)
         {
+            // 板子的组合键要先于焦点控件拿到这一发：Alt＋方向、Ctrl＋方向这类是很多控件的
+            // 内建键（切焦点、翻页、前进后退），放到 KeyDown 就晚了——控件已经把事件吃掉了。
+            // 在 preview 里命中就直接执行并标 Handled，平台/控件都不会再看见它。
+            if (TryDispatchBoardChord(e))
+            {
+                e.Handled = true;
+            }
+
             return;
         }
 
@@ -87,7 +95,7 @@ public sealed partial class MainWindow
         // Tab 什么都不做；键位清单仍只在板子能接键的时候开。
         e.Handled = true;
 
-        if (!BoardCanTakeTabKey())
+        if (!BoardCanTakeBoardKeys())
         {
             return;
         }
@@ -97,10 +105,45 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// 这一发 Tab 能不能归板子：没有在编辑、没有浮层在收键、焦点不在文本框里。
+    /// 组合键的提前派发（preview 那一层）：命中命令表里"键盘要执行"的那一条就当场跑掉。
+    /// 返回 false＝这一发不是板子的键，交给后面的控件/系统。
+    /// </summary>
+    private bool TryDispatchBoardChord(KeyRoutedEventArgs e)
+    {
+        if (!BoardCanTakeBoardKeys())
+        {
+            return false;
+        }
+
+        var control = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        var alt = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Menu)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        var shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+
+        var chord = $"{(control ? "Ctrl+" : string.Empty)}{(shift ? "Shift+" : string.Empty)}{(alt ? "Alt+" : string.Empty)}{e.Key}";
+
+        foreach (var command in Commands())
+        {
+            if (!command.Dispatched || !string.Equals(command.Chord, chord, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            command.Run();
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 这一发键能不能归板子：没有在编辑、没有浮层在收键、焦点不在文本框里。
     /// 焦点在标签条/按钮上也算——那是"手在板子上"，不是"在打字"。
     /// </summary>
-    private bool BoardCanTakeTabKey()
+    private bool BoardCanTakeBoardKeys()
     {
         if (_editingId is not null || _filterPanelOpen || _searchOpen || _restoreOpen || _cheatsheetOpen
             || _renamingPath is not null)

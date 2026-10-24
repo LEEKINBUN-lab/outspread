@@ -222,32 +222,126 @@ public class GroupingAndTagsTests
     }
 
     [Fact]
-    public void Clustering_lays_one_row_per_key_in_first_appearance_order()
+    public void Arrange_packs_each_key_into_a_matrix_instead_of_one_long_row()
+    {
+        var items = Enumerable.Range(0, 5)
+            .Select(index => new Aligning.Placed($"n{index}", 0, 0, 100, 60))
+            .ToList();
+
+        var outcome = Aligning.Arrange(
+            items,
+            Enumerable.Repeat("red", 5).ToList(),
+            Enumerable.Repeat(4, 5).ToList(),
+            []);
+
+        var moves = outcome.Moves.ToDictionary(move => move.Id, move => (move.X, move.Y));
+
+        Assert.True(outcome.Ok);
+
+        // ⌈√5⌉ = 3 列：前三个一行，后两个在第二行。
+        Assert.Equal(40, moves["n0"].X);
+        Assert.Equal(40 + 100 + Aligning.MinGapPx, moves["n1"].X);
+        Assert.Equal((40 + (2 * (100 + Aligning.MinGapPx))), moves["n2"].X);
+        Assert.Equal(40, moves["n3"].X);
+        Assert.Equal(40 + 60 + Aligning.MinGapPx, moves["n3"].Y);
+        Assert.Equal(moves["n3"].Y, moves["n4"].Y);
+    }
+
+    [Fact]
+    public void Arrange_leaves_a_bigger_gap_between_keys_than_inside_one()
     {
         var items = new[]
         {
             new Aligning.Placed("r1", 0, 0, 100, 60),
-            new Aligning.Placed("g1", 500, 0, 120, 80),
-            new Aligning.Placed("r2", 900, 0, 100, 60),
+            new Aligning.Placed("r2", 0, 0, 100, 60),
+            new Aligning.Placed("g1", 0, 0, 100, 60),
         };
 
-        var outcome = Aligning.Cluster(items, ["red", "green", "red"]);
+        var outcome = Aligning.Arrange(
+            items,
+            ["red", "red", "green"],
+            [4, 4, 4],
+            []);
+
         var moves = outcome.Moves.ToDictionary(move => move.Id, move => (move.X, move.Y));
 
-        Assert.Equal(40, moves["r1"].X);
-        Assert.Equal(40 + 100 + Aligning.MinGapPx, moves["r2"].X);   // 同簇接在同一行后面
-        Assert.Equal(40, moves["g1"].X);
-        Assert.Equal(40 + 60 + 48, moves["g1"].Y);                   // 第二行：第一行最高者 + rowGap
-        Assert.True(outcome.Ok);
+        Assert.True(Aligning.BucketGapPx > Aligning.MinGapPx, "块间距必须比块内大，否则看不出分组");
+        Assert.Equal(40 + 60 + Aligning.BucketGapPx, moves["g1"].Y);
     }
 
     [Fact]
-    public void Clustering_refuses_a_board_it_cannot_key()
+    public void Arrange_puts_overdue_first_then_today_then_upcoming_then_undated()
+    {
+        var items = new[]
+        {
+            new Aligning.Placed("undated", 0, 0, 100, 60),
+            new Aligning.Placed("late", 0, 0, 100, 60),
+            new Aligning.Placed("future", 0, 0, 100, 60),
+        };
+
+        // 0=逾期、1=今天、2=将来、3=读不出、4=无日期。
+        var outcome = Aligning.Arrange(items, ["red", "red", "red"], [4, 0, 2], []);
+        var moves = outcome.Moves.ToDictionary(move => move.Id, move => (move.X, move.Y));
+
+        Assert.Equal(40, moves["late"].X);                       // 第一格
+        Assert.Equal(40 + 100 + Aligning.MinGapPx, moves["future"].X);
+        Assert.Equal(40, moves["undated"].X);                    // 第二行第一格
+        Assert.Equal(40 + 60 + Aligning.MinGapPx, moves["undated"].Y);
+    }
+
+    [Fact]
+    public void Arrange_keeps_linked_notes_next_to_each_other_within_a_tier()
+    {
+        var items = new[]
+        {
+            new Aligning.Placed("a", 0, 0, 100, 60),
+            new Aligning.Placed("b", 0, 0, 100, 60),
+            new Aligning.Placed("c", 0, 0, 100, 60),
+            new Aligning.Placed("d", 0, 0, 100, 60),
+        };
+
+        // 同一档里 b 与 d 有连线：排出来它们必须挨着（行优先相邻），而不是被 c 隔开。
+        var outcome = Aligning.Arrange(items, ["red", "red", "red", "red"], [4, 4, 4, 4], [("b", "d")]);
+        var moves = outcome.Moves.ToDictionary(move => move.Id, move => (move.X, move.Y));
+
+        var ordered = outcome.Moves
+            .OrderBy(move => move.Y)
+            .ThenBy(move => move.X)
+            .Select(move => move.Id)
+            .ToList();
+
+        var b = ordered.IndexOf("b");
+        var d = ordered.IndexOf("d");
+
+        Assert.Equal(1, Math.Abs(b - d));
+        Assert.Equal(40, moves["a"].X);   // 第一个还是叠放顺序里的第一格
+    }
+
+    [Fact]
+    public void Arrange_places_buckets_that_share_links_next_to_each_other()
+    {
+        var items = new[]
+        {
+            new Aligning.Placed("a", 0, 0, 100, 60),
+            new Aligning.Placed("b", 0, 0, 100, 60),
+            new Aligning.Placed("c", 0, 0, 100, 60),
+        };
+
+        // red 与 blue 有连线、green 没有：blue 的块要排在 green 前面（离 red 更近）。
+        var outcome = Aligning.Arrange(items, ["red", "green", "blue"], [4, 4, 4], [("a", "c")]);
+        var moves = outcome.Moves.ToDictionary(move => move.Id, move => (move.X, move.Y));
+
+        Assert.True(moves["c"].Y < moves["b"].Y, "有连线的两块没有挨着，线会横穿整块板");
+    }
+
+    [Fact]
+    public void Arrange_refuses_a_board_it_cannot_key()
     {
         var items = new[] { new Aligning.Placed("a", 0, 0, 10, 10) };
 
-        Assert.False(Aligning.Cluster(items, ["x"]).Ok);
-        Assert.False(Aligning.Cluster(items, ["x", "y"]).Ok);   // 键数与格子数不等 ⇒ 不猜
+        Assert.False(Aligning.Arrange(items, ["x"], [4], []).Ok);
+        Assert.False(Aligning.Arrange(items, ["x", "y"], [4], []).Ok);   // 键数与格子数不等 ⇒ 不猜
+        Assert.False(Aligning.Arrange(items, ["x"], [4, 4], []).Ok);     // 优先级条数对不上也不猜
     }
 
     /// <summary>

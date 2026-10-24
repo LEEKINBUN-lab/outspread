@@ -1,3 +1,4 @@
+using Microsoft.UI.Xaml.Controls;
 using Outspread.Core;
 
 namespace Outspread.Board;
@@ -430,10 +431,6 @@ public sealed partial class MainWindow
         ArrangeWholeBoard(label, keyOf);
     }
 
-    /// <summary>操作条上那枚圆钮：选中的按标签排（无标签是一档）；没选中时等同整板。</summary>
-    private void ArrangeSelectionOrBoard()
-        => ArrangeByKey("排列", note => Tags.Of(note.Text).FirstOrDefault() ?? "#无标签");
-
     /// <summary>只排选中的这些格子：排成块后就近找一块不压人的空地落下去。</summary>
     private void ArrangeNotes(string label, IReadOnlyList<CanvasNode> notes, Func<CanvasNode, string> keyOf)
     {
@@ -757,7 +754,16 @@ public sealed partial class MainWindow
         }
 
         ProjectSelection();
-        ArrangeSelectionOrBoard();
+
+        // 与圆钮菜单里"按标签排列"同一条路。
+        var menu = BuildArrangeMenu();
+
+        if (!menu.Items.OfType<MenuFlyoutItem>().Select(item => item.Text).SequenceEqual(["按颜色排列", "按标签排列"]))
+        {
+            problems.Add("自检排列选中: 圆钮的菜单不是「按颜色 / 按标签」两行");
+        }
+
+        ArrangeByKey("按标签排列", note => Tags.Of(note.Text).FirstOrDefault() ?? "#无标签");
 
         foreach (var (id, (x, y)) in untouched)
         {

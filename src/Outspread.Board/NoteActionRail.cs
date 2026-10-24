@@ -149,6 +149,7 @@ public sealed partial class MainWindow
         _railShown = false;
         _railHover = null;
         CloseGroupMenu();
+        CloseArrangeMenu();
         CloseColorPopover();
 
         var fade = FadeTo(_rail, 0, Motion.BaseMs);
@@ -180,7 +181,7 @@ public sealed partial class MainWindow
 
         _railGroup = RoundButton("NoteRailGroup", GroupIcon(), "分组（点＝菜单，按住拖＝拖入/拖出）");
         _railColor = RoundButton("NoteRailColor", ColorWheelIcon(), "换色");
-        _railArrange = RoundButton("NoteRailArrange", ArrangeIcon(), "排列（选中的按标签排成矩阵；没选中＝整板）");
+        _railArrange = RoundButton("NoteRailArrange", ArrangeIcon(), "排列（按颜色或标签；排选中的，没选中＝整板）");
 
         // 删的红现在长在图形本身，不再长在圈上——静止那一档根本没有圈。
         _railDelete = RoundButton("NoteRailDelete", TrashIcon(), "删掉这格");
@@ -1190,7 +1191,7 @@ public sealed partial class MainWindow
         _railArrange!.PointerPressed += (_, e) =>
         {
             RailPress(_railArrange, down: true);
-            ArrangeSelectionOrBoard();
+            ShowArrangeMenu();
             e.Handled = true;
         };
 
@@ -1540,6 +1541,55 @@ public sealed partial class MainWindow
     {
         _groupMenu?.Hide();
         _groupMenu = null;
+    }
+
+    // ---------------------------------------------------------------------
+    // 排列钮菜单：按颜色 / 按标签（10-25 他："得能选怎么排"）
+    // ---------------------------------------------------------------------
+
+    private MenuFlyout? _arrangeMenu;
+
+    /// <summary>两行：颜色还是标签。拆出来，自检能直接读（不用真弹一次）。</summary>
+    private MenuFlyout BuildArrangeMenu()
+    {
+        var menu = new MenuFlyout();
+
+        var byColor = new MenuFlyoutItem { Text = "按颜色排列" };
+        byColor.Click += (_, _) => ArrangeByKey("按颜色排列", node => node.Color ?? "无颜色");
+        menu.Items.Add(byColor);
+
+        var byTag = new MenuFlyoutItem { Text = "按标签排列" };
+        byTag.Click += (_, _) => ArrangeByKey("按标签排列", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签");
+        menu.Items.Add(byTag);
+
+        return menu;
+    }
+
+    private void ShowArrangeMenu()
+    {
+        if (_railArrange is null)
+        {
+            return;
+        }
+
+        var menu = BuildArrangeMenu();
+
+        _arrangeMenu = menu;
+        menu.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_arrangeMenu, menu))
+            {
+                _arrangeMenu = null;
+            }
+        };
+
+        menu.ShowAt(_railArrange, new FlyoutShowOptions { Placement = FlyoutPlacementMode.RightEdgeAlignedTop });
+    }
+
+    private void CloseArrangeMenu()
+    {
+        _arrangeMenu?.Hide();
+        _arrangeMenu = null;
     }
 
     private static IconElement DotIcon(Brush brush)

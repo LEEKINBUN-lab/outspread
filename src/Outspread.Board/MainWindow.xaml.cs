@@ -5660,6 +5660,7 @@ public sealed partial class MainWindow : Window
         // 取证图永远停在 0ms 的三枚透明圆上——那不是用户看到的界面。
         _capturingShot = true;
 
+
         try
         {
             if (mode is "fit" or "node")

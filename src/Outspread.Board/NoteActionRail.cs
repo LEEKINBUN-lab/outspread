@@ -107,6 +107,18 @@ public sealed partial class MainWindow
         Canvas.SetLeft(_rail, x);
         Canvas.SetTop(_rail, y);
 
+        if (_capturingShot)
+        {
+            foreach (var entry in RailButtons())
+            {
+                var onBoard = entry.TransformToVisual(BoardArea).TransformPoint(new Point(0, 0));
+
+                Diagnostics.Write(
+                    $"操作条探针: {entry.Name} 落位 ({onBoard.X:0.#},{onBoard.Y:0.#}) 尺寸 {entry.ActualWidth:0.#}×{entry.ActualHeight:0.#}"
+                    + $" 透明 {entry.Opacity:0.##} 可见 {entry.Visibility}");
+            }
+        }
+
         if (!_railShown)
         {
             _railShown = true;
@@ -583,29 +595,16 @@ public sealed partial class MainWindow
     {
         var buttons = new[] { (_railGroup, "组"), (_railColor, "色"), (_railLink, "连线"), (_railDelete, "删") };
 
-        // 第四枚建出来却看不见＝屏幕上凭空少一枚（他 10-24 报的那一发）。病根是入场与重画各自
-        // 拿一份写死的名单，名单漏了谁，谁就停在透明度 0、连纸面底圈都没刷过。
-        // 这里先把每枚按回"刚建好"那一档，再强制走一遍落定那一帧——断言就与动画跑到第几毫秒无关。
-        var live = RailButtons();
-        var wasCapturing = _capturingShot;
-
-        foreach (var entry in live)
+        // 每一枚都必须恒为可见：入场不再逐枚淡入（见 AnimateRailIn 那段说明），
+        // 所以这里读到 0 就是有人把逐枚透明度加回来了——那正是"屏幕上凭空少一枚"的形状。
+        foreach (var entry in RailButtons().Where(button => button.Opacity < 0.99))
         {
-            entry.Opacity = 0;
+            problems.Add($"自检状态层: {entry.Name} 的透明度是 {entry.Opacity:0.##}——逐枚淡入会漏名单，屏幕上就是少一枚");
         }
 
-        _capturingShot = true;
-        AnimateRailIn();
-        _capturingShot = wasCapturing;
-
-        foreach (var entry in live.Where(button => button.Opacity < 0.99))
+        if (RailButtons().Length != buttons.Length)
         {
-            problems.Add($"自检状态层: {entry.Name} 落定以后还在透明度 {entry.Opacity:0.##}——入场名单漏了它，屏幕上看不见这枚");
-        }
-
-        if (live.Length != buttons.Length)
-        {
-            problems.Add($"自检状态层: 操作条上有 {live.Length} 枚钮，自检认的是 {buttons.Length} 枚——两份名单不同步");
+            problems.Add($"自检状态层: 操作条上有 {RailButtons().Length} 枚钮，自检认的是 {buttons.Length} 枚——两份名单不同步");
         }
 
         if (buttons.Any(candidate => candidate.Item1 is null))
@@ -697,42 +696,40 @@ public sealed partial class MainWindow
     private void AnimateRailIn()
     {
         var host = (StackPanel)_rail!.Child;
-        host.Opacity = 1;
-        _rail.Opacity = 1;
-
         var buttons = RailButtons();
 
-        // 取证要的是落定那一帧：入场是 120ms 错峰，照片在 0ms 拍下去只会得到三枚透明圆。
+        // "看得见"不再挂在逐枚的淡入名单上：整条一起淡，逐枚只错峰平移。
+        // 原来是每枚各自 Opacity 0→1，名单漏了谁，屏幕上就凭空少一枚——10-24 他连报两次
+        // "按钮直接消失了"，第一次我还拿自检读数当"修好了"。漏名单现在最多是少一段错峰。
+        foreach (var button in buttons)
+        {
+            button.Opacity = 1;
+            button.RenderTransform = new TranslateTransform { X = _capturingShot ? 0 : 8 };
+        }
+
+        _rail.Opacity = 1;
+
         if (_capturingShot)
         {
-            foreach (var button in buttons)
-            {
-                button.RenderTransform = new TranslateTransform { X = 0 };
-                button.Opacity = 1;
-            }
+            host.Opacity = 1;
 
             return;
         }
 
+        host.Opacity = 0;
+
+        var appear = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
+        appear.Children.Add(FadeTo(host, 1, Motion.HoverMs));
+
         for (var i = 0; i < buttons.Length; i++)
         {
-            var button = buttons[i];
-            var slide = new TranslateTransform { X = 8 };
+            var move = MoveX((TranslateTransform)buttons[i].RenderTransform, 8, 0, Motion.HoverMs);
 
-            button.RenderTransform = slide;
-            button.Opacity = 0;
-
-            var fade = FadeTo(button, 1, Motion.HoverMs);
-            var move = MoveX(slide, 8, 0, Motion.HoverMs);
-
-            fade.BeginTime = TimeSpan.FromMilliseconds(i * 35);
             move.BeginTime = TimeSpan.FromMilliseconds(i * 35);
-
-            var board = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
-            board.Children.Add(fade);
-            board.Children.Add(move);
-            board.Begin();
+            appear.Children.Add(move);
         }
+
+        appear.Begin();
     }
 
     private static Microsoft.UI.Xaml.Media.Animation.DoubleAnimation FadeTo(UIElement target, double to, double ms)

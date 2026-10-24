@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Outspread.Core;
@@ -49,8 +51,90 @@ public static class BoardMerge
     /// <summary>这枚命名空间 id 属于哪块板；不是命名空间 id 则为空串。</summary>
     public static string OwnerOf(string mergedId) => TryUnmerge(mergedId, out var owner, out _) ? owner : string.Empty;
 
-    /// <summary>把多块板并成一张 root：坐标不动，id 打命名空间，边端点跟着改名。</summary>
-    public static JsonObject Merge(IReadOnlyList<(string OwnerKey, CanvasDocument Doc)> boards)
+    /// <summary>每块板独占一条竖向带，带与带之间的空。并集不再把不同板的格子叠在同一片坐标上。</summary>
+    public const double RegionGapPx = 240;
+
+    /// <summary>
+    /// 给每块板算一个显示偏移：先把这块板自己的包围盒左上角挪到 x=0、y=<paramref name="gap"/> 之下的游标处，
+    /// 再往下走一块。区域内每格的相对坐标一个都不动（<see cref="Merge"/> 只加这个偏移），
+    /// 写回时再减掉同一个偏移，源文件里的坐标就还是原来的。
+    /// </summary>
+    public static Dictionary<string, (double X, double Y)> RegionOffsets(
+        IReadOnlyList<(string OwnerKey, CanvasDocument Doc)> boards,
+        double gap = RegionGapPx)
+    {
+        var offsets = new Dictionary<string, (double X, double Y)>(StringComparer.Ordinal);
+        var cursor = 0d;
+
+        foreach (var (owner, doc) in boards)
+        {
+            var nodes = doc.Nodes;
+
+            if (nodes.Count == 0)
+            {
+                offsets[owner] = (0, cursor);
+                cursor += gap;
+
+                continue;
+            }
+
+            var left = nodes.Min(node => node.X);
+            var top = nodes.Min(node => node.Y);
+            var bottom = nodes.Max(node => node.Y + node.Height);
+
+            offsets[owner] = (-left, cursor - top);
+            cursor += Math.Max(0, bottom - top) + gap;
+        }
+
+        return offsets;
+    }
+
+    /// <summary>给一格加/减显示偏移（合并加、写回减）。不是数字就跳过，不改别人的字段。</summary>
+    public static void ShiftNode(JsonObject node, double dx, double dy)
+    {
+        if (Math.Abs(dx) > 0.0001 && ReadNumber(node, "x") is { } x)
+        {
+            node["x"] = x + dx;
+        }
+
+        if (Math.Abs(dy) > 0.0001 && ReadNumber(node, "y") is { } y)
+        {
+            node["y"] = y + dy;
+        }
+    }
+
+    /// <summary>
+    /// 读一个数：本程序写出来的数可能是 Int64 背书的 JsonValue，<c>GetValue&lt;double&gt;</c> 会拒收
+    /// （与 <see cref="CanvasNode.GetNumber"/> 同一条坑）；退一步用 Convert。
+    /// </summary>
+    private static double? ReadNumber(JsonObject node, string field)
+    {
+        if (node[field] is not JsonValue value)
+        {
+            return null;
+        }
+
+        try
+        {
+            return value.GetValue<double>();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or JsonException or FormatException)
+        {
+            try
+            {
+                return Convert.ToDouble(value.GetValue<object>(), CultureInfo.InvariantCulture);
+            }
+            catch (Exception inner) when (inner is InvalidOperationException or InvalidCastException or FormatException)
+            {
+                return null;
+            }
+        }
+    }
+
+    /// <summary>把多块板并成一张 root：每块板按 <paramref name="offsets"/> 挪进自己的区域，id 打命名空间，边端点跟着改名。</summary>
+    public static JsonObject Merge(
+        IReadOnlyList<(string OwnerKey, CanvasDocument Doc)> boards,
+        IReadOnlyDictionary<string, (double X, double Y)>? offsets = null)
     {
         var nodes = new JsonArray();
         var edges = new JsonArray();
@@ -63,7 +147,11 @@ public static class BoardMerge
                 {
                     if (item is JsonObject node)
                     {
-                        nodes.Add(NamespaceNodeId(ownerKey, (JsonObject)node.DeepClone()));
+                        var clone = (JsonObject)node.DeepClone();
+                        var shift = offsets is not null && offsets.TryGetValue(ownerKey, out var at) ? at : (X: 0d, Y: 0d);
+
+                        ShiftNode(clone, shift.X, shift.Y);
+                        nodes.Add(NamespaceNodeId(ownerKey, clone));
                     }
                 }
             }

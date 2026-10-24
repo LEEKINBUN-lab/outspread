@@ -80,4 +80,53 @@ public class BoardMergeTests
         Assert.Equal(A, BoardMerge.OwnerOf(mergedId));
         Assert.False(BoardMerge.TryUnmerge("plain-id-no-sep", out _, out _));
     }
+
+    [Fact]
+    public void 并集按块分区_不同板的格子不再叠在同一片坐标上()
+    {
+        var a = Doc("""{"nodes":[{"id":"a1","type":"text","x":10,"y":20,"width":100,"height":50},{"id":"a2","type":"text","x":150,"y":20,"width":100,"height":50}],"edges":[]}""");
+        var b = Doc("""{"nodes":[{"id":"b1","type":"text","x":10,"y":20,"width":100,"height":50}],"edges":[]}""");
+        var boards = new List<(string OwnerKey, CanvasDocument Doc)> { (A, a), (B, b) };
+
+        var offsets = BoardMerge.RegionOffsets(boards);
+        var merged = BoardMerge.Merge(boards, offsets);
+        var nodes = ((JsonArray)merged["nodes"]!).Select(item => item!.AsObject()).ToList();
+
+        var a1 = nodes.First(node => node["id"]!.GetValue<string>() == BoardMerge.MergeId(A, "a1"));
+        var a2 = nodes.First(node => node["id"]!.GetValue<string>() == BoardMerge.MergeId(A, "a2"));
+        var b1 = nodes.First(node => node["id"]!.GetValue<string>() == BoardMerge.MergeId(B, "b1"));
+
+        // 带内相对位置一个都不动；两块板各自从 x=0 起。
+        Assert.Equal(140, a2["x"]!.GetValue<double>() - a1["x"]!.GetValue<double>(), 3);
+        Assert.Equal(0, a1["x"]!.GetValue<double>(), 3);
+        Assert.Equal(0, b1["x"]!.GetValue<double>(), 3);
+
+        // 带与带之间至少隔 RegionGapPx。
+        var aBottom = a1["y"]!.GetValue<double>() + 50;
+        Assert.True(b1["y"]!.GetValue<double>() >= aBottom + BoardMerge.RegionGapPx - 0.001);
+    }
+
+    [Fact]
+    public void 写回时减掉区域偏移_源坐标只动用户搬的那一点()
+    {
+        var a = Doc("""{"nodes":[{"id":"a1","type":"text","x":10,"y":20,"width":100,"height":50}],"edges":[]}""");
+        var boards = new List<(string OwnerKey, CanvasDocument Doc)> { (A, a) };
+        var offsets = BoardMerge.RegionOffsets(boards);
+        var merged = BoardMerge.Merge(boards, offsets);
+
+        var node = ((JsonArray)merged["nodes"]!)[0]!.AsObject();
+        BoardMerge.ShiftNode(node, 7, 9);   // 在并集里搬 (+7,+9)
+
+        var parts = BoardMerge.Split(merged);
+
+        foreach (var part in parts[A].Nodes.OfType<JsonObject>())
+        {
+            BoardMerge.ShiftNode(part, -offsets[A].X, -offsets[A].Y);
+        }
+
+        var back = parts[A].Nodes[0]!.AsObject();
+
+        Assert.Equal(17, back["x"]!.GetValue<double>(), 3);
+        Assert.Equal(29, back["y"]!.GetValue<double>(), 3);
+    }
 }

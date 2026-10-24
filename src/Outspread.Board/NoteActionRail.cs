@@ -756,7 +756,7 @@ public sealed partial class MainWindow
         }
 
         // 圆盘列的中心要落在选区中心上（四枚时原来会低 27px）。
-        _rail.UpdateLayout();
+        _rail?.UpdateLayout();
 
         if (SelectionBox() is { } chosen && buttons.Length > 0)
         {
@@ -890,7 +890,8 @@ public sealed partial class MainWindow
         }
 
         // 刚插/拔了一枚钮和改了外壳高度：先排一次版，下面的变换与 Actual* 才是这一帧的。
-        _rail.UpdateLayout();
+        var rail = _rail;
+        rail.UpdateLayout();
 
         var cells = RailButtons();
         var visibleHalos = _railHalos.Count(halo => halo.Visibility == Visibility.Visible);
@@ -953,14 +954,14 @@ public sealed partial class MainWindow
                 continue;
             }
 
-            var bounds = halo.TransformToVisual(_rail).TransformBounds(new Rect(0, 0, halo.ActualWidth, halo.ActualHeight));
+            var bounds = halo.TransformToVisual(rail).TransformBounds(new Rect(0, 0, halo.ActualWidth, halo.ActualHeight));
 
             if (bounds.X < -0.001 || bounds.Y < -0.001
-                || bounds.Right > _rail.ActualWidth + 0.001 || bounds.Bottom > _rail.ActualHeight + 0.001)
+                || bounds.Right > rail.ActualWidth + 0.001 || bounds.Bottom > rail.ActualHeight + 0.001)
             {
                 problems.Add(
                     $"自检状态层: 第 {index + 1} 圈晕影 ({bounds.X:0.#},{bounds.Y:0.#})–({bounds.Right:0.#},{bounds.Bottom:0.#}) " +
-                    $"越出外壳 {_rail.ActualWidth:0.#}×{_rail.ActualHeight:0.#}——盘外那圈会被裁成直边");
+                    $"越出外壳 {rail.ActualWidth:0.#}×{rail.ActualHeight:0.#}——盘外那圈会被裁成直边");
             }
 
             if (index >= cells.Length || LayersOf(cells[index])?.Face is not { } disc)

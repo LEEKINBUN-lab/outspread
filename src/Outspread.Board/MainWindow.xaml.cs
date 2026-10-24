@@ -3405,6 +3405,9 @@ public sealed partial class MainWindow : Window
     {
         var problems = new List<string>();
 
+        // 自检要真的关板子（文件与 sidecar 一起走）：确认框在这一层让开。
+        _suppressBoardDeleteConfirm = true;
+
         var anchor = new Point(400, 300);
         var worldUnderAnchor = (_view.ToWorldX(anchor.X), _view.ToWorldY(anchor.Y));
 
@@ -5376,6 +5379,8 @@ public sealed partial class MainWindow : Window
 
         // 放在最后：它会切到「所有便签」再切回，且会改动临时副本上的文件（父集新建/删格）。
         SelfTestAllNotesTab(problems);
+
+        _suppressBoardDeleteConfirm = false;
 
         return problems;
     }

@@ -1261,7 +1261,48 @@ public sealed partial class MainWindow
         CloseRestorePanel();
     }
 
-    private void CloseCurrentBoard()
+    /// <summary>自检里关板子不弹确认（它要的是"删得掉"，不是"弹得出"）。</summary>
+    private bool _suppressBoardDeleteConfirm;
+
+    /// <summary>
+    /// 关板子＝从本机删文件与历史，撤不回来。先问一次：默认按钮是"取消"，
+    /// 点外面/Esc 也等于取消。弹不出来（没有 XamlRoot 等）时按取消处理——宁可不删。
+    /// </summary>
+    private async Task<bool> ConfirmBoardDeleteAsync(IReadOnlyList<string> paths)
+    {
+        if (_suppressBoardDeleteConfirm || paths.Count == 0)
+        {
+            return true;
+        }
+
+        var names = paths.Select(BoardName).ToList();
+
+        var dialog = new Microsoft.UI.Xaml.Controls.ContentDialog
+        {
+            XamlRoot = Root.XamlRoot,
+            Title = names.Count == 1 ? $"关掉『{names[0]}』？" : $"关掉这 {names.Count} 块板？",
+            Content = names.Count == 1
+                ? "关掉＝从本机删掉这块板的文件与历史，不能撤回。"
+                : $"会把 {string.Join("、", names)} 的文件与历史一起从本机删掉，不能撤回。",
+            PrimaryButtonText = names.Count == 1 ? "关掉并删除" : "全部关掉并删除",
+            CloseButtonText = "取消",
+            DefaultButton = Microsoft.UI.Xaml.Controls.ContentDialogButton.Close,
+        };
+
+        try
+        {
+            return await dialog.ShowAsync() == Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary;
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Write($"delete confirm failed: {ex}");
+            Say("没能弹出确认框，这块板先不删");
+
+            return false;
+        }
+    }
+
+    private async void CloseCurrentBoard()
     {
         if (_boardPath is null)
         {
@@ -1286,6 +1327,14 @@ public sealed partial class MainWindow
         var closing = CurrentBoardIndex();
         var closingPath = _openBoards[closing];
         var closedName = BoardName(closingPath);
+
+        if (!await ConfirmBoardDeleteAsync([closingPath]))
+        {
+            Say($"没关，{closedName} 还在");
+
+            return;
+        }
+
         var syncWasOn = _sync?.Enabled == true;
         var neighbour = NeighbourBoard(closing);
 
@@ -1312,7 +1361,7 @@ public sealed partial class MainWindow
             $"回到 {BoardName(neighbour)}");
     }
 
-    private void CloseTab(string path)
+    private async void CloseTab(string path)
     {
         if (IsAllNotes(path))
         {
@@ -1342,6 +1391,14 @@ public sealed partial class MainWindow
         CancelRename();
 
         var closedName = BoardName(path);
+
+        if (!await ConfirmBoardDeleteAsync([path]))
+        {
+            Say($"没关，{closedName} 还在");
+
+            return;
+        }
+
         var syncWasOn = _sync?.Enabled == true;
         var error = DeleteBoard(path);
 
@@ -1357,7 +1414,7 @@ public sealed partial class MainWindow
         Say($"删掉了 {closedName}（本机文件与历史已删{(syncWasOn ? "；远端仓库那份不在这一下里" : "")}）");
     }
 
-    private void CloseOtherBoards(string path)
+    private async void CloseOtherBoards(string path)
     {
         if (RealBoardCount <= 1)
         {
@@ -1379,6 +1436,21 @@ public sealed partial class MainWindow
         CancelRename();
 
         var closedPaths = _openBoards.Where(open => !SameBoard(open, path) && !IsAllNotes(open)).ToList();
+
+        if (closedPaths.Count == 0)
+        {
+            Say("没有别的可关");
+
+            return;
+        }
+
+        if (!await ConfirmBoardDeleteAsync(closedPaths))
+        {
+            Say("没关，其余板子还在");
+
+            return;
+        }
+
         var syncWasOn = _sync?.Enabled == true;
         var deleted = new List<string>();
         var failures = new List<string>();

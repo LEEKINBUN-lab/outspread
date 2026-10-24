@@ -27,6 +27,12 @@ namespace Outspread.Board;
 partial class MainWindow
 {
     private string _gridKey = string.Empty;
+
+    /// <summary>同一张位图与同一块缓冲按档复用（尺寸对得上就清一遍重画）。
+    /// 每一发都新起一张 4.6MB 的位图，连滚时会咬出 70–123ms 的 GC 尖峰（现读见过）。</summary>
+    private WriteableBitmap? _gridBitmap;
+
+    private byte[]? _gridBuffer;
     private Rect? _clipRect;
     private bool? _floorIsDark;
     private bool? _vignetteIsDark;
@@ -84,8 +90,10 @@ partial class MainWindow
         GridLayer.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
 
         // Whole layout pixels, or the Image gets resampled and a 2px dot smears into a grey smear.
-        var tileWidth = Math.Ceiling(width + period);
-        var tileHeight = Math.Ceiling(height + period);
+        // 边长再取整到 64 的倍数：缩放中途每一发只比上一发宽几个像素，取整之后同一张位图能复用
+        // （配合 _gridBuffer 那一块），不必每发重新分配。多出来的那一条被 BoardArea.Clip 裁掉。
+        var tileWidth = Math.Ceiling((width + period) / GridTileQuantum) * GridTileQuantum;
+        var tileHeight = Math.Ceiling((height + period) / GridTileQuantum) * GridTileQuantum;
         var key = $"{zoom:0.####}|{width:0}|{height:0}|{scale:0.###}|{NoteStyling.IsDark}";
 
         if (key != _gridKey)
@@ -142,14 +150,31 @@ partial class MainWindow
         VignetteLayer.Fill = brush;
     }
 
+    private const double GridTileQuantum = 64;
+
     private void PaintGrid(double tileWidth, double tileHeight, double scale, double zoom, bool forensics)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var pixelsW = (int)Math.Ceiling(tileWidth * scale);
         var pixelsH = (int)Math.Ceiling(tileHeight * scale);
 
-        var bitmap = new WriteableBitmap(pixelsW, pixelsH);
-        var buffer = new byte[bitmap.PixelBuffer.Length];
+        WriteableBitmap bitmap;
+        byte[] buffer;
+
+        if (_gridBitmap is { } cached && _gridBuffer is { } cachedBuffer
+            && cached.PixelWidth == pixelsW && cached.PixelHeight == pixelsH)
+        {
+            bitmap = cached;
+            buffer = cachedBuffer;
+            Array.Clear(buffer);
+        }
+        else
+        {
+            bitmap = new WriteableBitmap(pixelsW, pixelsH);
+            buffer = new byte[bitmap.PixelBuffer.Length];
+            _gridBitmap = bitmap;
+            _gridBuffer = buffer;
+        }
 
         var ink = BoardGrid.Ink(NoteStyling.IsDark);
 

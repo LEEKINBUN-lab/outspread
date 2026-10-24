@@ -31,7 +31,14 @@ public sealed partial class MainWindow
 {
     private (string FromId, string Side)? _pulling;
 
-    private Polyline? _pullGhost;
+    private Microsoft.UI.Xaml.Shapes.Path? _pullWire;
+
+    private Microsoft.UI.Xaml.Shapes.Path? _pullHead;
+
+    private Ellipse? _pullDot;
+
+    /// <summary>指针这点正吸着谁（null＝还没吸住任何东西）。</summary>
+    private (string NodeId, string Side, double X, double Y)? _pullSnap;
 
     /// <summary>正在拉线＝这一发按键/按下归这条线，不归板子。</summary>
     private bool Pulling => _pulling is not null;
@@ -48,17 +55,39 @@ public sealed partial class MainWindow
 
         _pulling = (id, SpecSide(side));
 
-        _pullGhost = new Polyline
+        var brush = new SolidColorBrush(NoteStyling.ToColor(SelectionChrome.Ring(NoteStyling.IsDark)));
+
+        // 拉线中途那根就得是成品那根：同一套三次贝塞尔、同一个沿切线的箭头。
+        // 原来这里是一根两点直线（Polyline），于是"拉的时候不像、松手才像"——他退回原型时
+        // 点的"线段是死板的直线"就是这一格，实物上同样成立。
+        _pullWire = new Microsoft.UI.Xaml.Shapes.Path
         {
-            Stroke = new SolidColorBrush(NoteStyling.ToColor(SelectionChrome.Ring(NoteStyling.IsDark))),
+            Stroke = brush,
             StrokeThickness = 2,
-            StrokeDashArray = new DoubleCollection { 3, 3 },
+            StrokeDashArray = new DoubleCollection { 4, 3 },
             IsHitTestVisible = false,
         };
 
-        GuideLayer.Children.Add(_pullGhost);
+        _pullHead = new Microsoft.UI.Xaml.Shapes.Path { Fill = brush, IsHitTestVisible = false };
 
-        Say($"拉线中：起点是这格的{SideWord(side)} · 点另一格就接上，点空白或 Esc＝没画过");
+        _pullDot = new Ellipse
+        {
+            Width = 12,
+            Height = 12,
+            Stroke = brush,
+            StrokeThickness = 2,
+            Fill = new SolidColorBrush(NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark))),
+            IsHitTestVisible = false,
+            Visibility = Visibility.Collapsed,
+        };
+
+        GuideLayer.Children.Add(_pullWire);
+        GuideLayer.Children.Add(_pullHead);
+        GuideLayer.Children.Add(_pullDot);
+
+        SetRailLinkActive(true);
+
+        Say($"拉线中：起点是这格的{SideWord(side)} · 点另一格就接上（先点＝起点），点空白或 Esc＝没画过");
     }
 
     /// <summary>菜单/键位那一条路：从选中那一格靠视野中心的那一面起头。</summary>
@@ -83,20 +112,80 @@ public sealed partial class MainWindow
         StartPull(members[0].Id, SideTowardViewCentre(members[0]));
     }
 
-    /// <summary>指针在走：自由端跟着走（还没落定时它不属于任何一格）。</summary>
+    /// <summary>
+    /// 指针在走：自由端跟着走，并且<b>吸到四条边中心最近的那一条</b>（半径按缩放归一，见 LinkPull）。
+    /// 曲线与箭头用 EdgeGeometry 那一套——和松手之后的成品同一把尺，拉的时候就能看出它会长成什么样。
+    /// </summary>
     private void TrackPull(Point screen)
     {
-        if (_pulling is not { } pull || _pullGhost is null || NodeOf(pull.FromId) is not { } from)
+        if (_pulling is not { } pull || _pullWire is null || _pullHead is null || NodeOf(pull.FromId) is not { } from)
         {
             return;
         }
 
-        var anchor = CanvasEdge.SidePoint(from, pull.Side);
+        var wx = _view.ToWorldX(screen.X);
+        var wy = _view.ToWorldY(screen.Y);
 
-        _pullGhost.Points.Clear();
-        _pullGhost.Points.Add(new Point(_view.ToScreenX(anchor.X), _view.ToScreenY(anchor.Y)));
-        _pullGhost.Points.Add(screen);
+        _pullSnap = LinkPull.Nearest(
+            BoardNotes().ConvertAll(RectOf),
+            wx,
+            wy,
+            pull.FromId,
+            LinkPull.Reach(_view.Zoom));
+
+        var leave = CanvasEdge.SidePoint(from, pull.Side);
+        var x1 = _view.ToScreenX(leave.X);
+        var y1 = _view.ToScreenY(leave.Y);
+        var x2 = _pullSnap is { } hit ? _view.ToScreenX(hit.X) : screen.X;
+        var y2 = _pullSnap is { } gone ? _view.ToScreenY(gone.Y) : screen.Y;
+
+        var v1 = CanvasEdge.VectorOf(pull.Side);
+        var v2 = _pullSnap is { } aimed ? CanvasEdge.VectorOf(aimed.Side) : [-v1[0], -v1[1]];
+
+        var (c1x, c1y, c2x, c2y) = EdgeGeometry.Controls(x1, y1, v1, x2, y2, v2);
+
+        _pullWire.Data = Curve(x1, y1, c1x, c1y, c2x, c2y, x2, y2);
+
+        var (tipX, tipY, leftX, leftY, rightX, rightY) = EdgeGeometry.ArrowHead(x2, y2, c2x, c2y);
+
+        _pullHead.Data = Head(tipX, tipY, leftX, leftY, rightX, rightY);
+
+        if (_pullDot is not null)
+        {
+            _pullDot.Visibility = _pullSnap is null ? Visibility.Collapsed : Visibility.Visible;
+            Canvas.SetLeft(_pullDot, x2 - 6);
+            Canvas.SetTop(_pullDot, y2 - 6);
+        }
     }
+
+    private static Microsoft.UI.Xaml.Media.PathGeometry Curve(
+        double x1, double y1, double c1x, double c1y, double c2x, double c2y, double x2, double y2)
+        => new()
+        {
+            Figures =
+            {
+                new PathFigure
+                {
+                    StartPoint = new Point(x1, y1),
+                    Segments = { new BezierSegment { Point1 = new Point(c1x, c1y), Point2 = new Point(c2x, c2y), Point3 = new Point(x2, y2) } },
+                },
+            },
+        };
+
+    private static Microsoft.UI.Xaml.Media.PathGeometry Head(
+        double tipX, double tipY, double leftX, double leftY, double rightX, double rightY)
+        => new()
+        {
+            Figures =
+            {
+                new PathFigure
+                {
+                    StartPoint = new Point(tipX, tipY),
+                    IsClosed = true,
+                    Segments = { new LineSegment { Point = new Point(leftX, leftY) }, new LineSegment { Point = new Point(rightX, rightY) } },
+                },
+            },
+        };
 
     /// <summary>
     /// 落定：命中另一格就画一条边（一个事务），命中空白或还是原来那一格就放弃。
@@ -109,7 +198,8 @@ public sealed partial class MainWindow
             return false;
         }
 
-        var target = NodeAt(screen);
+        // 吸住了就连那一枚（指针在空白上但边已经吸住，也算他想连这条）；没吸住才按"点在谁身上"。
+        var target = (_pullSnap is { } snap ? NodeOf(snap.NodeId) : null) ?? NodeAt(screen);
 
         if (target is null || target.Id == pull.FromId)
         {
@@ -128,7 +218,10 @@ public sealed partial class MainWindow
 
         var leave = CanvasEdge.SidePoint(from, pull.Side);
 
-        var toSide = CanvasEdge.NearestSide(target, leave.X, leave.Y);
+        // 落点那面按指针挑，不按起点挑：拉线的人心里指的就是他点的那一下附近那条边。
+        var toSide = _pullSnap is { } aimedSide && aimedSide.NodeId == target.Id
+            ? aimedSide.Side
+            : CanvasEdge.NearestSide(target, _view.ToWorldX(screen.X), _view.ToWorldY(screen.Y));
 
         CancelPull();
 
@@ -151,15 +244,24 @@ public sealed partial class MainWindow
         _pulling = null;
 
         ClearPullGhost();
+        SetRailLinkActive(false);
     }
 
     private void ClearPullGhost()
     {
-        if (_pullGhost is not null)
+        _pullSnap = null;
+
+        foreach (var ghost in new UIElement?[] { _pullWire, _pullHead, _pullDot })
         {
-            GuideLayer.Children.Remove(_pullGhost);
-            _pullGhost = null;
+            if (ghost is not null)
+            {
+                GuideLayer.Children.Remove(ghost);
+            }
         }
+
+        _pullWire = null;
+        _pullHead = null;
+        _pullDot = null;
     }
 
     /// <summary>最靠视野中心的那一面——从那儿起头，线一出去就在看得见的地方。</summary>

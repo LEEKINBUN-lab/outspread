@@ -4133,10 +4133,46 @@ public sealed partial class MainWindow : Window
                     problems.Add("放弃一根线改了文档：Esc 必须是纯放弃");
                 }
 
-                if (_pullGhost is not null)
+                if (_pullWire is not null)
                 {
                     problems.Add("放弃以后那根虚线还挂在导层上");
                 }
+
+                // 拉线中途那根必须是成品那一套（三次贝塞尔＋箭头＋四边吸附）——他 10-24 退回原型时
+                // 点的"线段是死板的直线""吸附效果"两格，实物上原来也是两点直线、且只有松手才挑面。
+                StartPull(ends[0].Id, "e");
+
+                var target1 = ends[1];
+                var leftMid = new Point(
+                    _view.ToScreenX(target1.X),
+                    _view.ToScreenY(target1.Y + target1.Height / 2));
+
+                TrackPull(new Point(leftMid.X + 12, leftMid.Y));
+
+                if (_pullSnap is not { } aimed || aimed.NodeId != target1.Id || aimed.Side != CanvasEdge.Left)
+                {
+                    problems.Add($"离那格左边 12 像素该吸住它的左边，实得 {(_pullSnap is null ? "谁都没吸" : $"{_pullSnap.Value.NodeId}/{_pullSnap.Value.Side}")}");
+                }
+
+                if (_pullWire?.Data is not Microsoft.UI.Xaml.Media.PathGeometry pullShape
+                    || !pullShape.Figures.Any(figure => figure.Segments.Any(segment => segment is BezierSegment)))
+                {
+                    problems.Add("拉线中途那根不是贝塞尔——拉的时候不像、松手才像，就是「死板的直线」那一格");
+                }
+
+                // 空点取"整板外接框再往右 400"——写死坐标会撞上别人：fixture 上就有一格在那条路上。
+                var notes = BoardNotes();
+                var farRight = notes.Max(node => node.Right) + 400;
+                var midY = notes.Average(node => node.Y + (node.Height / 2));
+
+                TrackPull(new Point(_view.ToScreenX(farRight), _view.ToScreenY(midY)));
+
+                if (_pullSnap is not null)
+                {
+                    problems.Add("离所有格子都远还报着吸附——半径没起作用");
+                }
+
+                CancelPull();
 
                 StartPull(ends[0].Id, "e");
 

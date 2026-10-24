@@ -58,26 +58,8 @@ public sealed record CanvasEdge(
     /// the long side even when the pointer is nearly level with its centre.
     /// </summary>
     public static string NearestSide(CanvasNode node, double worldX, double worldY)
-    {
-        string best = Top;
-        var bestDistance = double.MaxValue;
-
-        foreach (var side in new[] { Top, Bottom, Left, Right })
-        {
-            var point = SidePoint(node, side);
-            var dx = point.X - worldX;
-            var dy = point.Y - worldY;
-            var distance = (dx * dx) + (dy * dy);
-
-            if (distance < bestDistance)
-            {
-                bestDistance = distance;
-                best = side;
-            }
-        }
-
-        return best;
-    }
+        // 尺只有一把：拉线态（LinkPull）与这里必须报同一条边，否则"看着吸住了、松手换面"。
+        => LinkPull.SideNearest(new Grouping.Rect(node.Id, node.X, node.Y, node.Width, node.Height), worldX, worldY);
 
     /// <summary>The side that faces the other card: the one whose axis the other centre is furthest
     /// along. Used when the file did not write a side (and by the connect command, which records what

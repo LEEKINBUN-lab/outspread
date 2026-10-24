@@ -251,6 +251,14 @@ public sealed partial class MainWindow : Window
             new PointerEventHandler((_, _) => CommitWheelPreview()),
             handledEventsToo: true);
 
+        // 空格那一发只要被板子上的任何一次按下用过，就不算"按一下复位"了。10-24 他报的正是这一发：
+        // 按住空格再左键框选，视野跟着跳——撤掉"空格＋拖＝平移"之后，框选不再理空格，可松手那一下
+        // 还是把复位打了出去。复位只该留给"什么也没干地敲了一下空格"。
+        BoardArea.AddHandler(
+            UIElement.PointerPressedEvent,
+            new PointerEventHandler((_, _) => _spaceTap = false),
+            handledEventsToo: true);
+
         Closed += (_, _) =>
         {
             var at = Environment.TickCount64;

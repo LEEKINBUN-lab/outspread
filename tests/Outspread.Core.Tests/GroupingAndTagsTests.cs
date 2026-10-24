@@ -249,4 +249,28 @@ public class GroupingAndTagsTests
         Assert.False(Aligning.Cluster(items, ["x"]).Ok);
         Assert.False(Aligning.Cluster(items, ["x", "y"]).Ok);   // 键数与格子数不等 ⇒ 不猜
     }
+
+    /// <summary>
+    /// 把一格成员拖远，框会拉长去接它（<c>KeepDraggedMemberInFrame</c>，10-22 定的"普通拖动不许默默脱组"）。
+    /// 这条钉的是**现在的行为**，也正是他 10-24 报那一格的机制：框一拉长，路上任何一格只要中心落进来
+    /// 就越算成员；虚线边拉到屏幕外，看着就像"分组消失了"。改法（拖出＝脱组，或成员记成 id 列表
+    /// 不再靠几何）等他定——定之前这条测试替我们看着它没被顺手改掉。
+    /// </summary>
+    [Fact]
+    public void Dragging_one_member_far_away_stretches_the_frame_and_swallows_whatever_is_on_the_way()
+    {
+        var a = Note("a", 0, 0);
+        var b = Note("b", 200, 0);
+        var onTheWay = Note("c", 1_000, 0);
+
+        var before = Grouping.Enclose("g", [a, b]);
+
+        Assert.DoesNotContain(onTheWay.Id, Grouping.Members(before, [a, b, onTheWay]).Select(member => member.Id));
+
+        var dragged = Note("b", 2_000, 0);
+        var after = Grouping.Enclose("g", [a, dragged]);
+
+        Assert.Equal(2_100 + (2 * Grouping.Pad), after.Width);
+        Assert.Contains(onTheWay.Id, Grouping.Members(after, [a, dragged, onTheWay]).Select(member => member.Id));
+    }
 }

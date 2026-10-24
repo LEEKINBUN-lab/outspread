@@ -140,15 +140,15 @@ public sealed partial class MainWindow
     {
         var host = new StackPanel
         {
-            Spacing = 2,
+            Spacing = 10,
             Opacity = 0,
         };
 
-        _railGroup = RoundButton("NoteRailGroup", GroupIcon(RailInk()), "分组（点＝菜单，按住拖＝拖入/拖出）");
-        _railColor = RoundButton("NoteRailColor", PaletteIcon(RailInk()), "换色");
+        _railGroup = RoundButton("NoteRailGroup", GroupIcon(), "分组（点＝菜单，按住拖＝拖入/拖出）");
+        _railColor = RoundButton("NoteRailColor", ColorWheelIcon(), "换色");
 
         // 删的红现在长在图形本身，不再长在圈上——静止那一档根本没有圈。
-        _railDelete = RoundButton("NoteRailDelete", TrashIcon(new SolidColorBrush(RailDangerInk)), "删掉这格");
+        _railDelete = RoundButton("NoteRailDelete", TrashIcon(), "删掉这格");
 
         host.Children.Add(_railGroup);
         host.Children.Add(_railColor);
@@ -156,18 +156,10 @@ public sealed partial class MainWindow
 
         WireRailButtons();
 
-        var backing = new Border
-        {
-            CornerRadius = new CornerRadius(RailCornerPx),
-            BorderThickness = new Thickness(RailHairlinePx),
-            Padding = new Thickness(RailPadPx),
-            Child = host,
-        };
-
         var shell = new Border
         {
             Name = "NoteRail",
-            Child = backing,
+            Child = host,
             Visibility = Visibility.Collapsed,
             IsHitTestVisible = true,
         };
@@ -181,23 +173,10 @@ public sealed partial class MainWindow
         return shell;
     }
 
-    /// <summary>图标那三枚的墨色：跟着纸面走，深浅两档各一个值。</summary>
-    private static SolidColorBrush RailInk()
-        => new(NoteStyling.ToColor(Sheet.Ink(NoteStyling.IsDark)));
-
-    /// <summary>纸上那一档底色：图标里"挖洞"与挡住后面那枚卡片都靠它。</summary>
-    private static SolidColorBrush FaceBrush()
-        => new(NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark)));
-
     /// <summary>圆钮本体直径——令牌里那一个数，色板落位与命中区都按它算。</summary>
     private const double RailButtonPx = ControlKit.ButtonPx;
 
-    /// <summary>整条浮层底的内衬与圆角：三枚钮坐在同一张底上，不再各套一个常驻圆圈。</summary>
-    private const double RailPadPx = 3;
-
-    private const double RailCornerPx = 8;
-
-    /// <summary>浮层底那一圈发丝：1 逻辑像素。钮自己不再有发丝——静止时三家都不画。</summary>
+    /// <summary>纸面那一圈发丝：1 逻辑像素（上一版是 1.25，小数宽度本身就是一条灰边）。</summary>
     private const double RailHairlinePx = 1;
 
     private static readonly Color RailDangerInk = Color.FromArgb(255, 0xD3, 0x2F, 0x2F);
@@ -219,6 +198,7 @@ public sealed partial class MainWindow
             Height = RailButtonPx,
         };
 
+        stack.Children.Add(new Ellipse { Width = RailButtonPx, Height = RailButtonPx, IsHitTestVisible = false });
         stack.Children.Add(new Ellipse { Width = RailButtonPx, Height = RailButtonPx, Opacity = 0, IsHitTestVisible = false });
         stack.Children.Add(new Ellipse { Width = RailButtonPx, Height = RailButtonPx, Opacity = 0, IsHitTestVisible = false });
         stack.Children.Add(new Ellipse
@@ -254,10 +234,10 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// 一枚钮的三层状态：悬停层、按压层、组钮激活环。按加入顺序取——顺序变了自检会红，
+    /// 一枚钮的四层：纸面、悬停层、按压层、组钮激活环。按加入顺序取——顺序变了自检会红，
     /// 因为时长与哪一层该出现在哪一档，全靠这个顺序对上。
     /// </summary>
-    private static (Ellipse Hover, Ellipse Press, Ellipse Ring)? LayersOf(Border button)
+    private static (Ellipse Face, Ellipse Hover, Ellipse Press, Ellipse Ring)? LayersOf(Border button)
     {
         if (button.Child is not Grid grid)
         {
@@ -266,9 +246,9 @@ public sealed partial class MainWindow
 
         var layers = grid.Children.OfType<Ellipse>().ToList();
 
-        return layers.Count < 3
+        return layers.Count < 4
             ? null
-            : (layers[0], layers[1], layers[2]);
+            : (layers[0], layers[1], layers[2], layers[3]);
     }
 
     /// <summary>一层的颜色：静止时它是透明的，所以这里只定"上来了有多深"。</summary>
@@ -281,28 +261,25 @@ public sealed partial class MainWindow
 
         var dark = NoteStyling.IsDark;
         var ink = NoteStyling.ToColor(Sheet.Ink(dark));
+        var paper = NoteStyling.ToColor(SelectionChrome.HandleFace(dark));
 
+        layers.Face.Fill = new SolidColorBrush(paper);
+        layers.Face.Stroke = new SolidColorBrush(AtAlpha(dark ? Colors.White : Colors.Black, SelectionChrome.HandleEdgeAlpha(dark)));
+        layers.Face.StrokeThickness = RailHairlinePx;
         layers.Hover.Fill = new SolidColorBrush(AtAlpha(ink, ControlKit.HoverAlpha));
         layers.Press.Fill = new SolidColorBrush(AtAlpha(ink, ControlKit.PressAlpha));
         layers.Ring.Stroke = new SolidColorBrush(AtAlpha(NoteStyling.ToColor(SelectionChrome.Ring(dark)), 0.9));
     }
 
-    /// <summary>
-    /// 整条浮层底：一张纸、一圈 1px 发丝。钮自己静止时不带圈——Chrome／Fluent／M3 三家的
-    /// 浮动条都是"一条底＋只在指针上来时出现的圆面"，原来那三圈常驻发丝是这里唯一多出来的东西。
-    /// </summary>
+    /// <summary>换主题时把三枚的纸面、发丝与状态层颜色一起跟上。</summary>
     private void PaintRailSurface()
     {
-        if (_rail?.Child is not Border backing)
+        if (_rail is null)
         {
             return;
         }
 
-        var dark = NoteStyling.IsDark;
-
-        _railSurfaceDark = dark;
-        backing.Background = new SolidColorBrush(NoteStyling.ToColor(SelectionChrome.HandleFace(dark)));
-        backing.BorderBrush = new SolidColorBrush(AtAlpha(dark ? Colors.White : Colors.Black, SelectionChrome.HandleEdgeAlpha(dark)));
+        _railSurfaceDark = NoteStyling.IsDark;
 
         foreach (var button in new[] { _railGroup, _railColor, _railDelete })
         {
@@ -381,268 +358,266 @@ public sealed partial class MainWindow
         return Math.Round(value * scale) / scale;
     }
 
-    // 三枚图标按最终尺寸直接落笔：20 画布、2 像素笔画、坐标全在整数格上、开口笔画两端补圆点当线帽。
-    // 为什么不再走"24 网格 + Viewbox 缩到 16"那一发：它把 1.5 的笔画稀释成落屏 1.0，又把每个整数
-    // 坐标乘上 2/3 变成 4.667 这种小数——一条线被摊到两行像素上，就是他 10-24 说的"晕染"。
-    // 三个参照系走的都是另一条路：笔画按档重画，不靠缩放（实测 Fluent 图标 16px 档 1.0／24px 档 1.5，
-    // IBM 20px 档 1.25，Chrome 把 ~1.9dp 的重量直接烘进填充形状）。
-    // 圆头线帽在 C# 里确实拿不到（那个枚举的命名空间两个全名都报 CS0234，XAML 侧才认），
-    // 所以开口笔画的两端各补一枚直径＝笔画的实心圆点——视觉等价，而且自检量得到。
-    // 其余六个量（钮径、光学盒、状态层、时长）都在 ControlKit 里，一处写死。
+    // 三枚图标是"自己画线稿"那一发被否掉之后取回来的原样：虚线框＋实心块＝组、
+    // 72 片色轮＝换色、系统字形 E74D＝删。留这一段记号，别再顺手重画一遍：
+    // 10-24 我为此试过三版线稿（24 网格 1.5 描边、20 画布 2 像素带圆头、圆头补点），
+    // 他的判语是"现在的图标还不如我们修改图标集之前的版本"。原因不在尺寸或粗细——
+    // 色轮那一枚是**带颜色**的，任何线稿调色盘都没有颜色可看；垃圾桶那类通用符号
+    // 本就该交给系统字体，它的字形是按字号调过 hinting 的。
+    // 控件层（纸面圆盘、悬停/按压状态层与时长）保留，那部分他没说退。
 
-    private const double IconCanvasPx = ControlKit.GlyphCanvasPx;
-
-    private double RasterizationScale => BoardArea.XamlRoot?.RasterizationScale ?? 1;
-
-    /// <summary>落整设备像素的那条笔画：96 DPI 下就是 2，125% 下自动升到 3 个物理像素。</summary>
-    private double IconStrokePx => ControlKit.CrispStroke(RasterizationScale, ControlKit.GlyphStrokePx);
-
-    /// <summary>组＝两枚卡片前后叠压，前面那枚用面色挡住后面那枚的边。</summary>
-    private UIElement GroupIcon(SolidColorBrush ink)
+    private static UIElement GroupIcon()
     {
-        var canvas = IconCanvas();
+        var ink = new SolidColorBrush(NoteStyling.InkFor(NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark))));
 
-        IconRect(canvas, ink, 7, 3, 10, 10, 2);
-        IconRect(canvas, ink, 3, 7, 10, 10, 2, FaceBrush());
+        var grid = new Grid { Width = 20, Height = 20, IsHitTestVisible = false };
 
-        return canvas;
-    }
-
-    /// <summary>
-    /// 换色＝一枚带指孔的调色盘：圈＋右下角挖一个面色孔＋板上三滴。
-    /// 原来那枚 72 片色轮读起来最像"调色"，但它和另两枚不是一档笔画——他这轮要的是"一套"。
-    /// 要退回去：<c>git show 92c3ecd~1</c> 里那份 ColorWheelIcon 整段贴回来（连带 HsvToColor）。
-    /// </summary>
-    private UIElement PaletteIcon(SolidColorBrush ink)
-    {
-        var canvas = IconCanvas();
-        var w = IconStrokePx;
-
-        IconRing(canvas, ink, 10, 10, 7);
-        IconDot(canvas, FaceBrush(), 15, 15, w);
-        IconDot(canvas, ink, 6.5, 8, 1.5);
-        IconDot(canvas, ink, 10, 5.5, 1.5);
-        IconDot(canvas, ink, 13.5, 8, 1.5);
-
-        return canvas;
-    }
-
-    private UIElement TrashIcon(SolidColorBrush ink)
-    {
-        var canvas = IconCanvas();
-
-        IconStroke(canvas, ink, (3, 5), (17, 5));
-        IconStroke(canvas, ink, (8, 5), (8, 3), (12, 3), (12, 5));
-        IconStroke(canvas, ink, (5, 8), (5, 17), (15, 17), (15, 8));
-        IconStroke(canvas, ink, (8, 11), (8, 15));
-        IconStroke(canvas, ink, (12, 11), (12, 15));
-
-        return canvas;
-    }
-
-    /// <summary>一枚图标的画布：20×20，最终尺寸，外面不再套任何缩放。</summary>
-    private static Canvas IconCanvas() => new() { Width = IconCanvasPx, Height = IconCanvasPx, IsHitTestVisible = false };
-
-    /// <summary>
-    /// 一条开口笔画：本体＋两端各一枚圆点。圆点就是圆头线帽的替身——
-    /// 这个投影的 C# 拿不到 StrokeStartLineCap，而稿子那三枚的观感一半在圆头上。
-    /// </summary>
-    private void IconStroke(Canvas canvas, SolidColorBrush ink, params (double X, double Y)[] points)
-    {
-        var w = IconStrokePx;
-
-        if (points.Length == 2)
+        grid.Children.Add(new Rectangle
         {
-            canvas.Children.Add(new Line
-            {
-                X1 = points[0].X,
-                Y1 = points[0].Y,
-                X2 = points[1].X,
-                Y2 = points[1].Y,
-                Stroke = ink,
-                StrokeThickness = w,
-            });
-        }
-        else
-        {
-            var polyline = new Polyline { Stroke = ink, StrokeThickness = w };
-
-            foreach (var (x, y) in points)
-            {
-                polyline.Points.Add(new Point(x, y));
-            }
-
-            canvas.Children.Add(polyline);
-        }
-
-        IconDot(canvas, ink, points[0].X, points[0].Y, w / 2);
-        IconDot(canvas, ink, points[^1].X, points[^1].Y, w / 2);
-    }
-
-    private void IconRect(Canvas canvas, SolidColorBrush ink, double x, double y, double width, double height, double radius, SolidColorBrush? fill = null)
-    {
-        var rect = new Rectangle
-        {
-            Width = width,
-            Height = height,
-            RadiusX = radius,
-            RadiusY = radius,
+            Width = 15,
+            Height = 15,
+            RadiusX = 2.5,
+            RadiusY = 2.5,
             Stroke = ink,
-            StrokeThickness = IconStrokePx,
-        };
+            StrokeThickness = 1.5,
+            StrokeDashArray = [3, 2.2],
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
 
-        if (fill is { } face)
+        grid.Children.Add(new Rectangle
         {
-            rect.Fill = face;
-        }
-
-        Canvas.SetLeft(rect, x);
-        Canvas.SetTop(rect, y);
-        canvas.Children.Add(rect);
-    }
-
-    /// <summary>一圈闭合的描边（调色盘的外廓）：闭合曲线没有端点，所以不需要线帽。</summary>
-    private void IconRing(Canvas canvas, SolidColorBrush ink, double cx, double cy, double radius)
-    {
-        var ring = new Ellipse
-        {
-            Width = radius * 2,
-            Height = radius * 2,
-            Stroke = ink,
-            StrokeThickness = IconStrokePx,
-        };
-
-        Canvas.SetLeft(ring, cx - radius);
-        Canvas.SetTop(ring, cy - radius);
-        canvas.Children.Add(ring);
-    }
-
-    private static void IconDot(Canvas canvas, SolidColorBrush ink, double cx, double cy, double radius)
-    {
-        var dot = new Ellipse
-        {
-            Width = radius * 2,
-            Height = radius * 2,
+            Width = 7,
+            Height = 7,
+            RadiusX = 1.5,
+            RadiusY = 1.5,
             Fill = ink,
-        };
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
 
-        Canvas.SetLeft(dot, cx - radius);
-        Canvas.SetTop(dot, cy - radius);
-        canvas.Children.Add(dot);
+        return grid;
     }
 
     /// <summary>
-    /// 三枚图标的画法凭据：同一张最终尺寸的画布、同一条落整设备像素的笔画、坐标全在半格网格上、
-    /// 链路上不许再有 Viewbox，且每一条开口笔画两端都有圆点。
+    /// 换色钮：一枚自然晕染的色轮（色相绕圈、越靠圆心越淡到白）。WinUI 这版没有 ConicGradientBrush，
+    /// 就用连续插值的扇形拼出色相环，再压一层"白心→透明"的径向渐变当饱和度衰减——
+    /// 72 片在 22px 下接缝看不出来，读起来就是一张调色的色盘；最外一圈发丝把这圈色收干净。
+    /// </summary>
+    private static UIElement ColorWheelIcon()
+    {
+        var grid = new Grid { Width = 22, Height = 22, IsHitTestVisible = false };
+
+        const double cx = 11, cy = 11, r = 10;
+        const int slices = 72;
+        var step = System.Math.PI * 2 / slices;
+
+        for (var i = 0; i < slices; i++)
+        {
+            var a0 = i * step;
+            var a1 = (i + 1) * step;
+            var color = HsvToColor(360.0 * i / slices, 1, 1);
+
+            var figure = new PathFigure
+            {
+                StartPoint = new Point(cx + (r * System.Math.Cos(a0)), cy + (r * System.Math.Sin(a0))),
+                IsClosed = true,
+            };
+
+            figure.Segments.Add(new ArcSegment
+            {
+                Point = new Point(cx + (r * System.Math.Cos(a1)), cy + (r * System.Math.Sin(a1))),
+                Size = new Size(r, r),
+                SweepDirection = SweepDirection.Clockwise,
+                IsLargeArc = false,
+            });
+
+            figure.Segments.Add(new LineSegment { Point = new Point(cx, cy) });
+
+            var geometry = new PathGeometry();
+            geometry.Figures.Add(figure);
+
+            grid.Children.Add(new Microsoft.UI.Xaml.Shapes.Path { Data = geometry, Fill = new SolidColorBrush(color) });
+        }
+
+        grid.Children.Add(new Ellipse
+        {
+            Width = r * 2,
+            Height = r * 2,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+            Stroke = new SolidColorBrush(Color.FromArgb(30, 0, 0, 0)),
+            StrokeThickness = 1,
+        });
+
+        grid.Children.Add(new Ellipse
+        {
+            Width = r * 2,
+            Height = r * 2,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+            Fill = new RadialGradientBrush
+            {
+                GradientOrigin = new Point(0.5, 0.5),
+                Center = new Point(0.5, 0.5),
+                RadiusX = 0.5,
+                RadiusY = 0.5,
+                GradientStops =
+                {
+                    new GradientStop { Color = Color.FromArgb(255, 255, 255, 255), Offset = 0 },
+                    new GradientStop { Color = Color.FromArgb(0, 255, 255, 255), Offset = 0.72 },
+                },
+            },
+        });
+
+        return grid;
+    }
+
+    private static Color HsvToColor(double h, double s, double v)
+    {
+        var c = v * s;
+        var x = c * (1 - System.Math.Abs(((h / 60) % 2) - 1));
+        var m = v - c;
+
+        var (r1, g1, b1) = h switch
+        {
+            < 60 => (c, x, 0.0),
+            < 120 => (x, c, 0.0),
+            < 180 => (0.0, c, x),
+            < 240 => (0.0, x, c),
+            < 300 => (x, 0.0, c),
+            _ => (c, 0.0, x),
+        };
+
+        return Color.FromArgb(
+            255,
+            (byte)System.Math.Round((r1 + m) * 255),
+            (byte)System.Math.Round((g1 + m) * 255),
+            (byte)System.Math.Round((b1 + m) * 255));
+    }
+
+    /// <summary>删＝系统自带的垃圾桶字形：那类通用符号的字形已被针对字号调过，不该自己拼。</summary>
+    private static UIElement TrashIcon()
+        => new FontIcon
+        {
+            Glyph = "\uE74D",
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontSize = 18,
+            Foreground = new SolidColorBrush(RailDangerInk),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+        };
+
+    /// <summary>
+    /// 操作条那三枚的画法凭据：每枚都是"纸面＋悬停层＋按压层＋激活环"四层叠出来的，
+    /// 静止时后三层必须完全透明，两层的墨占比要等于令牌，删除那枚的图形必须是系统垃圾桶且是红的。
     /// </summary>
     /// <remarks>
-    /// 这四条各锁一次他 10-24 报过的缺陷：不一致（"三枚各画各的"）、太细（稀释成 1.0）、
-    /// 晕染（缩放松把坐标变成小数）、平头（"和稿不一样"）。判据全部读实物视觉树，不读注释。
+    /// 10-24 这一发锁的是**控件层**，不是图形：图形他自己判过"自绘三版都不如原样"，
+    /// 所以图形退回原样、不再锁形状；而"点下去有没有反馈"这一格是新加的，正是他说的
+    /// "一用起来就天差地别"那一半，得钉住——三层顺序错了、静止时漏出一层、
+    /// 或者谁把状态层改成"瞬间换背景色"，这一发都会红。
     /// </remarks>
-    private void SelfTestRailIconSet(List<string> problems)
+    private void SelfTestRailStateLayers(List<string> problems)
     {
-        if (_railGroup is null || _railColor is null || _railDelete is null)
+        var buttons = new[]
         {
-            problems.Add("自检图标集: 操作条没建出来（三枚钮读不到）");
+            (_railGroup, "组"), (_railColor, "色"), (_railDelete, "删"),
+        };
+
+        if (buttons.Any(candidate => candidate.Item1 is null))
+        {
+            problems.Add("自检状态层: 操作条没建出来（三枚钮读不到）");
 
             return;
         }
 
-        var scale = RasterizationScale;
-        var expected = IconStrokePx;
-
-        if (!ControlKit.IsCrispStroke(scale, expected))
-        {
-            problems.Add($"自检图标集: 令牌给的笔画 {expected:0.###} 在 {scale:0.##}× 缩放下落不到整设备像素——这就是晕染");
-        }
-
-        var strokes = new List<double>();
-        var buttons = new[] { (_railGroup, "组"), (_railColor, "色"), (_railDelete, "删") };
-
         foreach (var (button, name) in buttons)
         {
-            // 圆钮：Border → Grid（三层状态 ＋ 一枚画布）。画布必须直接坐在 Grid 里，中间不许有缩放。
-            var grid = button.Child as Grid;
-            var canvas = grid?.Children.OfType<Canvas>().FirstOrDefault();
-
-            if (grid is null || canvas is null)
+            if (button is null)
             {
-                problems.Add(
-                    $"自检图标集: {name} 那枚不是「Grid 直接套画布」这一形" +
-                    $"（读到 {(grid?.Children.Count.ToString() ?? "不是 Grid")} 件，画布 {(canvas is null ? "没找到" : "在")}）");
+                continue;
+            }
+
+            if (LayersOf(button) is not { } layers)
+            {
+                problems.Add($"自检状态层: {name} 那枚不是「纸面＋悬停＋按压＋环」四层这一形");
 
                 continue;
             }
 
-            if (grid.Children.OfType<Viewbox>().Any())
+            if (layers.Face.Opacity < 0.99 || layers.Face.StrokeThickness <= 0)
             {
-                problems.Add($"自检图标集: {name} 那枚又被 Viewbox 套了一层——缩放会把笔画稀释、把坐标变成小数");
+                problems.Add($"自检状态层: {name} 那枚的纸面不透明或没有发丝（面 {layers.Face.Opacity:0.##}、线 {layers.Face.StrokeThickness:0.##}）");
             }
 
-            if (canvas.Width != IconCanvasPx)
+            if (_railGroupActive)
             {
-                problems.Add($"自检图标集: {name} 那枚画布是 {canvas.Width:0.#}，应是最终尺寸 {IconCanvasPx:0.#}");
+                continue;
             }
 
-            var shapes = canvas.Children.OfType<Shape>().ToList();
-            var dots = shapes.Where(shape => shape.Stroke is null && shape.Fill is not null).OfType<Ellipse>().ToList();
-            var open = shapes.OfType<Line>().Select(line => new[] { new Point(line.X1, line.Y1), new Point(line.X2, line.Y2) })
-                .Concat(shapes.OfType<Polyline>().Select(poly => poly.Points.ToArray()))
-                .ToList();
-
-            if (shapes.Count == 0)
+            if (layers.Hover.Opacity > 0.01 || layers.Press.Opacity > 0.01 || layers.Ring.Opacity > 0.01)
             {
-                problems.Add($"自检图标集: {name} 那枚画布上一个形状都没有");
+                problems.Add(
+                    $"自检状态层: {name} 那枚静止时还有层没退干净（悬 {layers.Hover.Opacity:0.##}、按 {layers.Press.Opacity:0.##}、环 {layers.Ring.Opacity:0.##}）");
             }
 
-            // 开口笔画（有端点的那种）才需要圆点收尾；两枚卡片与那圈调色盘是闭合的，本来就没有端点。
-            if (open.Count > 0 && dots.Count == 0)
-            {
-                problems.Add($"自检图标集: {name} 那枚有 {open.Count} 条开口笔画却没有一枚圆点——端点是平的，稿子上是圆头");
-            }
-
-            strokes.AddRange(shapes.Where(shape => shape.Stroke is not null).Select(shape => shape.StrokeThickness));
-
-            foreach (var point in open.SelectMany(shape => shape).Concat(
-                         shapes.OfType<Rectangle>().SelectMany(rect => new[]
-                         {
-                             new Point(Canvas.GetLeft(rect), Canvas.GetTop(rect)),
-                             new Point(Canvas.GetLeft(rect) + rect.Width, Canvas.GetTop(rect) + rect.Height),
-                         })))
-            {
-                if (!ControlKit.OnPixelGrid(point.X) || !ControlKit.OnPixelGrid(point.Y))
-                {
-                    problems.Add($"自检图标集: {name} 那枚有坐标落在半格网格外（{point.X:0.###},{point.Y:0.###}）——边缘会摊到两行像素上");
-
-                    break;
-                }
-            }
-
-            var misses = open.SelectMany(shape => new[] { shape.First(), shape.Last() })
-                .Count(end => dots.All(dot => System.Math.Abs(Canvas.GetLeft(dot) + dot.Width / 2 - end.X) > 0.75
-                    || System.Math.Abs(Canvas.GetTop(dot) + dot.Height / 2 - end.Y) > 0.75));
-
-            if (misses > 0)
-            {
-                problems.Add($"自检图标集: {name} 那枚有 {misses} 个端点没有圆点收尾——端点是平的，稿子上是圆头");
-            }
+            ExpectAlpha(layers, name, "悬停", layers.Hover, ControlKit.HoverAlpha, problems);
+            ExpectAlpha(layers, name, "按压", layers.Press, ControlKit.PressAlpha, problems);
         }
 
-        if (strokes.Count == 0 || strokes.Any(thickness => Math.Abs(thickness - expected) > 0.001))
+        if (_railDelete?.Child is Grid deleteGrid && deleteGrid.Children.OfType<FontIcon>().FirstOrDefault() is { } trash)
         {
-            problems.Add(
-                $"自检图标集: 描边粗细不是一套——读到 {string.Join("、", strokes.Distinct().Select(value => value.ToString("0.##")))}，" +
-                $"应全是 {expected:0.###}");
+            if (trash.Glyph != "" || trash.FontFamily.Source != "Segoe MDL2 Assets")
+            {
+                problems.Add($"自检状态层: 删那枚不再是系统垃圾桶字形（读到 {trash.Glyph} / {trash.FontFamily.Source}）");
+            }
+
+            if (trash.Foreground is not SolidColorBrush brush || brush.Color != RailDangerInk)
+            {
+                problems.Add("自检状态层: 删那枚的图形不是危险红");
+            }
+        }
+        else
+        {
+            problems.Add("自检状态层: 删那枚里读不到 FontIcon");
         }
 
         Diagnostics.Write(
-            $"selftest 图标集: 三枚都是 {IconCanvasPx:0} 画布直接落笔（无 Viewbox）、笔画 {strokes.Count} 条全 " +
-            $"{expected:0.###} 逻辑像素＝{expected * scale:0.##} 物理像素、端点带圆头");
+            $"selftest 状态层: 三枚都是纸面＋悬停 {ControlKit.HoverAlpha:0.###}＋按压 {ControlKit.PressAlpha:0.###}＋环，" +
+            $"静止时后三层全透明；进 {ControlKit.HoverInMs:0}ms／退 {ControlKit.HoverOutMs:0}ms／按 {ControlKit.PressMs:0}ms");
     }
+
+    private static void ExpectAlpha(
+        (Ellipse Face, Ellipse Hover, Ellipse Press, Ellipse Ring) layers,
+        string name,
+        string which,
+        Ellipse layer,
+        double expected,
+        List<string> problems)
+    {
+        if (layer.Fill is not SolidColorBrush brush)
+        {
+            problems.Add($"自检状态层: {name} 那枚的{which}层没有刷子");
+
+            return;
+        }
+
+        var read = brush.Color.A / 255d;
+
+        if (System.Math.Abs(read - expected) > 0.02)
+        {
+            problems.Add($"自检状态层: {name} 那枚的{which}层墨占比是 {read:0.###}，令牌给的是 {expected:0.###}");
+        }
+    }
+
 
     private void AnimateRailIn()
     {
-        var host = (StackPanel)((Border)_rail!.Child).Child;
+        var host = (StackPanel)_rail!.Child;
         host.Opacity = 1;
         _rail.Opacity = 1;
 
@@ -1224,8 +1199,7 @@ public sealed partial class MainWindow
 
         const double swatch = 30;
         const double gap = 12;
-        // 整条的外沿宽：一枚钮 ＋ 两侧内衬 ＋ 两侧发丝。色板贴的是这条，不是单枚钮。
-        const double railWidth = RailButtonPx + 2 * (RailPadPx + RailHairlinePx);
+        const double railWidth = RailButtonPx;
         var height = ColourSwatches.Length * swatch + (ColourSwatches.Length - 1) * 8;
 
         // 贴在操作条那一列的旁边、离便签远的那一侧；贴不下就翻到另一侧。

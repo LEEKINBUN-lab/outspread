@@ -5032,7 +5032,8 @@ public sealed partial class MainWindow : Window
         SelfTestChromeComesBackAfterFade(problems);
 
         // 操作条三枚图标是同一档画法（10-24 他在比稿页上点了 B 档）。
-        SelfTestRailIconSet(problems);
+        SelfTestRailStateLayers(problems);
+        SelfTestTabHoverDoesNotShift(problems);
 
         // 一块丢了图的板子也要开得成：那一格写"未找到"，而不是把窗口打死（10-23 撞上的那一发）。
         SelfTestMissingImageTile(problems);

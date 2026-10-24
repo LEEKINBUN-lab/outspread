@@ -81,20 +81,15 @@ public static class Motion
 /// </remarks>
 public static class ControlKit
 {
-    /// <summary>圆钮本体直径：Chrome 工具栏钮的 34。</summary>
-    public const double ButtonPx = 34;
-
-    /// <summary>图标画布：Chrome 的 <c>kDefaultIconSizeChromeRefresh = 20</c>。</summary>
-    public const double GlyphCanvasPx = 20;
-
     /// <summary>
-    /// 笔画宽度。取 2 而不是稿子上的 1.5：1.5 这类小数在 96 DPI 上必然横跨两行像素，抗锯齿把它
-    /// 摊成一条灰边。2 落整像素，而且正好是 Chrome（~1.9dp 烘进填充）与 M3（2dp@24）那一档重量。
+    /// 圆钮本体直径。34 那一档配 20 画布是 Chrome 的比（0.59），但我们这三枚浮在板面上、
+    /// 底下没有工具栏那条底，缩到 34 就把图形顶满了——10-24 他判"变胖变粗一大圈"。
+    /// 38 配 24 画布仍是 0.63，且笔画 2 在 24 网格上就是 Material 的 2dp/24 那一档。
     /// </summary>
-    public const double GlyphStrokePx = 2;
+    public const double ButtonPx = 38;
 
-    /// <summary>光学盒：画布的 80%（Apple HIG："image occupies about 80% of the canvas"）。</summary>
-    public const double GlyphLivePx = 16;
+
+
 
     /// <summary>悬停那一层的墨占比：Chrome 的 0x14/255≈7.8%。</summary>
     public const double HoverAlpha = 0.078;
@@ -111,31 +106,8 @@ public static class ControlKit
     /// <summary>按下：Fluent 的 90ms 进。</summary>
     public const double PressMs = 90;
 
-    /// <summary>
-    /// 把逻辑笔画换算成"落满整设备像素"的那一档：先乘缩放取整，再除回来。
-    /// 96 DPI（scale=1）下 2 就是 2；125% 下 2×1.25=2.5 → 3 个物理像素 → 2.4 逻辑。
-    /// </summary>
-    public static double CrispStroke(double rasterizationScale, double logical = GlyphStrokePx)
-    {
-        var scale = rasterizationScale > 0 ? rasterizationScale : 1;
 
-        return Math.Max(1, Math.Round(logical * scale, MidpointRounding.AwayFromZero)) / scale;
-    }
 
-    /// <summary>这条笔画在给定缩放下是否落整设备像素——"晕染"的直接判据。</summary>
-    public static bool IsCrispStroke(double rasterizationScale, double logical)
-    {
-        var physical = logical * rasterizationScale;
-
-        return Math.Abs(physical - Math.Round(physical, MidpointRounding.AwayFromZero)) < 1e-9;
-    }
-
-    /// <summary>
-    /// 坐标是否落在半格网格上。直线笔画的中线在 0.5 的整数倍、宽度取整像素时，边缘才正好压住像素边界；
-    /// 否则一条 2 像素的线会被摊成 3 行（1/2/1 或 1/1/1）——看上去就是发虚。
-    /// </summary>
-    public static bool OnPixelGrid(double value)
-        => Math.Abs(value * 2 - Math.Round(value * 2)) < 1e-9;
 }
 
 /// <summary>

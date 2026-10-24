@@ -126,8 +126,13 @@ public sealed partial class MainWindow
             ["TabViewItemHeaderCloseMargin"] = new Thickness(0),
             ["TabViewItemSeparatorMargin"] = new Thickness(0, TabStrip.SeparatorInset, 0, TabStrip.SeparatorInset),
             ["TabViewItemBorderThickness"] = new Thickness(0),
-            ["TabViewSelectedItemBorderThickness"] = new Thickness(1, 1, 1, 0),
-            ["TabViewSelectedItemHeaderMargin"] = new Thickness(-1, 0, -1, 0),
+
+            // 活动格那一圈 1px 边必须撤掉，否则悬停会挪位（10-24 他："鼠标移动上去位置还会变化"）：
+            // 模板在 Selected 态给 (1,1,1,0)、在 PointerOver 态换成 TabViewItemBorderThickness(0)，
+            // 上沿那 1 像素一有一无，垂直居中的表头就在 5.5 与 5 之间跳——自检量到的正是这半像素。
+            // 活动那一格靠白底与左右分隔线说话，不靠这圈边（Chrome 的活动标签也没有边）。
+            ["TabViewSelectedItemBorderThickness"] = new Thickness(0),
+            ["TabViewSelectedItemHeaderMargin"] = new Thickness(0),
         };
 
         resources.ThemeDictionaries["Light"] = TabPalette(dark: false);
@@ -884,6 +889,91 @@ public sealed partial class MainWindow
 
     /// <summary>活动那一枚用正文墨、其余退回静音墨；悬停的静音标签临时提成正文墨。
     /// × 只在"可关 且（活动或悬停）"时出现，位置与宽度始终占着，不参与布局。</summary>
+    /// <summary>
+    /// 悬停一格标签不许挪动任何东西（10-24 他："鼠标移动上去位置还会变化"）。
+    /// 两条路各测一次：WinUI 自己的 PointerOver 视觉状态，以及我们那发 PaintHeader——
+    /// 位移只可能来自这两处之一，分开测才知道该怪谁。
+    /// </summary>
+    private void SelfTestTabHoverDoesNotShift(List<string> problems)
+    {
+        var items = BoardTabs.TabItems.OfType<TabViewItem>().ToList();
+
+        if (items.Count == 0)
+        {
+            problems.Add("自检标签悬停: 标签条一枚都没有，这一发不适用");
+
+            return;
+        }
+
+        (double HeaderX, double HeaderY, double ItemX, double ItemW) Read(TabViewItem item)
+        {
+            var onStrip = item.TransformToVisual(BoardTabs).TransformPoint(new Point(0, 0));
+
+            if (item.Header is not UIElement header)
+            {
+                return (0, 0, onStrip.X, item.ActualWidth);
+            }
+
+            var inItem = header.TransformToVisual(item).TransformPoint(new Point(0, 0));
+
+            return (inItem.X, inItem.Y, onStrip.X, item.ActualWidth);
+        }
+
+        var normal = items.Select(Read).ToList();
+
+        // 两把尺分开量：先只走平台的视觉状态，再只走我们那发 PaintHeader，
+        // 才知道那半像素该怪模板还是怪我们自己。
+        foreach (var item in items)
+        {
+            VisualStateManager.GoToState(item, "PointerOver", true);
+        }
+
+        BoardTabs.UpdateLayout();
+
+        var afterState = items.Select(Read).ToList();
+
+        foreach (var item in items)
+        {
+            PaintHeader(item, hovered: true);
+        }
+
+        BoardTabs.UpdateLayout();
+
+        var hovered = items.Select(Read).ToList();
+
+        foreach (var item in items)
+        {
+            VisualStateManager.GoToState(item, "Normal", true);
+            PaintHeader(item, hovered: false);
+        }
+
+        BoardTabs.UpdateLayout();
+
+        var moved = new List<string>();
+
+        for (var i = 0; i < items.Count; i++)
+        {
+            var before = normal[i];
+            var after = hovered[i];
+
+            if (Math.Abs(after.HeaderX - before.HeaderX) > 0.01 || Math.Abs(after.HeaderY - before.HeaderY) > 0.01
+                || Math.Abs(after.ItemX - before.ItemX) > 0.01 || Math.Abs(after.ItemW - before.ItemW) > 0.01)
+            {
+                moved.Add($"第 {i + 1} 枚：只走视觉状态时表头 ({before.HeaderX:0.##},{before.HeaderY:0.##})→({afterState[i].HeaderX:0.##},{afterState[i].HeaderY:0.##})，"
+                    + $"再走 PaintHeader 后 →({after.HeaderX:0.##},{after.HeaderY:0.##})、格 x {before.ItemX:0.##}→{after.ItemX:0.##}、宽 {before.ItemW:0.##}→{after.ItemW:0.##}");
+            }
+        }
+
+        if (moved.Count > 0)
+        {
+            problems.Add("自检标签悬停: 悬停把标签挪位了：" + string.Join("；", moved));
+
+            return;
+        }
+
+        Diagnostics.Write($"selftest 标签悬停: {items.Count} 枚悬停前后表头与格位都未变（两把尺各测一次）");
+    }
+
     private void PaintHeader(TabViewItem item, bool hovered)
     {
         if (item.Header is not Grid header || item.Tag is not string path)

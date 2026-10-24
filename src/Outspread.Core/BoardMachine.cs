@@ -78,10 +78,13 @@ public static class BoardMachine
     /// <summary>What a press is, as far as the machine cares.</summary>
     /// <param name="OnNode">The press landed on a note rather than on empty board.</param>
     /// <param name="Edge">Which edge of that note it landed on (within the band), or null.</param>
+    /// <remarks>
+    /// 这里没有"空格按没按"这一格：10-24 他把"空格＋拖＝平移"撤了，空格从此不进判定（按一下＝复位，
+    /// 归 <c>Cheatsheet</c> 那一层）。多一个入参就等于把那条撤掉的规矩留在词汇表里。
+    /// </remarks>
     public readonly record struct PressFacts(
         bool Right,
         bool Left,
-        bool Space,
         bool Additive,
         bool OnNode,
         string? Edge = null);
@@ -137,7 +140,7 @@ public static class BoardMachine
 
         if (!press.OnNode)
         {
-            return BoardGestures.OnEmptyPress(press.Right, press.Left, press.Space) switch
+            return BoardGestures.OnEmptyPress(press.Right, press.Left) switch
             {
                 SurfaceAction.Pan => (new Interaction(Phase.Pressed, PointerOp.Pan, press.Additive), BeginEffect.StartPan),
                 SurfaceAction.Marquee => (new Interaction(Phase.Pressed, PointerOp.Marquee, press.Additive), BeginEffect.StartMarquee),
@@ -152,7 +155,7 @@ public static class BoardMachine
             return (new Interaction(Phase.Pressed, PointerOp.Pan, press.Additive), BeginEffect.StartPan);
         }
 
-        if (!press.Left || press.Space)
+        if (!press.Left)
         {
             return (now, BeginEffect.Nothing);
         }

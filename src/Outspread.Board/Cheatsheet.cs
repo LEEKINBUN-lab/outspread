@@ -30,11 +30,9 @@ public sealed partial class MainWindow
     private bool _cheatsheetOpen;
 
     /// <summary>空格是板子的键（按一下＝回到默认位置默认大小），不是"按下焦点所在的那枚按钮"。
-    /// 上一版焦点停在右下角的缩小键上，一敲空格板子就缩——他这次点名的就是这一下。</summary>
+    /// 上一版焦点停在右下角的缩小键上，一敲空格板子就缩——他这次点名的就是这一下。
+    /// 它也不再兼任"按住＝平移"：那条 10-24 撤了。</summary>
     private bool _spaceTap;
-
-    /// <summary>按住空格拖过＝这一发是平移，松手时不再复位。</summary>
-    private bool _spacePanned;
 
     private void OnCheatPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
@@ -45,10 +43,8 @@ public sealed partial class MainWindow
         // 截住（见下），不再让平台把焦点挪到别的控件上。
         if (e.Key == Windows.System.VirtualKey.Space && _editingId is null && !_searchOpen && BareSpace())
         {
-            // 在 Tab 之前截：空格要抢在"焦点按钮被激活"前面。按住它平移仍然成立——那条路读的是
-            // 键盘状态（GetKeyStateForCurrentThread），不走这枚事件。
+            // 在 Tab 之前截：空格要抢在"焦点按钮被激活"前面。
             _spaceTap = true;
-            _spacePanned = false;
             e.Handled = true;
 
             return;
@@ -107,7 +103,10 @@ public sealed partial class MainWindow
         return !Down(Windows.System.VirtualKey.Control) && !Down(Windows.System.VirtualKey.Menu) && !Down(Windows.System.VirtualKey.Shift);
     }
 
-    /// <summary>松手那一下才决定这是"按一下复位"还是"按住平移了一次"。</summary>
+    /// <summary>
+    /// 松手那一下＝"按一下复位"。以前还要分"按住拖过就是平移"（10-24 那条撤了），所以现在
+    /// 空格只有一个意思：回到默认位置默认大小。
+    /// </summary>
     private void OnSpacePreviewKeyUp(object sender, KeyRoutedEventArgs e)
     {
         if (e.Key != Windows.System.VirtualKey.Space || !_spaceTap)
@@ -117,12 +116,11 @@ public sealed partial class MainWindow
 
         _spaceTap = false;
 
-        if (!_spacePanned && _editingId is null)
+        if (_editingId is null)
         {
             ResetView();
         }
 
-        _spacePanned = false;
         e.Handled = true;
     }
 

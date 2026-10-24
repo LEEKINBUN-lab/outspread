@@ -13,12 +13,11 @@ namespace Outspread.Core.Tests;
 /// </remarks>
 public class BoardMachineTests
 {
-    private static readonly BoardMachine.PressFacts EmptyLeft = new(Right: false, Left: true, Space: false, Additive: false, OnNode: false);
-    private static readonly BoardMachine.PressFacts EmptyRight = new(Right: true, Left: false, Space: false, Additive: false, OnNode: false);
-    private static readonly BoardMachine.PressFacts EmptySpace = new(Right: false, Left: true, Space: true, Additive: false, OnNode: false);
-    private static readonly BoardMachine.PressFacts NoteLeft = new(Right: false, Left: true, Space: false, Additive: false, OnNode: true);
-    private static readonly BoardMachine.PressFacts NoteEdgeLeft = new(Right: false, Left: true, Space: false, Additive: false, OnNode: true, Edge: "e");
-    private static readonly BoardMachine.PressFacts NoteRight = new(Right: true, Left: false, Space: false, Additive: false, OnNode: true);
+    private static readonly BoardMachine.PressFacts EmptyLeft = new(Right: false, Left: true, Additive: false, OnNode: false);
+    private static readonly BoardMachine.PressFacts EmptyRight = new(Right: true, Left: false, Additive: false, OnNode: false);
+    private static readonly BoardMachine.PressFacts NoteLeft = new(Right: false, Left: true, Additive: false, OnNode: true);
+    private static readonly BoardMachine.PressFacts NoteEdgeLeft = new(Right: false, Left: true, Additive: false, OnNode: true, Edge: "e");
+    private static readonly BoardMachine.PressFacts NoteRight = new(Right: true, Left: false, Additive: false, OnNode: true);
 
     [Fact]
     public void A_press_on_empty_board_with_the_left_button_draws_a_marquee()
@@ -30,14 +29,10 @@ public class BoardMachineTests
         Assert.Equal(BoardMachine.PointerOp.Marquee, next.Op);
     }
 
-    [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    public void Right_drag_and_space_drag_both_pan(bool right, bool space)
+    [Fact]
+    public void A_right_press_on_empty_board_pans()
     {
-        var facts = right ? EmptyRight : EmptySpace;
-
-        var (next, effect) = BoardMachine.OnPress(BoardMachine.Interaction.Idle, facts);
+        var (next, effect) = BoardMachine.OnPress(BoardMachine.Interaction.Idle, EmptyRight);
 
         Assert.Equal(BoardMachine.BeginEffect.StartPan, effect);
         Assert.Equal(BoardMachine.PointerOp.Pan, next.Op);
@@ -46,7 +41,7 @@ public class BoardMachineTests
     [Fact]
     public void Both_buttons_at_once_is_nobody_s_turn()
     {
-        var both = new BoardMachine.PressFacts(Right: true, Left: true, Space: false, Additive: false, OnNode: false);
+        var both = new BoardMachine.PressFacts(Right: true, Left: true, Additive: false, OnNode: false);
 
         var (next, effect) = BoardMachine.OnPress(BoardMachine.Interaction.Selected, both);
 

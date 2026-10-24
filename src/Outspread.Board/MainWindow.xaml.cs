@@ -57,8 +57,9 @@ public sealed partial class MainWindow : Window
     private bool _marqueeing;
 
     // 手势词汇与网页那一版对齐（判定函数在 Core 的 BoardGestures，两边共用同一份语义）：
-    // 左键拖空白＝框选 · 右键拖＝平移 · 空格＋拖＝平移 · 静止的一发右键＝菜单。
+    // 左键拖空白＝框选 · 右键拖＝平移 · 静止的一发右键＝菜单。
     // 上一版是左键拖＝平移、Shift＋拖＝框选，于是"想框选要先按住一个键"。
+    // 10-24 撤掉的只有"空格＋拖＝平移"那一条：空格从此不参与手势（按一下＝复位），右键那档留着。
     private bool _rightDrag;
     private Point _rightPressAt;
     private Point _panOrigin;
@@ -242,7 +243,7 @@ public sealed partial class MainWindow : Window
         // 守卫在 OnCheatPreviewKeyDown 里：不在编辑/文本/浮层里就归板子，第一下就开；归不了板子
         // 的那一发也被这一句截住——他 10-23 要的就是"别再去通用地找按钮"。
         Root.PreviewKeyDown += OnCheatPreviewKeyDown;
-        Root.PreviewKeyUp += OnSpacePreviewKeyUp;   // 空格：按下时截住，松手时才决定是复位还是平移
+        Root.PreviewKeyUp += OnSpacePreviewKeyUp;   // 空格：按下时截住，松手那一下复位视图（它不再兼任平移）
 
         // 任何一次按下都先把滚轮预览落到真布局：手柄/命中区不建立在"缩放层"上。
         Root.AddHandler(
@@ -754,12 +755,10 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        // 空格按住＝平移模式（Adobe 那条习惯）；右键那一发先当作平移，松手时没拖过阈值再改成菜单。
-        var spaceDown = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Space)
-            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-
+        // 右键那一发先当作平移，松手时没拖过阈值再改成菜单。空格不参与（10-24 撤了"空格＋拖＝平移"，
+        // 它现在只有一件事：按一下＝复位，见 Cheatsheet 的 OnSpacePreviewKeyUp）。
         var action = BoardGestures.OnEmptyPress(
-            point.Properties.IsRightButtonPressed, point.Properties.IsLeftButtonPressed, spaceDown);
+            point.Properties.IsRightButtonPressed, point.Properties.IsLeftButtonPressed);
 
         if (action == SurfaceAction.Ignore)
         {
@@ -770,8 +769,6 @@ public sealed partial class MainWindow : Window
 
         if (action == SurfaceAction.Pan)
         {
-            _spacePanned |= spaceDown;
-
             _rightDrag = point.Properties.IsRightButtonPressed;
             _rightPressAt = position;
             _panning = true;

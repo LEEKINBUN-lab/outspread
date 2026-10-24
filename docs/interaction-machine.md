@@ -17,7 +17,7 @@ App 现在的交互不是没有，是**散在十个字段里**：`_marqueeing`�
 |---|---|---|---|
 | `Idle` | 板面 | 无选中 | 按下格→`Selected`；按下空白→`Pointer(Marquee)` |
 | `Selected` | 板面 | 有选中（永远是格子的集合；10-22 起组框不进选中，`Layer` 子状态随两层点击一起作废） | 命令、按下、双击 |
-| `Pointer(op)` | 板面 | 一次进行中的手势，`op ∈ Marquee / Pan / Move / Resize / Connect`，**带 travel** | 松手→`Selected`/`Idle` |
+| `Pointer(op)` | 板面 | 一次进行中的手势，`op ∈ Marquee / Pan / Move / Resize / Connect`，**带 travel**（`Pan` 只剩右键那一把键：10-24 撤了"空格＋拖"） | 松手→`Selected`/`Idle` |
 | `Editing(id)` | TextBox | 双击格、F2、新建即编辑 | Ctrl+Enter/点到别处＝提交；Esc＝放弃 |
 | `Finding` | 查找框 | 查找命令 | Enter 跳、Esc 关 |
 | `Menu` | 菜单（模态） | 静止右键松手 | 任一项/点外面/Esc → 回原态 |
@@ -30,7 +30,7 @@ App 现在的交互不是没有，是**散在十个字段里**：`_marqueeing`�
 |---|---|---|---|
 | `Idle` | 按下空白·左 | `Pointer(Marquee)` | 记下 Shift/Ctrl＝加选还是换选 |
 | `Pointer(Marquee)` | 松手·travel<4 | `Idle` | 清选中（除非修饰键） |
-| `Idle`/`Selected` | 按下空白·右 | `Pointer(Pan)` | 记下起点 |
+| `Idle`/`Selected` | 按下空白·右 | `Pointer(Pan)` | 记下起点（**空格按没按不参与这一发**：10-24 撤了"空格＋拖＝平移"，那一档只剩右键） |
 | `Pointer(Pan)` | 松手·travel<4 | `Menu` | 静止右键＝菜单，不是平移 |
 | `Selected` | 按下格内·左 | `Pointer(Move)` 或 `Pointer(Resize)` | 由 `EdgeOf` 判：离边 ≤6 屏幕像素归那条边 |
 | `Pointer(*)` | 松手 | `Selected` | **一个事务**：写文档→history→标脏 |

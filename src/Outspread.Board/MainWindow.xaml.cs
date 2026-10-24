@@ -4571,7 +4571,41 @@ public sealed partial class MainWindow : Window
                         Rebuild();
                     }
 
-                    // 一角碰上就该入组，而且**格子不动、只有框长过去**（他 10-22 的更正：
+                    // 10-24 他报："有些情况下，拖动其中一个便签移出分组时，一个分组会分裂成两个分组"。
+                    // 复现的形状：那一枚移出名单之后就成了"散格"，而它落点还压着老组员 ⇒
+                    // 成组提议把老组员也算进"散格堆"，点一下提议就多出一个框罩在同一批格子上——
+                    // 原来一个组，现在两个框。提议的门槛因此是"这一堆全是没归属的散格"。
+                    if (rail is not null)
+                    {
+                        DetachFromGroup(stackA.Id);
+
+                        var stray = NodeOf(stackA.Id)!;
+                        var mate = NodeOf(stackB.Id)!;
+
+                        stray.X = mate.X + 8;
+                        stray.Y = mate.Y + 8;
+
+                        OfferGroupHint(stray);
+
+                        var offered = _groupHintIds.ToList();
+                        var claimed = offered.Where(id => id != stray.Id && Groups().GroupOf(RectOf(NodeOf(id)!)) is not null).ToList();
+
+                        Diagnostics.Write(
+                            $"selftest 分裂组: 移出名单后原组 {Groups().MemberIds(madeFrame.Id).Count} 格、提议格 {offered.Count} 枚" +
+                            $"（其中已属别的组 {claimed.Count} 枚）、框数 {GroupRects().Count}");
+
+                        if (claimed.Count > 0)
+                        {
+                            problems.Add(
+                                $"成组提议把已有归属的格子算进了「散格堆」：{string.Join("、", claimed)} " +
+                                $"点一下提议就会多出第二个框罩在同一批格子上（他报的「一个分组分裂成两个分组」）");
+                        }
+
+                        ClearGroupHint();
+                        Undo();
+                        Rebuild();
+                    }
+
                     // "松手之后便签的位置会变，有问题，应该只是组的虚线边框范围变化"）：
                     // 整格在框外不许入；只让一角探进来（中心在框外）→ 松手判定把框长到罩住它，格子留在原地。
                     if (rail is not null)

@@ -21,9 +21,20 @@ public sealed partial class MainWindow
     private Border? _groupHint;
     private List<string> _groupHintIds = [];
 
-    /// <summary>这枚散格现在压着谁（含它自己）；少于 3 枚就不构成"堆成一堆"。</summary>
+    /// <summary>
+    /// 这枚散格现在压着谁（含它自己）；少于 3 枚就不构成"堆成一堆"。
+    /// </summary>
+    /// <remarks>
+    /// **只数没有归属的格子。** 10-24 他报"有些情况下，拖动其中一个便签移出分组时，一个分组会分裂成
+    /// 两个分组"：那一枚移出名单之后就成了散格，而它的落点往往还压着老组员——提议把老组员也算进
+    /// "散格堆"，点一下就在同一批格子上罩出第二个框，一个组变两个。自检那一步实测到的是
+    /// "移出名单后原组 2 格、提议 3 枚（其中 2 枚已属别的组）"。
+    /// 真正的散格堆（谁都不属于）照旧提议，那一发不受影响。
+    /// </remarks>
     private List<string> ClusterIds(CanvasNode moved)
-        => [moved.Id, .. Grouping.TouchedBy(RectOf(moved), BoardNotes().ConvertAll(RectOf)).Select(rect => rect.Id)];
+        => [moved.Id, .. Grouping.TouchedBy(RectOf(moved), BoardNotes().ConvertAll(RectOf))
+            .Where(other => NodeOf(other.Id) is { } node && Groups().GroupOf(RectOf(node)) is null)
+            .Select(other => other.Id)];
 
     /// <summary>拖动收口那一拍：挪的是散格、松手时压着另两枚以上 ⇒ 浮提议。别的情况一声不响。</summary>
     private void OfferGroupHint(CanvasNode? moved)

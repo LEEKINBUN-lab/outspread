@@ -65,6 +65,7 @@ public sealed partial class MainWindow
         new("连线", "Alt+C", "组织", ConnectSelection),
         new("从边缘拉一根线", "双击边缘", "组织", StartPullFromSelection, Dispatched: false),
         new("全部选中", "Ctrl+A", "板子", SelectAll, Dispatched: false, Listed: false),
+        new("复制选中", "Ctrl+C", "板子", () => _ = CopySelectionAsync()),
         new("粘贴剪贴板", "Ctrl+V", "板子", () => _ = PasteFromClipboardAsync(), Dispatched: false),
         new("取消选中", "Esc", "板子", () => { ClearSelection(); ProjectSelection(); }, Dispatched: false),
         new("删掉选中", "Delete", "板子", RemoveSelection, Dispatched: false, Listed: false),

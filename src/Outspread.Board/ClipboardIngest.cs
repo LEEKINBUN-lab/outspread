@@ -81,6 +81,111 @@ internal static class ClipboardIngest
 
     public static Task<IngestResult> FromDataViewAsync(DataPackageView view) => ReadAsync(view);
 
+    /// <summary>
+    /// 片段的落盘件：与账本同一个应用目录，不进仓、不进板子目录。
+    /// <para>
+    /// 为什么不走剪贴板的自定义格式：这一版 WinUI 投影里 <c>DataPackage</c> 只给了写
+    /// （<c>SetData</c>），<c>DataPackageView</c> 没给读（<c>GetData</c> 与
+    /// <c>IDataPackageView</c> 都不在可访问面上）——写进去的自定义那式自己再也认不回来。
+    /// 所以剪贴板上放的是<b>几行谁都能读的字</b>（别的程序要什么就有那什么），带结构的这份
+    /// 落在这里，贴的时候用剪贴板上那几行字对账：对不上就是人又复制了别的东西，这份不算数。
+    /// </para>
+    /// </summary>
+    public static string FragmentPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Outspread",
+        "clipboard.canvas");
+
+    /// <summary>
+    /// 放一份复制：几行能读的字上剪贴板，带结构的片段落 <see cref="FragmentPath"/>。
+    /// </summary>
+    /// <returns>null＝放上去了；否则是那句"为什么没放上去"。剪贴板是别人也在抢的公共资源，
+    /// 抢不到不是 bug，但必须说出来——一声不响的 Ctrl+C 会让人再按五遍。</returns>
+    public static async Task<string?> PutFragmentAsync(string fragment, string plainText)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(FragmentPath)!);
+            File.WriteAllText(FragmentPath, fragment);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"片段没处落：{ex.Message}";
+        }
+
+        Exception? last = null;
+
+        for (var attempt = 1; attempt <= BusyAttempts; attempt++)
+        {
+            try
+            {
+                var package = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
+
+                // 那几行字由 `BoardFragment.From` 一次算好：剪贴板上的与片段里存的是同一句，
+                // 对账才对得上。
+                package.SetText(plainText);
+
+                Clipboard.SetContent(package);
+
+                // 不留神这一发只在我们进程里活着：Flush 是"我要把这份交给剪贴板管理器了"。
+                Clipboard.Flush();
+
+                return null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException
+                    || ex.HResult == unchecked((int)0x800401D0))
+            {
+                last = ex;
+                await Task.Delay(BusyDelayMilliseconds * attempt);
+            }
+        }
+
+        return last is null ? "剪贴板没收下这一发" : $"剪贴板被别的程序占着：{last.Message}";
+    }
+
+    /// <summary>
+    /// 落盘件里那份片段还在不在、还是不是刚复制的那一发。
+    /// </summary>
+    /// <returns>读不到、不是片段、或剪贴板上的字已经不是我们那几行 ⇒ null，由调用方去走
+    /// 文字／图片／文件那三条老路。</returns>
+    public static async Task<string?> ReadFragmentAsync()
+    {
+        try
+        {
+            if (!File.Exists(FragmentPath))
+            {
+                return null;
+            }
+
+            var fragment = await File.ReadAllTextAsync(FragmentPath);
+
+            if (!BoardFragment.LooksLikeFragment(fragment))
+            {
+                return null;
+            }
+
+            var expected = BoardFragment.ExpectedTextOf(fragment);
+
+            if (expected is null || Clipboard.GetContent() is not { } view)
+            {
+                return null;
+            }
+
+            var onClipboard = view.Contains(StandardDataFormats.Text)
+                ? await view.GetTextAsync()
+                : null;
+
+            // 对账：人在别处又复制了东西（哪怕只是一段一样的字以外的东西），这份就不作数。
+            return string.Equals(onClipboard, expected, StringComparison.Ordinal) ? fragment : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException
+                or FormatException or InvalidOperationException
+                || ex.HResult == unchecked((int)0x800401D0))
+        {
+            return null;
+        }
+    }
+
     private static async Task<IngestResult> ReadAsync(DataPackageView? view)
     {
         if (view is null)

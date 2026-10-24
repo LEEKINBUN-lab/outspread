@@ -1965,6 +1965,13 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // 先问一句"这是不是一块板子上的那几格"：是就整份搬过来（颜色、大小、图、线头、组都在），
+        // 不是才去读文字／图片／文件那三条老路。顺序反了会把一次 Ctrl+C 降级成一格纯文字。
+        if (await TryPasteFragmentAsync())
+        {
+            return;
+        }
+
         var result = await ClipboardIngest.FromClipboardAsync();
 
         Diagnostics.Write($"paste: {result.Kind} — {result.Description}" +
@@ -4820,6 +4827,9 @@ public sealed partial class MainWindow : Window
                 }
             }
         }
+
+        // 一份片段贴两遍＝两套名字，组与线头各自跟着换；撤销两发交回原样。
+        SelfTestCopyPaste(problems);
 
         // 一块丢了图的板子也要开得成：那一格写"未找到"，而不是把窗口打死（10-23 撞上的那一发）。
         SelfTestMissingImageTile(problems);

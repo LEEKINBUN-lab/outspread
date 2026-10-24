@@ -345,6 +345,36 @@ public sealed class CanvasDocument
         return node;
     }
 
+    /// <summary>
+    /// 把一枚节点原样放上板——贴过来的那一格带着它自己的字段（颜色、字号、<c>zIndex</c>、
+    /// 我方没建模的别人的字段），不能只搬这程序认得的那六个。
+    /// <para>
+    /// 与 <see cref="Add"/> 同一落点（数组末尾＝盖在最上面），但**id 撞了就另铸一个**并回过来：
+    /// 复制粘贴的语义是"再来一份"，同一块板上贴两次不能互相指认。调用方拿返回的 id 去改
+    /// 组归属与线头。
+    /// </para>
+    /// </summary>
+    public CanvasNode AppendNode(JsonObject node, char namespacePrefix = NodeIds.AppNamespace)
+    {
+        var copy = node.DeepClone().AsObject();
+        var id = Text(copy, "id");
+
+        if (id is null || Find(id) is not null)
+        {
+            id = FreshId(namespacePrefix);
+            copy["id"] = id;
+        }
+
+        if (Text(copy, "type") is null)
+        {
+            copy["type"] = "text";
+        }
+
+        _nodes.Add(copy);
+
+        return new CanvasNode(copy);
+    }
+
     public bool Remove(string id)
     {
         for (var index = 0; index < _nodes.Count; index++)
@@ -381,6 +411,30 @@ public sealed class CanvasDocument
         // means every line of every node shows as changed in a diff. The writer also
         // leaves the closing brace unterminated, and a file without a final newline
         // makes every future append look like an edit of the last line.
+        var text = JsonText.NormalizeNewLines(Encoding.UTF8.GetString(stream.ToArray()));
+
+        return text.EndsWith('\n') ? text : text + "\n";
+    }
+
+    /// <summary>
+    /// 把任意一份 JSON 写成**这块板自己那副样子**：缩进两格、LF、结尾一个换行、中文不转义。
+    /// <see cref="ToJson"/> 走的就是这一份，剪贴板上的片段也走这一份——两处两套写法，
+    /// 迟早会有一处把 CRLF 或 <c>\uXXXX</c> 写进本该给人读的地方。
+    /// </summary>
+    public static string Emit(JsonObject root)
+    {
+        var stream = new MemoryStream();
+
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
+        {
+            Indented = true,
+            IndentSize = 2,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        }))
+        {
+            root.WriteTo(writer);
+        }
+
         var text = JsonText.NormalizeNewLines(Encoding.UTF8.GetString(stream.ToArray()));
 
         return text.EndsWith('\n') ? text : text + "\n";

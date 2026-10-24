@@ -61,6 +61,9 @@ public sealed partial class MainWindow
 
         // 多选时这一发要拖走整组选中：记下每一枚的起手坐标（单选时它就一枚）。
         public Dictionary<string, (double X, double Y)> StartPositions { get; init; } = new(StringComparer.Ordinal);
+
+        /// <summary>开手那一拍每个组的成员名单：松手时按它改写，才知道谁进了谁出了组。</summary>
+        public Dictionary<string, List<string>> StartRosters { get; init; } = new(StringComparer.Ordinal);
     }
 
     /// <summary>ProjectSelection 每一拍叫它：该不该有操作条、贴在哪。手势进行中不重画。</summary>
@@ -537,7 +540,8 @@ public sealed partial class MainWindow
                 StartX = first.X,
                 StartY = first.Y,
                 StartPositions = positions,
-                StartGroupId = Grouping.GroupOf(RectOf(first), GroupRects())?.Id,
+                StartGroupId = Groups().GroupOf(RectOf(first))?.Id,
+                StartRosters = RosterSnapshot(),
             };
 
             group.CapturePointer(e.Pointer);
@@ -764,6 +768,9 @@ public sealed partial class MainWindow
         // 生效，还是只有几何中心移入才入组"就是这个）。判定抽在 JoinByGrowingFrame。
         var joined = JoinByGrowingFrame(state.StartPositions.Keys.ToList(), state.StartGroupId);
 
+        // 入组／出组写的是名单（普通拖动不走这一句：那是挪位置，不是改关系）。
+        WriteRostersAfterGroupDrag(state);
+
         _nodeGesture = null;
         DrawGuides([]);
         EndGesture();
@@ -794,7 +801,7 @@ public sealed partial class MainWindow
             return;
         }
 
-        var now = Grouping.GroupOf(RectOf(node), GroupRects())?.Id;
+        var now = Groups().GroupOf(RectOf(node))?.Id;
 
         if (joined || (now is not null && now != state.StartGroupId))
         {
@@ -854,15 +861,8 @@ public sealed partial class MainWindow
                 continue;
             }
 
-            var members = new List<Grouping.Rect>();
-
-            foreach (var note in BoardNotes())
-            {
-                if (!draggedSet.Contains(note.Id) && frame.Holds(RectOf(note)))
-                {
-                    members.Add(RectOf(note));
-                }
-            }
+            // 目标框现在那些成员按名单取（没有名单的框才退回几何）。
+            var members = Groups().Members(frame.Id).Where(member => !draggedSet.Contains(member.Id)).ToList();
 
             members.AddRange(dragged);
 
@@ -912,7 +912,7 @@ public sealed partial class MainWindow
         menu.Items.Add(create);
 
         var leave = new MenuFlyoutItem { Text = "移出分组", Icon = DotIcon(ChromeStyling.Snap) };
-        var inGroup = SelectedNotes().Where(n => Grouping.GroupOf(RectOf(n), GroupRects()) is not null).ToList();
+        var inGroup = SelectedNotes().Where(n => Groups().GroupOf(RectOf(n)) is not null).ToList();
         leave.IsEnabled = inGroup.Count >= 1;
         leave.Click += (_, _) =>
         {
@@ -1198,60 +1198,102 @@ public sealed partial class MainWindow
         }
     }
 
-    // ---------------------------------------------------------------------
-    // 普通拖动的"不脱组"：成员被甩出框时，框跟着长，而不是把它踢出去
-    // ---------------------------------------------------------------------
+    /// <summary>开手那一拍的成员名单：每个框一份（没有名单的框按几何抄一份，等它真的被改动时落成名单）。</summary>
+    private Dictionary<string, List<string>> RosterSnapshot()
+    {
+        var map = Groups();
+        var snapshot = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        foreach (var frame in GroupRects())
+        {
+            snapshot[frame.Id] = [.. map.MemberIds(frame.Id)];
+        }
+
+        return snapshot;
+    }
 
     /// <summary>
-    /// 普通拖动松手的那一拍：如果这格原来在某个框里、中心现在出去了——那是"挪位置"，
-    /// 不是"拆组"。把框按开手那一刻的成员集合重新 hug 住（它们还都在，框跟着长）。
-    /// 只有组钮拖（GroupMode）才允许真的把成员甩出框外。
+    /// 组钮那一发的落点写成名单：与别的框一角碰上＝搬进那个框；拖到没有框的地方＝从原框搬出；
+    /// 还碰着原框＝留下。
     /// </summary>
-    private void KeepDraggedMemberInFrame(NodeGesture gesture)
+    /// <remarks>
+    /// 只有这一路改名单。普通拖动一格什么都不写（10-24 他定的规矩："普通拖动不能影响分组，
+    /// 只有按住分组图标才能发生入组和出组"）——那一档里被拖远的成员仍在自己的组里，框按名单
+    /// hug 过去罩住它；路上别人不会被吞，因为收人不再看几何。
+    /// 原来那一档叫 <c>KeepDraggedMemberInFrame</c>：它靠"把框拉长去接那一格"做到不脱组，
+    /// 代价就是框长到吞掉路上别人、虚线边拉到屏幕外看着像组消失了。两格 bug 同一个因。
+    /// </remarks>
+    private void WriteRostersAfterGroupDrag(RailDrag state)
     {
-        // 并集下不写任何组框（见 RefitFrames 说明）：sticky 会长/缩组框，跨文件会污染源文件。
-        if (IsAllNotes(_boardPath))
-        {
-            return;
-        }
+        var frames = GroupRects();
+        var dragged = state.StartPositions.Keys.ToList();
+        var landedIn = new Dictionary<string, string?>(StringComparer.Ordinal);
 
-        if (gesture.GroupMode || gesture.StartGroupId is not { } gid || gesture.StartMembers is not { } ids)
+        foreach (var id in dragged)
         {
-            return;
-        }
-
-        if (NodeOf(gesture.PrimaryId) is not { } moved || NodeOf(gid) is not { } frameNode)
-        {
-            return;
-        }
-
-        if (RectOf(frameNode).Holds(RectOf(moved)))
-        {
-            return; // 中心还在框里：本来就不用粘
-        }
-
-        var rects = new List<Grouping.Rect>();
-
-        foreach (var id in ids)
-        {
-            if (NodeOf(id) is { } member)
+            if (NodeOf(id) is not { } node)
             {
-                rects.Add(RectOf(member));
+                continue;
+            }
+
+            var rect = RectOf(node);
+            var own = state.StartRosters.FirstOrDefault(pair => pair.Value.Contains(id)).Key;
+            string? landed = null;
+
+            foreach (var frame in frames)
+            {
+                if (frame.Id == own)
+                {
+                    continue;
+                }
+
+                if (frame.Intersects(rect))
+                {
+                    landed = frame.Id;
+
+                    break;
+                }
+            }
+
+            if (landed is null && own is { } ownId)
+            {
+                var self = frames.FirstOrDefault(frame => frame.Id == ownId);
+
+                if (self.Width > 0 && self.Intersects(rect))
+                {
+                    landed = ownId;   // 还碰着原来的框＝留在原组
+                }
+            }
+
+            landedIn[id] = landed;
+        }
+
+        foreach (var frameNode in _document.Nodes.Where(node => node.Kind == CanvasNodeKind.Group))
+        {
+            var before = state.StartRosters.TryGetValue(frameNode.Id, out var old) ? old : [];
+            var after = new List<string>();
+
+            foreach (var id in before)
+            {
+                if (!landedIn.TryGetValue(id, out var landed) || landed == frameNode.Id)
+                {
+                    after.Add(id);
+                }
+            }
+
+            foreach (var (id, landed) in landedIn)
+            {
+                if (landed == frameNode.Id && !after.Contains(id))
+                {
+                    after.Add(id);
+                }
+            }
+
+            // 没变就别写：没有名单的框（别的工具写的、10-24 之前存的）不该被这一发凭空长出一张表。
+            if (!after.SequenceEqual(before))
+            {
+                frameNode.SetGroupMembers(after);
             }
         }
-
-        if (rects.Count == 0)
-        {
-            return;
-        }
-
-        var hug = Grouping.Enclose(gid, rects);
-
-        frameNode.X = hug.X;
-        frameNode.Y = hug.Y;
-        frameNode.Width = hug.Width;
-        frameNode.Height = hug.Height;
-
-        Diagnostics.Write($"sticky frame: {gid} 跟着 {moved.Id} 长到 {hug.Width:0.#}×{hug.Height:0.#}（普通拖动不脱组）");
     }
 }

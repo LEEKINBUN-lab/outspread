@@ -32,7 +32,7 @@ public sealed partial class MainWindow
 
         if (moved is null || moved.Kind == CanvasNodeKind.Group
             || _view.Zoom < AssistZoomFloor
-            || Grouping.GroupOf(RectOf(moved), GroupRects()) is not null)
+            || Groups().GroupOf(RectOf(moved)) is not null)
         {
             return;
         }
@@ -122,13 +122,13 @@ public sealed partial class MainWindow
             return;
         }
 
-        if (Grouping.GroupOf(RectOf(node), GroupRects()) is not { } group)
+        if (Groups().GroupOf(RectOf(node)) is not { } group)
         {
             return;
         }
 
         var rect = RectOf(node);
-        var remaining = Grouping.Members(group, BoardNotes().ConvertAll(RectOf)).Where(member => member.Id != id).ToList();
+        var remaining = Groups().Members(group.Id).Where(member => member.Id != id).ToList();
 
         BeginGesture("把这格移出组");
 
@@ -143,6 +143,8 @@ public sealed partial class MainWindow
 
             if (NodeOf(group.Id) is { } frameNode)
             {
+                // 出组写的是名单：这一格从此不在这张表里，把它拖回框里也不会自己回去。
+                frameNode.SetGroupMembers([.. remaining.Select(member => member.Id)]);
                 frameNode.X = hug.X;
                 frameNode.Y = hug.Y;
                 frameNode.Width = hug.Width;

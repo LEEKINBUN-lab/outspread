@@ -30,6 +30,44 @@ public sealed partial class MainWindow
     private Dictionary<string, Grouping.Rect>? _derivedFramesAtBegin;
 
     /// <summary>
+    /// 开板时给每个还没有成员名单的框补一份：名单＝这一刻按几何算出来的那些格。
+    /// </summary>
+    /// <remarks>
+    /// 10-24 之前的板子、以及别的工具写的板子上都没有 <c>members</c> 那一项。不补这一份，
+    /// 那些旧组照旧按几何收人——他截图那一格（新建一格落在框里当场长出分组）在他现有的板子上
+    /// 就不会消失。抄的是"此刻的成员"，抄完再 hug，画面一格都不动。
+    /// <para>
+    /// 代价说明白：补过名单的那块板会在开板时多一次存盘（走的是既有的"归位就存"那一路），
+    /// 于是同步会推一次。一次性的迁移，不是每次开板都写。
+    /// </para>
+    /// </remarks>
+    private int MaterializeRosters()
+    {
+        var notes = BoardNotes().ConvertAll(RectOf);
+        var written = 0;
+
+        foreach (var frameNode in _document.Nodes.Where(node => node.Kind == CanvasNodeKind.Group))
+        {
+            if (frameNode.GroupMemberIds is not null)
+            {
+                continue;   // 已经有表：那张表说了算，几何不再插手
+            }
+
+            var rect = RectOf(frameNode);
+
+            frameNode.SetGroupMembers([.. notes.Where(note => rect.Holds(note)).Select(note => note.Id)]);
+            written++;
+        }
+
+        if (written > 0)
+        {
+            Diagnostics.Write($"group roster seeded on load: {written} 组按几何抄成名单（旧板/别的工具写的板子）");
+        }
+
+        return written;
+    }
+
+    /// <summary>
     /// 开板时先把有成员的组框贴回成员包围盒。`RefitFrames` 只在一次手势结束时跑；一块
     /// 从外部改过、或上一版留下的旧板，组框可能还停在旧位置。画出来就是"虚线框切过便签"。
     /// 空组不动：它没有成员可以贴，渲染层会把它藏起来，等人把便签挪进来再复活。
@@ -41,6 +79,7 @@ public sealed partial class MainWindow
             return false;
         }
 
+        var seeded = MaterializeRosters();
         var hug = DerivedFrames();
         var changed = 0;
         var details = new List<string>();
@@ -74,7 +113,7 @@ public sealed partial class MainWindow
             Diagnostics.Write($"group refit on load: {changed} 组（{string.Join("；", details)}）");
         }
 
-        return changed > 0;
+        return changed > 0 || seeded > 0;
     }
 
     private static bool SameGroupBox(Grouping.Rect left, Grouping.Rect right)
@@ -110,12 +149,12 @@ public sealed partial class MainWindow
     /// <summary>没有成员的组：框没有可贴的东西，渲染层把它藏起来，别拿一个空的大方框压着别人的便签。</summary>
     private HashSet<string> EmptyGroupIds()
     {
-        var notes = BoardNotes().ConvertAll(RectOf);
+        var map = Groups();
         var empty = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var frame in GroupRects())
         {
-            if (!notes.Exists(note => frame.Holds(note)))
+            if (map.Members(frame.Id).Count == 0)
             {
                 empty.Add(frame.Id);
             }
@@ -163,7 +202,7 @@ public sealed partial class MainWindow
         foreach (var group in groups)
         {
             var stored = RectOf(group);
-            var members = notes.Where(note => stored.Holds(RectOf(note))).ToList();
+            var members = Groups().Members(group.Id).Select(member => NodeOf(member.Id)!).ToList();
             var visual = _realized.TryGetValue(group.Id, out var realized) ? realized : null;
             var onScreen = window.Intersects(stored);
 
@@ -238,7 +277,7 @@ public sealed partial class MainWindow
 
         EndGesture();
 
-        if (Grouping.GroupOf(RectOf(freeNote), GroupRects()) is { } landedIn)
+        if (Groups().GroupOf(RectOf(freeNote)) is { } landedIn)
         {
             problems.Add(
                 $"新建的格子落进了组 {landedIn.Id}：20000,20000 这一带还压着一块组框，" +
@@ -282,10 +321,22 @@ public sealed partial class MainWindow
     private Dictionary<string, Grouping.Rect> DerivedFrames()
     {
         var notes = BoardNotes().ConvertAll(RectOf);
+        var map = Groups();
         var derived = new Dictionary<string, Grouping.Rect>(StringComparer.Ordinal);
 
         foreach (var frame in GroupRects())
         {
+            if (map.HasRoster(frame.Id))
+            {
+                // 名单说它是成员它就是成员，一屏量完。下面那一圈"量到不再变大为止"是几何那一档
+                // 的补丁：框长出去会把别人的中心盖进来，还得再长一圈——有名单就不该有这件事。
+                var roster = map.Members(frame.Id);
+
+                derived[frame.Id] = roster.Count == 0 ? frame : Grouping.Enclose(frame.Id, roster);
+
+                continue;
+            }
+
             var box = frame;
 
             for (var growth = 0; growth < 32; growth++)
@@ -380,7 +431,7 @@ public sealed partial class MainWindow
             return [];
         }
 
-        var units = Grouping.UnitsOf(rects, GroupRects());
+        var units = Groups().UnitsOf(rects);
 
         return units.Count == 1 && units[0].MemberIds.Count > 1
             ? rects.ConvertAll(rect => new Grouping.Unit(rect.Id, rect, [rect.Id]))

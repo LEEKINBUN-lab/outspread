@@ -113,6 +113,61 @@ public sealed class CanvasNode
         set => SetString("label", value);
     }
 
+    /// <summary>
+    /// 这个组框里到底是哪几格——**显式成员名单**，写在 group 节点的 <c>members</c> 数组里。
+    /// null＝这张表不在（别的工具写的板子、10-24 之前存的板子），那时才退回几何包含。
+    /// </summary>
+    /// <remarks>
+    /// 规范里没有这个字段（1.0 的 group 只定义 <c>label/background/backgroundStyle</c>），而且规范
+    /// 对未知字段没有任何前向兼容承诺——这两条本仓早查过，写在 docs/canvas-format.md。所以这一格
+    /// 明说三件事：读的时候没表就退回几何；被不认识它的程序重写一遍，最坏是退回旧语义而不是丢内容；
+    /// 要它的代价是一份别的工具看不懂的字段。换来的是他 10-24 点的那两格 bug 一起消失——
+    /// 几何当成员表会让"新建在框里"当场入组、让"拖走一格"把框拉长到吞掉路上别人。
+    /// 成员是一张名单，不是一块场地：那是他 10-22 那句话的下一步。
+    /// </remarks>
+    public IReadOnlyList<string>? GroupMemberIds
+    {
+        get
+        {
+            if (Json["members"] is not JsonArray array)
+            {
+                return null;
+            }
+
+            var ids = new List<string>();
+
+            foreach (var item in array)
+            {
+                if (item is JsonValue value && value.TryGetValue(out string? id) && !string.IsNullOrWhiteSpace(id))
+                {
+                    ids.Add(id);
+                }
+            }
+
+            return ids;
+        }
+    }
+
+    /// <summary>写下这张名单；null＝删掉它，让这个组退回几何那一档。</summary>
+    public void SetGroupMembers(IReadOnlyList<string>? ids)
+    {
+        if (ids is null)
+        {
+            Json.Remove("members");
+
+            return;
+        }
+
+        var array = new JsonArray();
+
+        foreach (var id in ids)
+        {
+            array.Add(JsonValue.Create(id));
+        }
+
+        Json["members"] = array;
+    }
+
     public string? Background
     {
         get => GetString("background");

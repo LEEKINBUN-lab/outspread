@@ -6,17 +6,22 @@ namespace Outspread.Core;
 /// </summary>
 /// <remarks>
 /// <para>
-/// JSON Canvas 1.0 has no member list on a group — the spec only says a group is a visual
-/// container — so membership is <b>geometric</b>: a note belongs to the group whose rectangle
-/// holds its centre. That is the prototype's rule (<c>membersOf</c>), and it has one consequence
-/// the data model cannot hide: dragging a note out of the frame leaves the group, immediately and
-/// silently. The port has to make that visible on the surface rather than pretend membership.
+/// 成员这件事有两条并存的读法，见 <see cref="GroupMap"/>：框上写着 <c>members</c> 名单就用名单，
+/// 没写才退回"中心落在框里就算成员"的几何。下面这几个静态函数是**几何那一档**——它们仍然被
+/// <see cref="GroupMap"/> 叫去服务没有名单的框，也服务提议成组、参考线这类"看上去堆在一起"的判断。
+/// 直接拿它们回答"这格在哪个组里"是错的：那正是 10-24 他报的两格 bug 的来源（新建在框里当场入组、
+/// 拖走一格把框拉长到吞掉别人）。
 /// </para>
 /// <para>
-/// The click rule is his own words from the 10-22 round: 单击组里的便签＝只选中那枚便签；
-/// 点击组的文案或边缘的虚线＝选中组里的所有便签（不是整个组的范围）.组是一个关系，不是
-/// 一块场地——所以选中的永远是格子的集合，框本身从不进选中。早期原型里"第一次点必中组、
-/// 第二次点中格"的两层规矩被这一句取代，那枚 <c>groupFocus</c> 的状态机也随之作废。
+/// JSON Canvas 1.0 的 group 只定义 <c>label/background/backgroundStyle</c>，没有成员字段，规范对
+/// 未知字段也没有前向兼容承诺（本仓早查过，记在 docs/canvas-format.md）。名单为什么仍然写成一份
+/// 未知字段、以及丢了会退回到哪一档，写在 <see cref="CanvasNode.GroupMemberIds"/>。
+/// </para>
+/// <para>
+/// 点击那条规矩是他自己的话，10-22 那一轮定的：单击组里的便签＝只选中那枚便签；点击组的文案或
+/// 边缘的虚线＝选中组里的所有便签（不是整个组的范围）。组是一个关系，不是一块场地——所以选中的
+/// 永远是格子的集合，框本身从不进选中。早期原型里"第一次点必中组、第二次点中格"的两层规矩被这一句
+/// 取代，那枚 <c>groupFocus</c> 的状态机也随之作废。
 /// </para>
 /// </remarks>
 public static class Grouping
@@ -163,5 +168,152 @@ public static class Grouping
         var smaller = Math.Min(left.Width * left.Height, right.Width * right.Height);
 
         return smaller <= 0 ? 0 : (width * height) / smaller;
+    }
+}
+
+/// <summary>
+/// 谁在哪个组里：**显式成员名单优先**，那张表不在的框才退回几何包含。
+/// </summary>
+/// <remarks>
+/// <para>
+/// 为什么要有这张表（10-24 他点的两格）：把几何当成员表，"新建一格正好落在某个框里"会当场入组，
+/// "把一格里成员拖远"会让框按包围盒长到吞掉路上别人——两格都是同一句话的两个症状。成员是一张
+/// 名单，不是一块场地；名单写在 group 节点的 <c>members</c> 上（见
+/// <see cref="CanvasNode.GroupMemberIds"/>，规范没有这个字段，代价与退回规则写在那里）。
+/// </para>
+/// <para>
+/// 一条硬规矩：**有名单的框不再靠几何收人**。否则新格落在显式框里仍会被算成成员，这一改等于没改。
+/// 没有名单的框（别的工具写的、10-24 之前存的）照旧按几何——那才是它唯一能有的语义。
+/// </para>
+/// </remarks>
+public sealed class GroupMap
+{
+    private readonly Dictionary<string, string> _noteToGroup;
+    private readonly Dictionary<string, List<string>> _members;
+    private readonly Dictionary<string, Grouping.Rect> _frames;
+    private readonly IReadOnlyList<Grouping.Rect> _notes;
+
+    /// <summary>没有名单的那些框：只有它们还按几何收人。</summary>
+    private readonly IReadOnlyList<Grouping.Rect> _openFrames;
+
+    private GroupMap(
+        Dictionary<string, string> noteToGroup,
+        Dictionary<string, List<string>> members,
+        Dictionary<string, Grouping.Rect> frames,
+        IReadOnlyList<Grouping.Rect> notes,
+        IReadOnlyList<Grouping.Rect> openFrames)
+    {
+        _noteToGroup = noteToGroup;
+        _members = members;
+        _frames = frames;
+        _notes = notes;
+        _openFrames = openFrames;
+    }
+
+    /// <param name="notes">板上所有便签（顺序＝文档顺序，也就是叠放次序）。</param>
+    /// <param name="frames">每个框配它的名单；null＝这张表不在，退回几何。</param>
+    public static GroupMap Build(
+        IReadOnlyList<Grouping.Rect> notes,
+        IReadOnlyList<(Grouping.Rect Frame, IReadOnlyList<string>? Members)> frames)
+    {
+        var live = new HashSet<string>(notes.Select(note => note.Id), StringComparer.Ordinal);
+        var byId = new Dictionary<string, Grouping.Rect>(StringComparer.Ordinal);
+        var noteToGroup = new Dictionary<string, string>(StringComparer.Ordinal);
+        var members = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var open = new List<Grouping.Rect>();
+
+        foreach (var (frame, ids) in frames)
+        {
+            byId[frame.Id] = frame;
+
+            if (ids is null)
+            {
+                open.Add(frame);
+
+                continue;
+            }
+
+            // 名单里指向已经不在板上的那些格，读的时候丢掉：删一格不该在别的节点上留下鬼名。
+            // 一格只归一个组：按框的文档顺序，先认到的那个组算——被前面的组认走的那些，
+            // 不再列进后面那张表的成员里（否则"框 hug 谁"和"这格属于谁"会各说一套）。
+            var kept = ids
+                .Where(id => live.Contains(id) && noteToGroup.TryAdd(id, frame.Id))
+                .ToList();
+
+            members[frame.Id] = kept;
+        }
+
+        return new GroupMap(noteToGroup, members, byId, notes, open);
+    }
+
+    /// <summary>这个框有没有显式名单（没有＝它靠几何收人）。</summary>
+    public bool HasRoster(string frameId) => _members.ContainsKey(frameId);
+
+    /// <summary>
+    /// 这一格属于哪个框。名单里有它就用名单；没有它、而它在某个组的名单里，也不再去按几何找别的框。
+    /// </summary>
+    public Grouping.Rect? GroupOf(Grouping.Rect note)
+    {
+        if (_noteToGroup.TryGetValue(note.Id, out var id))
+        {
+            return _frames.TryGetValue(id, out var frame) ? frame : (Grouping.Rect?)null;
+        }
+
+        return Grouping.GroupOf(note, _openFrames);
+    }
+
+    /// <summary>这个框里的成员，按文档（叠放）顺序。</summary>
+    public IReadOnlyList<Grouping.Rect> Members(string frameId)
+    {
+        if (!_members.TryGetValue(frameId, out var ids))
+        {
+            return Grouping.Members(_frames[frameId], _notes);
+        }
+
+        var wanted = new HashSet<string>(ids, StringComparer.Ordinal);
+
+        return _notes.Where(note => wanted.Contains(note.Id)).ToList();
+    }
+
+    public IReadOnlyList<string> MemberIds(string frameId) => [.. Members(frameId).Select(member => member.Id)];
+
+    /// <summary>按在名牌或虚线上＝选中组里所有便签（框自己从不进选中）。</summary>
+    public IReadOnlyList<string> OnFramePressed(Grouping.Rect group) => MemberIds(group.Id);
+
+    /// <summary>一次排布眼里的"一件东西"：一张便签，或一整个组（见 <see cref="Grouping.Unit"/>）。</summary>
+    public IReadOnlyList<Grouping.Unit> UnitsOf() => UnitsOf(_notes);
+
+    /// <summary>
+    /// 只把 <paramref name="notes"/> 归件：排布命令问的是"选中的那几枚算几件"，
+    /// 不是整块板子——传子集时必须按子集分件，否则没选中的格子会被拖进同一件里一起动。
+    /// </summary>
+    public IReadOnlyList<Grouping.Unit> UnitsOf(IReadOnlyList<Grouping.Rect> notes)
+    {
+        var order = new List<string>();
+        var buckets = new Dictionary<string, List<Grouping.Rect>>(StringComparer.Ordinal);
+
+        foreach (var note in notes)
+        {
+            var key = GroupOf(note)?.Id ?? note.Id;
+
+            if (!buckets.TryGetValue(key, out var bucket))
+            {
+                bucket = [];
+                buckets[key] = bucket;
+                order.Add(key);
+            }
+
+            bucket.Add(note);
+        }
+
+        return order.ConvertAll(key =>
+        {
+            var members = buckets[key];
+
+            return new Grouping.Unit(
+                key,
+                _frames.TryGetValue(key, out var frame) ? frame : members[0],
+                members.ConvertAll(member => member.Id));
+        });
     }
 }

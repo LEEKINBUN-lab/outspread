@@ -136,6 +136,22 @@ public sealed partial class MainWindow
     private List<Grouping.Rect> GroupRects()
         => _document.Nodes.Where(node => node.Kind == CanvasNodeKind.Group).Select(RectOf).ToList();
 
+    /// <summary>
+    /// 谁在哪个组里：一次算一份，问的人全走这一份。
+    /// </summary>
+    /// <remarks>
+    /// 规矩（10-24 他点的）：组框上写着 <c>members</c> 名单就用名单，<b>有名单的框不再靠几何收人</b>——
+    /// 否则"新建一格正好落在框里"照样当场入组，那一格等于没修。没有名单的框（别的工具写的、
+    /// 这份改动之前存的）照旧按几何。写名单的只有三处：成组、组钮拖入／拖出、拆组（删框）。
+    /// 普通拖动一格什么都不写：那是挪位置，不是改关系。
+    /// </remarks>
+    private GroupMap Groups()
+        => GroupMap.Build(
+            BoardNotes().ConvertAll(RectOf),
+            [.. _document.Nodes
+                .Where(node => node.Kind == CanvasNodeKind.Group)
+                .Select(node => (RectOf(node), (IReadOnlyList<string>?)node.GroupMemberIds))]);
+
     private static Grouping.Rect RectOf(CanvasNode node) => new(node.Id, node.X, node.Y, node.Width, node.Height);
 
     private static Aligning.Placed PlacedOf(CanvasNode node)
@@ -167,6 +183,9 @@ public sealed partial class MainWindow
         // 给个默认名，双击名牌即可改名。
         made.Label = "分组";
 
+        // 成员是一张名单：成组那一拍把它写死，之后只有组钮那一路能改它。
+        made.SetGroupMembers([.. members.Select(member => member.Id)]);
+
         EndGesture();
 
         _groupFocus = made.Id;
@@ -186,7 +205,7 @@ public sealed partial class MainWindow
 
         foreach (var node in SelectedNotes())
         {
-            if (Grouping.GroupOf(RectOf(node), groups) is { } group)
+            if (Groups().GroupOf(RectOf(node)) is { } group)
             {
                 hit.Add(group.Id);
             }
@@ -262,7 +281,7 @@ public sealed partial class MainWindow
     private void Cluster(string label, Func<CanvasNode, string> keyOf)
     {
         var notes = BoardNotes();
-        var units = Grouping.UnitsOf(notes.ConvertAll(RectOf), GroupRects());
+        var units = Groups().UnitsOf();
 
         // 一个组跟着它第一格走：聚拢要的是"同类放一起"，而组是一件东西，不能为了分色把它劈成两半。
         // 所以那一簇由组里最先出现的那格决定，回执里也会说出搬了几件是整块。

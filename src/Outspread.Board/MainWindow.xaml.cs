@@ -1077,8 +1077,10 @@ public sealed partial class MainWindow : Window
 
             Diagnostics.Write($"drag ended: {gesture.StartGeometry.Count} node(s), {moved:0.0} world px");
 
-            // 普通拖动不许把成员甩出组：先按开手那一刻的成员集合把框 hug 回去，再收这一步。
-            KeepDraggedMemberInFrame(gesture);
+            // 普通拖动到这里就结束了：它既不写成员名单，也不为了"接住这一格"把框拉长——
+            // 框在下面那一拍按名单自己 hug（EndGesture → RefitFrames → Groups()）。
+            // 10-24 之前这里叫 KeepDraggedMemberInFrame：靠把框拉长去接那一格做到"不默默脱组"，
+            // 代价就是框长到吞掉路上别人、虚线边拉到屏幕外看着像组消失了。
 
             EndGesture();
             SaveSoon();
@@ -1445,7 +1447,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private (List<string> Ids, string? Focus) PressTarget(CanvasNode pressed)
         => pressed.Kind == CanvasNodeKind.Group
-            ? (Grouping.OnFramePressed(RectOf(pressed), BoardNotes().ConvertAll(RectOf)).ToList(), pressed.Id)
+            ? ([.. Groups().OnFramePressed(RectOf(pressed))], pressed.Id)
             : ([pressed.Id], null);
 
     private void OnNodePressed(object sender, PointerRoutedEventArgs e)
@@ -1523,7 +1525,7 @@ public sealed partial class MainWindow : Window
             if (pressedNode.Kind == CanvasNodeKind.Group)
             {
                 // Ctrl 点在名牌／环带上＝整组加进选出、再点一次整组退出。
-                var memberIds = Grouping.OnFramePressed(RectOf(pressedNode), BoardNotes().ConvertAll(RectOf));
+                var memberIds = Groups().OnFramePressed(RectOf(pressedNode));
                 var allIn = memberIds.All(_selection.Contains);
 
                 foreach (var member in memberIds)
@@ -1613,12 +1615,12 @@ public sealed partial class MainWindow : Window
         var startRect = RectOf(pressedNode);
         var startGroup = pressedNode.Kind == CanvasNodeKind.Group
             ? null
-            : Grouping.GroupOf(startRect, GroupRects());
+            : Groups().GroupOf(startRect);
         IReadOnlyList<string>? startMembers = null;
 
         if (startGroup is { } sg)
         {
-            startMembers = [.. Grouping.Members(sg, BoardNotes().ConvertAll(RectOf)).Select(member => member.Id)];
+            startMembers = [.. Groups().Members(sg.Id).Select(member => member.Id)];
         }
 
         _nodeDragStarted = false;
@@ -3406,10 +3408,10 @@ public sealed partial class MainWindow : Window
         // 这种红是量不出来的。
         // 挑的是**散格**：一个组在排布眼里只算一件（GroupArrange.cs），拿同组两枚来测"两格对齐"
         // 量的会是拒绝那一路——那一路下面单独有一发。
-        var framesForPair = GroupRects();
+        var groupsForPair = Groups();
         var arrangePair = _document.Nodes
             .Where(node => node.Kind != CanvasNodeKind.Group)
-            .Where(node => Grouping.GroupOf(RectOf(node), framesForPair) is null)
+            .Where(node => groupsForPair.GroupOf(RectOf(node)) is null)
             .Take(2)
             .ToList();
 
@@ -3466,7 +3468,7 @@ public sealed partial class MainWindow : Window
         {
             var grouped = _document.Nodes
                 .Where(node => node.Kind != CanvasNodeKind.Group)
-                .Select(node => (node, frame: Grouping.GroupOf(RectOf(node), framesForPair)))
+                .Select(node => (node, frame: groupsForPair.GroupOf(RectOf(node))))
                 .Where(item => item.frame is not null)
                 .GroupBy(item => item.frame!.Value.Id)
                 .FirstOrDefault();
@@ -3655,11 +3657,14 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        // 框是派生的，所以"把一枚挪出框"必须让框缩回来——这一发走的是 BeginGesture/EndGesture
-        // 那对外壳（拖拽用的就是它），测的是"松手以后框还罩不罩着已经出去的那格"。
+        // 普通挪出一格**不许改分组**（10-24 他定的规矩："只有按住分组图标才能发生入组和出组"）。
+        // 这一发走的是 BeginGesture/EndGesture 那对外壳（拖拽用的就是它），测的是松手以后：
+        // 名单还是那几格、框按名单长过去罩住它。10-23 之前这一发断言的是反过来的旧语义
+        // （挪出去＝框缩回来），那条规矩的代价就是"框长到吞掉路上别人"。
         {
+            var groups = Groups();
             var roomy = GroupRects()
-                .Select(frame => (frame, members: BoardNotes().Where(node => frame.Holds(RectOf(node))).ToList()))
+                .Select(frame => (frame, members: groups.Members(frame.Id).Select(member => NodeOf(member.Id)!).ToList()))
                 .FirstOrDefault(candidate => candidate.members.Count >= 2);
 
             if (roomy.frame.Id is null)
@@ -3674,6 +3679,7 @@ public sealed partial class MainWindow : Window
 
                 var before = RectOf(NodeOf(roomy.frame.Id)!);
                 var undoBefore = _history.UndoCount;
+                var rosterBefore = groups.MemberIds(roomy.frame.Id).ToList();
 
                 BeginGesture("自检挪出一格");
 
@@ -3682,15 +3688,22 @@ public sealed partial class MainWindow : Window
                 EndGesture();
 
                 var after = RectOf(NodeOf(roomy.frame.Id)!);
+                var rosterAfter = Groups().MemberIds(roomy.frame.Id).ToList();
 
-                if (after.Width >= before.Width)
+                if (!rosterAfter.SequenceEqual(rosterBefore))
                 {
-                    problems.Add($"挪出一格以后框没缩回来：宽 {before.Width:0.#} → {after.Width:0.#}");
+                    problems.Add(
+                        $"普通挪动改了成员名单：{string.Join("、", rosterBefore)} → {string.Join("、", rosterAfter)}");
                 }
 
-                if (after.Holds(RectOf(NodeOf(escaped.Id)!)))
+                if (!after.Holds(RectOf(NodeOf(escaped.Id)!)))
                 {
-                    problems.Add("挪出去那一格还被框罩着：框没有跟着成员走");
+                    problems.Add("框没按名单长过去罩住那一格：它还在名单里，框却把它丢下了");
+                }
+
+                if (after.Width <= before.Width)
+                {
+                    problems.Add($"挪远一格以后框没跟着长：宽 {before.Width:0.#} → {after.Width:0.#}");
                 }
 
                 Undo();
@@ -3705,8 +3718,8 @@ public sealed partial class MainWindow : Window
                 else
                 {
                     Diagnostics.Write(
-                        $"selftest 拖出组: {roomy.frame.Id} 从 {roomy.members.Count} 格里挪走最右那一格以后框宽 " +
-                        $"{before.Width:0.#}→{after.Width:0.#}，撤销带回去");
+                        $"selftest 挪出一格: 名单 {rosterAfter.Count} 格未变、框宽 {before.Width:0.#}→{after.Width:0.#}" +
+                        "（按名单长过去罩住它），撤销一发带回");
                 }
 
                 Rebuild();
@@ -4515,36 +4528,44 @@ public sealed partial class MainWindow : Window
 
                     Diagnostics.Write("selftest 换色色板: 弹层 7 颗（『无色』那枚一圈虚线环）、点第 3 颗＝定色不循环；右键菜单已无『颜色』子项");
 
-                    // 普通拖动不许把成员甩出组：把他甩到框外 300 像素——框必须跟着长（sticky），
-                    // 撤销一发框和格一起回去。只有组钮那一路才允许真出框。
+                    // 普通拖动不许影响分组（10-24 他定的规矩："只有按住分组图标才能发生入组和出组"）。
+                    // 把他甩到框外 300 像素：名单一个字都不许多也不许少，框按名单 hug 过去罩住它，
+                    // 撤销一发格子和框一起回去。
                     if (rail is not null)
                     {
                         var stickyB = NodeOf(stackB.Id)!;
-                        var startMembers = new List<string>(Grouping.Members(madeFrame, BoardNotes().ConvertAll(RectOf))
-                            .Select(member => member.Id));
-                        var startPos = (stickyB.X, stickyB.Y);
+                        var rosterBefore = Groups().MemberIds(madeFrame.Id).ToList();
 
                         BeginGesture("自检普通拖出");
 
                         stickyB.X = madeFrame.Right + 300;
 
-                        KeepDraggedMemberInFrame(new NodeGesture(
-                            0,
-                            0,
-                            new Dictionary<string, (double X, double Y)>(StringComparer.Ordinal) { [stickyB.Id] = startPos },
-                            stickyB.Id,
-                            GroupMode: false,
-                            StartGroupId: madeFrame.Id,
-                            StartMembers: startMembers));
-
                         EndGesture();
 
+                        var rosterAfter = Groups().MemberIds(madeFrame.Id).ToList();
                         var grown = RectOf(NodeOf(madeFrame.Id)!);
+
+                        if (!rosterAfter.SequenceEqual(rosterBefore))
+                        {
+                            problems.Add(
+                                $"普通拖动改了成员名单：{string.Join("、", rosterBefore)} → {string.Join("、", rosterAfter)}" +
+                                "（只有组钮那一路才许入组／出组）");
+                        }
 
                         if (!grown.Holds(RectOf(NodeOf(stackB.Id)!)))
                         {
-                            problems.Add("普通拖动把成员甩出了框：sticky 没让框跟着长");
+                            problems.Add("普通拖动把成员甩出了框：框没按名单 hug 过去罩住它");
                         }
+
+                        // 这一发同时钉住那格 bug 的另一半：框大了不等于人多了。
+                        var swallowed = BoardNotes()
+                            .Where(node => !rosterAfter.Contains(node.Id) && grown.Holds(RectOf(node)))
+                            .Select(node => node.Id)
+                            .ToList();
+
+                        Diagnostics.Write(
+                            $"selftest 普通拖出: 名单 {rosterAfter.Count} 格未变、框长到 {grown.Width:0.#}×{grown.Height:0.#}、" +
+                            $"路上被框盖住而**没**算进组的 {swallowed.Count} 格（几何那一档会把它们收进去）");
 
                         Undo();
                         Rebuild();

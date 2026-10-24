@@ -251,11 +251,14 @@ public class GroupingAndTagsTests
     }
 
     /// <summary>
-    /// 把一格成员拖远，框会拉长去接它（<c>KeepDraggedMemberInFrame</c>，10-22 定的"普通拖动不许默默脱组"）。
-    /// 这条钉的是**现在的行为**，也正是他 10-24 报那一格的机制：框一拉长，路上任何一格只要中心落进来
-    /// 就越算成员；虚线边拉到屏幕外，看着就像"分组消失了"。改法（拖出＝脱组，或成员记成 id 列表
-    /// 不再靠几何）等他定——定之前这条测试替我们看着它没被顺手改掉。
+    /// 几何那一档会吞人——这条钉的是**几何归属本身的行为**，不是界面上的规矩。
     /// </summary>
+    /// <remarks>
+    /// 他 10-24 报的两格（新建在框里当场入组、拖走一格把框拉长到吞掉路上别人）就是这套几何的代价。
+    /// 界面上的归属已经换成名单（<see cref="GroupMap"/>、组节点的 <c>members</c>）：普通拖动不改归属，
+    /// 只有组钮那一路入组／出组。这里留下的两件事是真的：没写名单的框（别的工具写的、那份改动之前的
+    /// 板子）仍按几何收人；<see cref="Grouping.Enclose"/> 也确实会把框长到罩住最远的那一格。
+    /// </remarks>
     [Fact]
     public void Dragging_one_member_far_away_stretches_the_frame_and_swallows_whatever_is_on_the_way()
     {

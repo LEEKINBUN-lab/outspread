@@ -70,7 +70,7 @@ public sealed partial class MainWindow
 
         foreach (var frame in GroupRects())
         {
-            var members = notes.Where(node => frame.Holds(RectOf(node))).ToList();
+            var members = Groups().Members(frame.Id).Select(member => NodeOf(member.Id)!).ToList();
 
             var rects = members.ConvertAll(RectOf);
             var plan = Folding.PlanOf(members.Select((node, i) => (rects[i], Shows(node))).ToList());
@@ -198,7 +198,7 @@ public sealed partial class MainWindow
     {
         foreach (var frame in GroupRects())
         {
-            var members = BoardNotes().Where(node => frame.Holds(RectOf(node))).ToList();
+            var members = Groups().Members(frame.Id).Select(member => NodeOf(member.Id)!).ToList();
 
             if (members.Count < 2)
             {

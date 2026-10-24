@@ -1172,7 +1172,7 @@ public sealed partial class MainWindow
     {
         menu.Items.Clear();
 
-        var create = new MenuFlyoutItem { Text = "新板块", KeyboardAcceleratorTextOverride = "Ctrl+T" };
+        var create = new MenuFlyoutItem { Text = "新板块", KeyboardAcceleratorTextOverride = "Ctrl+N" };
         create.Click += (_, _) => CreateNewBoard();
         menu.Items.Add(create);
     }
@@ -1276,7 +1276,7 @@ public sealed partial class MainWindow
 
         if (RealBoardCount <= 1)
         {
-            Say("最后一块板不给关：先按 Ctrl+T 起一块，再关它——关掉一块＝从本机删掉这块板");
+            Say("最后一块板不给关：先按 Ctrl+N 起一块，再关它——关掉一块＝从本机删掉这块板");
 
             return;
         }
@@ -1327,7 +1327,7 @@ public sealed partial class MainWindow
 
         if (RealBoardCount <= 1)
         {
-            Say("最后一块板不给关：先按 Ctrl+T 起一块，再关它——关掉一块＝从本机删掉这块板");
+            Say("最后一块板不给关：先按 Ctrl+N 起一块，再关它——关掉一块＝从本机删掉这块板");
 
             return;
         }
@@ -1461,7 +1461,7 @@ public sealed partial class MainWindow
     {
         if (_openBoards.Count < 2)
         {
-            Say("只开着这一块板：Ctrl+T 再起一块");
+            Say("只开着这一块板：Ctrl+N 再起一块");
 
             return;
         }
@@ -2255,6 +2255,18 @@ public sealed partial class MainWindow
     /// </remarks>
     private void SelfTestBoardSwitching(List<string> problems)
     {
+        // 新板块是 Ctrl+N（他 10-24 从 Ctrl+T 改的：Ctrl+N 是常用习惯）。菜单、键位页与键盘
+        // 都读同一张表，所以这一处写错会让三个面一起错——这里钉住它。
+        if (!Commands().Any(command => command.Label == "新板块" && command.Chord == "Ctrl+N"))
+        {
+            problems.Add("新板块的键位不是 Ctrl+N");
+        }
+
+        if (Commands().Any(command => command.Chord == "Ctrl+T"))
+        {
+            problems.Add("还有命令占着 Ctrl+T：新板块已经改到 Ctrl+N");
+        }
+
         if (_boardPath is null)
         {
             problems.Add("自检换板子：窗口没有当前板子，这一发不适用");

@@ -153,7 +153,7 @@
 
 1. **骨架仍是原生 `TabView`**：键盘、溢出滚动、中键关（平台自带）、标题栏拖拽都还是平台的。这次只换皮与几何：活动标签填成**板底**（浅 `249,250,251` / 深 `16,16,17`）、上沿 8px 圆角、13px、条高 38、标签 34、关闭键视觉 20 / 命中 24、加号 28 / 圆角 6 / 字 17。令牌在 Core 的 `TabStrip`。
 2. **标题条宿主是一个 `Grid`**：`TitleBarHost` 铺背景与底发丝，`TabView` 铺满它（右内缩 138），**加号是我们自己的 `Button`**，按最后一枚 `TabContainer` 的右缘 + 4 定位；原生 `IsAddTabButtonVisible=False`。`SetTitleBar(TitleBarHost)`，拖的还是这条宿主。
-3. **点击 + 一步建板**：`BoardLocator.NewUntitledBoard` 起 `未命名板`（重名自动加序号），写盘后切过去；不再有名字浮窗。`Ctrl+T` 走同一条。
+3. **点击 + 一步建板**：`BoardLocator.NewUntitledBoard` 起 `未命名板`（重名自动加序号），写盘后切过去；不再有名字浮窗。`Ctrl+N` 走同一条。
 4. **右键标签**：重命名（行内 TextBox，Enter 提交／Esc 取消／**点到别处也提交**）、关闭、关闭其他；右键空白/加号：新板块、打开盘上的板子。旧 `BoardPanel` 连同 `--panel boards` 取证档一起删掉；`--panel rename` 只预览输入框，带 `_renamePreview` 锁，拍图不提交、不改文件名。
    - 10-23 改名的三处形状（他报"显示的方式不太自然：没有光标、文字位置会浮动、点其他地方也不会退出"）：① 焦点走 `FocusManager.TryFocusAsync(box, FocusState.Keyboard)`——`Focus(Programmatic)` 在这一版换不来光标（双击那一下的焦点还挂在 `TabViewItem` 上），失败才退回 Programmatic；② 那一枚标签的宽度在**进改名那一拍量一次钉住**（`Min/Max/Width` 同一个数，180–300），打字途中一律不改——旧写法"临时放宽到 300 ＋ 输入框自带 180/240 字面"就是每敲一下重摆一次；标签只向右长、左沿不动，所以进改名那一次放宽不算浮动；③ 退出走窗口根上的 `PointerPressed`（`handledEventsToo`），落点不在框里就提交——**不能只等 `LostFocus`**（板面/条上空白不持焦点，那条路永远不触发，与便签编辑器同一条事实）。顺带按模板件名字收掉了 TextBox 自带的圆形清除按钮（它在模板视觉状态里，那几枚 `TextControl*` 资源管不着；Loaded 与 TextChanged 各收一次，因为状态翻转会把它设回去）。
    - 这三条都有真机读数（Computer Use 驱动一枚临时板的探针实例，不动他的板子）：改名框 `编辑 (focused)`、打完 40 字符宽度一格不变、按板面空白以后标题与回执都换了名字。

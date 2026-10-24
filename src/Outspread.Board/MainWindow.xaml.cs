@@ -2020,19 +2020,17 @@ public sealed partial class MainWindow : Window
     /// target that shrinks as the user zooms out is the opposite of what a hit area is for.
     /// </remarks>
     private string? EdgeOf(CanvasNode node, Point screen, double band = SelectionChrome.EdgeBandPx)
-    {
-        var candidates = new (string Edge, double Away)[]
-        {
-            ("w", Math.Abs(screen.X - _view.ToScreenX(node.X))),
-            ("e", Math.Abs(screen.X - _view.ToScreenX(node.Right))),
-            ("n", Math.Abs(screen.Y - _view.ToScreenY(node.Y))),
-            ("s", Math.Abs(screen.Y - _view.ToScreenY(node.Bottom))),
-        };
+        => LinkPull.EdgeNear(ScreenRectOf(node), screen.X, screen.Y, band)?.Side;
 
-        var nearest = candidates.MinBy(candidate => candidate.Away);
-
-        return nearest.Away <= band ? nearest.Edge : null;
-    }
+    /// <summary>这一格此刻在屏幕上的矩形（世界坐标乘缩放，不取排版后的 Width/Height——
+    /// 自检在没排版的窗口上问这一句时那两个还是 0）。</summary>
+    private Grouping.Rect ScreenRectOf(CanvasNode node)
+        => new(
+            node.Id,
+            _view.ToScreenX(node.X),
+            _view.ToScreenY(node.Y),
+            node.Width * _view.Zoom,
+            node.Height * _view.Zoom);
 
     private void OnHandlePressed(object sender, PointerRoutedEventArgs e)
     {
@@ -2501,13 +2499,33 @@ public sealed partial class MainWindow : Window
     /// <summary>双击那一发落到哪儿：格子的边缘带＝拉线，格内＝编辑，空白＝新建。</summary>
     private (string Route, CanvasNode? Node, string? Side) DoubleTapTarget(Point at)
     {
-        if (NodeAt(at) is not { } under)
+        if (NodeAt(at) is { } under)
         {
-            return ("新建", null, null);
+            // 起线的边缘带比改尺寸那一档宽一倍：往里 12px 都算边缘；再往里才是编辑。
+            return EdgeOf(under, at, LinkPull.StartBandPx) is { } side ? ("拉线", under, side) : ("编辑", under, null);
         }
 
-        // 起线的边缘带比改尺寸那一档宽一倍：不必压在正中间那条线上，7~12px 也算边缘。
-        return EdgeOf(under, at, LinkPull.StartBandPx) is { } side ? ("拉线", under, side) : ("编辑", under, null);
+        // 格子外面：边界再往外 12px 也算边缘（他 10-24 的"稍微超出一点也可以"）。
+        // 两格的外扩带撞在一起时取更近的那一格；再远就回到"空白＝新建"。
+        CanvasNode? outside = null;
+        var outsideSide = CanvasEdge.Right;
+        var closest = double.MaxValue;
+
+        foreach (var node in BoardNotes())
+        {
+            if (LinkPull.EdgeNear(ScreenRectOf(node), at.X, at.Y, LinkPull.StartBandPx) is not { } near || near.Away >= closest)
+            {
+                continue;
+            }
+
+            closest = near.Away;
+            outside = node;
+            outsideSide = near.Side;
+        }
+
+        return outside is null
+            ? ("新建", null, null)
+            : ("拉线", outside, outsideSide);
     }
 
     private void OnSurfaceDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
@@ -3182,7 +3200,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     /// <remarks>
     /// 2026-10-23 他点名把「板子」「换板子」从右键菜单里删掉：这两节管的不是板上那件事，而是
-    /// "窗口现在开哪块板"，顶栏标签、加号与 Ctrl+T/Ctrl+W 已经把它们的入口说全了。命令表本身不动——
+    /// "窗口现在开哪块板"，顶栏标签、加号与 Ctrl+N/Ctrl+W 已经把它们的入口说全了。命令表本身不动——
     /// 键盘分发与按住 Tab 的那份清单读的仍是整张表，所以删的只是这一个菜单面，不是能力。
     /// 同一天「恢复…」也跟着配对/筛选搬去了标题条右端的 ⋮——那三件是整块板/整台设备的动作。
     /// </remarks>
@@ -4846,6 +4864,25 @@ public sealed partial class MainWindow : Window
                 if (DoubleTapTarget(inside).Route != "编辑")
                 {
                     problems.Add("双击离边 20px 的地方判成了拉线——格内编辑被边缘带吃掉了");
+                }
+
+                // 边界外面 5px 也算起线（他 10-24 的"稍微超出一点"）；20px 外回到新建。
+                var justOutside = new Point(
+                    _view.ToScreenX(tapped.X + (tapped.Width / 2)),
+                    _view.ToScreenY(tapped.Y) - 5);
+
+                var wellOutside = new Point(
+                    _view.ToScreenX(tapped.X + (tapped.Width / 2)),
+                    _view.ToScreenY(tapped.Y) - 20);
+
+                if (DoubleTapTarget(justOutside) is not ("拉线", var outsideNode, _) || outsideNode?.Id != tapped.Id)
+                {
+                    problems.Add("双击边界外 5px 没走到拉线——边缘带只认格子里面");
+                }
+
+                if (DoubleTapTarget(wellOutside).Route != "新建")
+                {
+                    problems.Add("双击边界外 20px 判成了拉线——空白新建的地盘被吃了");
                 }
 
                 if (DoubleTapTarget(inMiddle) is not ("编辑", var editNode, _))

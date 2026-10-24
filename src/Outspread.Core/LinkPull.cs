@@ -16,11 +16,39 @@ public static class LinkPull
     public const double ScreenReachPx = 44;
 
     /// <summary>
-    /// 双击起线时"算在边缘上"的带宽（屏幕像素）：比改尺寸那一档（6）宽一倍，
-    /// 不必压在正中间那条线上——他 10-24 要的"边缘一点的范围都算"，同时把格内双击
-    /// （编辑）与空白双击（新建）各留在自己的地盘里。
+    /// 双击起线时"算在边缘上"的带宽（屏幕像素）：从边界往里、往外各算这么宽——
+    /// 他 10-24 要的"往外出一点、往里一点都算边缘"；同时把格内双击（编辑）与空白双击（新建）
+    /// 各留在自己的地盘里（格心与远处）。
     /// </summary>
     public const double StartBandPx = 12;
+
+    /// <summary>
+    /// 屏幕坐标里离矩形边界最近的那一面，距离必须落在 <paramref name="band"/> 以内（往里往外都算）。
+    /// 带外用 null。原来的写法只量四条边的**直线距离**，于是"在格子上方 300px、离左边 5px"
+    /// 也会被认成左缘——这里先用外扩矩形筛一遍，再在四条边里挑最近的那条。
+    /// </summary>
+    public static (string Side, double Away)? EdgeNear(Grouping.Rect rect, double x, double y, double band)
+    {
+        if (x < rect.X - band
+            || x > rect.X + rect.Width + band
+            || y < rect.Y - band
+            || y > rect.Y + rect.Height + band)
+        {
+            return null;
+        }
+
+        var candidates = new (string Side, double Away)[]
+        {
+            (CanvasEdge.Left, Math.Abs(x - rect.X)),
+            (CanvasEdge.Right, Math.Abs(x - (rect.X + rect.Width))),
+            (CanvasEdge.Top, Math.Abs(y - rect.Y)),
+            (CanvasEdge.Bottom, Math.Abs(y - (rect.Y + rect.Height))),
+        };
+
+        var nearest = candidates.MinBy(candidate => candidate.Away);
+
+        return nearest.Away <= band ? nearest : null;
+    }
 
     /// <summary>吸附半径按缩放归一：缩放拿不到（≤0）时退回屏幕值，不除零。</summary>
     public static double Reach(double zoom) => zoom > 0 ? ScreenReachPx / zoom : ScreenReachPx;

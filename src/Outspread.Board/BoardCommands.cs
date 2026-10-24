@@ -84,7 +84,7 @@ public sealed partial class MainWindow
         new("恢复…", string.Empty, "板子", OpenRestorePanel),
 
         // 一块板一件事：这一组管的是"这扇窗口现在在处理哪件事"，不动板子上的任何一个字。
-        new("新板块", "Ctrl+T", "换板子", CreateNewBoard),
+        new("新板块", "Ctrl+N", "换板子", CreateNewBoard),
         new("关掉这块板", "Ctrl+W", "换板子", CloseCurrentBoard, Sheet: false),
         new("下一块板", "Ctrl+PageDown", "换板子", () => StepBoard(1)),
         new("上一块板", "Ctrl+PageUp", "换板子", () => StepBoard(-1)),

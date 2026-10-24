@@ -88,4 +88,20 @@ public sealed class LinkPullTests
         Assert.True(LinkPull.StartBandPx > SelectionChrome.EdgeBandPx);
         Assert.True(LinkPull.StartBandPx <= 16, "再宽就会把靠边的格内双击判成拉线");
     }
+
+    [Fact]
+    public void The_start_band_counts_a_little_inside_and_a_little_outside_but_not_the_centre()
+    {
+        var rect = Note("a", 100, 100, 200, 100);
+
+        Assert.Equal(CanvasEdge.Top, LinkPull.EdgeNear(rect, 200, 105, 12)?.Side);    // 往里 5
+        Assert.Equal(CanvasEdge.Top, LinkPull.EdgeNear(rect, 200, 95, 12)?.Side);     // 往外 5
+        Assert.Null(LinkPull.EdgeNear(rect, 200, 150, 12));                           // 格心
+        Assert.Null(LinkPull.EdgeNear(rect, 200, 80, 12));                            // 往外 20
+        Assert.Equal(CanvasEdge.Left, LinkPull.EdgeNear(rect, 92, 150, 12)?.Side);    // 左外 8
+        Assert.NotNull(LinkPull.EdgeNear(rect, 95, 95, 12));                          // 拐角斜出界，仍在带内
+
+        // 旧写法只量四条边的直线距离：这个点（格子上方 300px、离左边 5px）会被误认成左缘。
+        Assert.Null(LinkPull.EdgeNear(rect, 350, 95, 12));
+    }
 }

@@ -610,7 +610,7 @@
   <div class="sp-window" id="ospWindow" data-theme="light" data-mode="new" data-motion="on">
     <div class="sp-strip" id="ospStrip">
       <div class="sp-tabs" id="ospTabs" role="tablist" aria-label="开着的板子"></div>
-      <button type="button" class="sp-add" id="ospAdd" aria-label="新板块" title="新板块 · Ctrl+T">＋</button>
+      <button type="button" class="sp-add" id="ospAdd" aria-label="新板块" title="新板块 · Ctrl+N">＋</button>
       <div class="sp-space" id="ospSpace" aria-hidden="true"></div>
       <div class="sp-caption" aria-hidden="true">
         <button type="button" tabindex="-1" title="最小化">&#x2013;</button>
@@ -998,7 +998,7 @@
             html += '<button type="button" class="sp-menu-row" data-action="closeOthers" role="menuitem">关闭其他</button>';
           }
         } else if (kind === "strip") {
-          html += '<button type="button" class="sp-menu-row" data-action="new" role="menuitem">新板块<span class="sp-menu-hint">Ctrl+T</span></button>';
+          html += '<button type="button" class="sp-menu-row" data-action="new" role="menuitem">新板块<span class="sp-menu-hint">Ctrl+N</span></button>';
         } else if (kind === "open") {
           html += '<div class="sp-menu-title">盘上的板子</div>';
           if (state.closed.length === 0) {

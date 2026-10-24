@@ -2292,6 +2292,22 @@ public sealed partial class MainWindow
             problems.Add("拆组还挂着快捷键：Ctrl＋G 已经是开关，拆组只该留在菜单里");
         }
 
+        // 10-25 删掉的几条：四向微调与"回到 100%"连命令行一起下了，别再回到表里。
+        string[] retired = ["上移一格", "下移一格", "左移一格", "右移一格", "回到 100%"];
+
+        foreach (var label in retired)
+        {
+            if (Commands().Any(command => command.Label == label))
+            {
+                problems.Add($"命令表里还留着已删除的「{label}」");
+            }
+        }
+
+        if (Commands().Any(command => command.Label == "从边缘拉一根线" && command.Menu))
+        {
+            problems.Add("『从边缘拉一根线』还挂在右键菜单上（键位页保留即可）");
+        }
+
         if (_boardPath is null)
         {
             problems.Add("自检换板子：窗口没有当前板子，这一发不适用");

@@ -3234,28 +3234,18 @@ public sealed partial class MainWindow : Window
 
     private void ShowBoardMenu(Point screenPosition)
     {
-        var where = WhereMenuIs();
+        var menu = BuildBoardMenu(WhereMenuIs());
+        menu.ShowAt(BoardArea, new FlyoutShowOptions { Position = screenPosition });
+    }
+
+    /// <summary>右键菜单长什么样只由"点在什么上"决定；拆出来，自检能直接读里面的行（不用真弹一次）。</summary>
+    private MenuFlyout BuildBoardMenu(MenuWhere where)
+    {
         var menu = new MenuFlyout();
 
         if (where == MenuWhere.Group)
         {
             menu.Items.Add(new MenuFlyoutItem { Text = $"整组 · {_selection.Count} 格", IsEnabled = false });
-        }
-
-        if (where != MenuWhere.Empty)
-        {
-            // 换色不再走右键菜单——它长在便签操作条的色板弹层上（NoteActionRail.cs），
-            // 一处入口比两处各摆一份更好维护，也避免"菜单里能选、条上不能选"这种两套语义。
-            var order = new MenuFlyoutSubItem { Text = "叠放" };
-
-            var front = new MenuFlyoutItem { Text = "提到最前" };
-            front.Click += (_, _) => Reorder(frontmost: true);
-            var back = new MenuFlyoutItem { Text = "压到最后" };
-            back.Click += (_, _) => Reorder(frontmost: false);
-
-            order.Items.Add(front);
-            order.Items.Add(back);
-            menu.Items.Add(order);
         }
 
         if (where == MenuWhere.Group)
@@ -3269,7 +3259,7 @@ public sealed partial class MainWindow : Window
         // 一处存在（单键快捷没做之前，菜单就是 WCAG 2.5.7 要求的那个替代面）。
         foreach (var section in Sections())
         {
-            var rows = section.Where(command => CommandApplies(command, where)).ToList();
+            var rows = section.Where(command => command.Menu && CommandApplies(command, where)).ToList();
 
             if (rows.Count == 0 || !SectionApplies(section.Key, where))
             {
@@ -3296,13 +3286,42 @@ public sealed partial class MainWindow : Window
             menu.Items.Add(delete);
         }
 
-        var reset = new MenuFlyoutItem { Text = "回到 100%", KeyboardAcceleratorTextOverride = "Ctrl+0" };
-        reset.Click += (_, _) => ResetView();
-        menu.Items.Add(reset);
-
         // 筛选 / 恢复 / 配对 2026-10-23 搬到标题条右端的 ⋮（SettingsMenu.cs）：这三件是整块板/
         // 整台设备的动作，不是"右击这格要改什么"。右键菜单只留板面上能看见的那几件。
-        menu.ShowAt(BoardArea, new FlyoutShowOptions { Position = screenPosition });
+        return menu;
+    }
+
+    /// <summary>
+    /// 右键菜单里他 10-24/25 点掉的那几项必须不在；同时留一个正面对照，免得"删过头"被当成干净。
+    /// </summary>
+    private void SelfTestBoardMenu(List<string> problems)
+    {
+        static List<string> Texts(MenuFlyout menu)
+            => menu.Items.OfType<MenuFlyoutItem>().Select(item => item.Text)
+                .Concat(menu.Items.OfType<MenuFlyoutSubItem>()
+                    .SelectMany(sub => sub.Items.OfType<MenuFlyoutItem>().Select(item => item.Text)))
+                .ToList();
+
+        var all = Texts(BuildBoardMenu(MenuWhere.OneNote)).Concat(Texts(BuildBoardMenu(MenuWhere.Empty))).ToList();
+        string[] gone = ["叠放", "提到最前", "压到最后", "上移一格", "下移一格", "左移一格", "右移一格", "从边缘拉一根线", "回到 100%", "在这里新建一格"];
+        var leaked = gone.Where(all.Contains).Distinct().ToList();
+
+        if (leaked.Count > 0)
+        {
+            problems.Add($"右键菜单里还有他点掉的那几项：{string.Join("、", leaked)}");
+        }
+
+        if (!all.Contains("按颜色排列") || !all.Contains("按标签排列"))
+        {
+            problems.Add("右键菜单里读不到两条排列命令——删过头了");
+        }
+
+        if (!all.Any(text => text.StartsWith("删掉这 ", StringComparison.Ordinal)))
+        {
+            problems.Add("右键菜单里读不到『删掉这 N 格』——删过头了");
+        }
+
+        Diagnostics.Write($"selftest 右键菜单: {all.Count} 行，叠放/四向微调/边缘拉线/回到100%/新建一格均不在；排列与删除仍在");
     }
 
     private void ApplyColor(string? preset)
@@ -3319,28 +3338,6 @@ public sealed partial class MainWindow : Window
             if (NodeOf(id) is { } node)
             {
                 node.Color = preset;
-            }
-        }
-
-        EndGesture();
-
-        Rebuild();
-        SaveSoon();
-    }
-
-    private void Reorder(bool frontmost)
-    {
-        BeginGesture(frontmost ? "提到最前" : "压到最后");
-
-        foreach (var id in _selection)
-        {
-            if (frontmost)
-            {
-                _document.BringToFront(id);
-            }
-            else
-            {
-                _document.SendToBack(id);
             }
         }
 
@@ -5340,6 +5337,9 @@ public sealed partial class MainWindow : Window
         // 排列：矩阵、块间距、到期优先级、连线顺序（10-24 他把"聚拢"改名并换了排法）。
         SelfTestArrange(problems);
 
+        // 右键菜单删掉的那几项（叠放、四向微调、边缘拉线、回到 100%、新建一格）。
+        SelfTestBoardMenu(problems);
+
         // 一块丢了图的板子也要开得成：那一格写"未找到"，而不是把窗口打死（10-23 撞上的那一发）。
         SelfTestMissingImageTile(problems);
 
@@ -6543,28 +6543,6 @@ public sealed partial class MainWindow : Window
 
                 ClearSelection();
                 ProjectSelection();
-                e.Handled = true;
-                break;
-
-            // 方向键＝微调选中的格子（1 世界像素，Shift 是 10 倍）。带 Ctrl 的那一发留给以后的
-            // "跳到邻格"，这里先不占——不占也比占错了强。
-            case Windows.System.VirtualKey.Up when !control:
-                Nudge(0, -(shift ? NudgePx * 10 : NudgePx));
-                e.Handled = true;
-                break;
-
-            case Windows.System.VirtualKey.Down when !control:
-                Nudge(0, shift ? NudgePx * 10 : NudgePx);
-                e.Handled = true;
-                break;
-
-            case Windows.System.VirtualKey.Left when !control:
-                Nudge(-(shift ? NudgePx * 10 : NudgePx), 0);
-                e.Handled = true;
-                break;
-
-            case Windows.System.VirtualKey.Right when !control:
-                Nudge(shift ? NudgePx * 10 : NudgePx, 0);
                 e.Handled = true;
                 break;
 

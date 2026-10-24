@@ -31,9 +31,6 @@ public sealed partial class MainWindow
     /// <summary>一屏够读的行数。再多就不是"找东西"而是"把板子列一遍"了。</summary>
     private const int SearchRowsShown = 12;
 
-    /// <summary>方向键一发的位移，单位是世界像素。</summary>
-    private const double NudgePx = 1;
-
     private bool _searchOpen;
 
     private IReadOnlyList<BoardSearch.Hit> _searchHits = [];
@@ -338,39 +335,4 @@ public sealed partial class MainWindow
         Say($"{label}：{members.Count} 格，缩放 {Percent()}");
     }
 
-    /// <summary>
-    /// 方向键微调：一次一格世界像素，Shift 是 10 倍。它走事务，所以一发按键＝一步撤销。
-    /// </summary>
-    /// <remarks>
-    /// 位移按世界像素而不是屏幕像素：缩到 20% 的时候"1 屏幕像素"是 5 世界像素，
-    /// 那样微调的粗细就跟着相机走，而同一个键位要的是一次对齐上的移动。
-    /// </remarks>
-    private void Nudge(double dx, double dy)
-    {
-        var members = SelectedNotes();
-
-        if (members.Count == 0)
-        {
-            // 不是静默 no-op（不变量 4）：说清楚这个键要什么。
-            Say("方向键挪的是选中的格子，现在一格都没选");
-
-            return;
-        }
-
-        BeginGesture($"挪了 {members.Count} 格");
-
-        foreach (var node in members)
-        {
-            node.X += dx;
-            node.Y += dy;
-        }
-
-        EndGesture();
-
-        Rebuild();
-        SaveSoon();
-        ProjectSelection();
-
-        Say($"挪了 {members.Count} 格 · {Math.Abs(dx) + Math.Abs(dy):0.#} 世界像素（Shift 是 10 倍，Ctrl＋Z 放回）");
-    }
 }

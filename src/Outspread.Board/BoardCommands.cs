@@ -40,16 +40,31 @@ public sealed partial class MainWindow
     private readonly record struct Command(string Label, string Chord, string Section, Action Run, bool Dispatched = true, bool Listed = true, bool Sheet = true)
     {
         public string MenuText => Chord is { Length: > 0 } chord ? $"{Label}    {chord}" : Label;
+
+        /// <summary>
+        /// 键帽上那一串：方向键写成箭头（Alt+Left → Alt+←）。表里的字符串仍用 e.Key 的名字，
+        /// 因为派发是拿它和 <c>e.Key.ToString()</c> 比的；这里只换显示。
+        /// </summary>
+        public string ChordDisplay => Chord is { Length: > 0 } chord
+            ? string.Join('+', chord.Split('+').Select(part => part switch
+            {
+                "Left" => "←",
+                "Right" => "→",
+                "Up" => "↑",
+                "Down" => "↓",
+                _ => part,
+            }))
+            : string.Empty;
     }
 
     private Command[] Commands() =>
     [
-        new("左对齐", "Alt+A", "排布", () => Arrange("左对齐", items => Aligning.Align(items, Aligning.Side.Left))),
+        new("左对齐", "Alt+Left", "排布", () => Arrange("左对齐", items => Aligning.Align(items, Aligning.Side.Left))),
         new("水平居中", "Alt+H", "排布", () => Arrange("水平居中", items => Aligning.Align(items, Aligning.Side.HCenter))),
-        new("右对齐", "Alt+D", "排布", () => Arrange("右对齐", items => Aligning.Align(items, Aligning.Side.Right))),
-        new("上对齐", "Alt+W", "排布", () => Arrange("上对齐", items => Aligning.Align(items, Aligning.Side.Top))),
+        new("右对齐", "Alt+Right", "排布", () => Arrange("右对齐", items => Aligning.Align(items, Aligning.Side.Right))),
+        new("上对齐", "Alt+Up", "排布", () => Arrange("上对齐", items => Aligning.Align(items, Aligning.Side.Top))),
         new("垂直居中", "Alt+V", "排布", () => Arrange("垂直居中", items => Aligning.Align(items, Aligning.Side.VCenter))),
-        new("下对齐", "Alt+S", "排布", () => Arrange("下对齐", items => Aligning.Align(items, Aligning.Side.Bottom))),
+        new("下对齐", "Alt+Down", "排布", () => Arrange("下对齐", items => Aligning.Align(items, Aligning.Side.Bottom))),
         new("横向均分", "Alt+J", "排布", () => Arrange("横向均分", items => Aligning.Distribute(items, horizontal: true))),
         new("纵向均分", "Alt+K", "排布", () => Arrange("纵向均分", items => Aligning.Distribute(items, horizontal: false))),
         new("堆叠", "Alt+L", "排布", () => Arrange("堆叠", Aligning.Stack)),
@@ -62,8 +77,8 @@ public sealed partial class MainWindow
         new("右移一格", "→", "排布", () => Nudge(NudgePx, 0), Dispatched: false, Sheet: false),
         new("按颜色聚拢", "Alt+Y", "聚拢", () => Cluster("按颜色聚拢", node => node.Color ?? "none")),
         new("按标签聚拢", "Alt+T", "聚拢", () => Cluster("按标签聚拢", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签")),
-        new("成组", "Ctrl+G", "组织", GroupSelection),
-        new("拆组", "Ctrl+Shift+G", "组织", UngroupSelection),
+        new("成组", "Ctrl+G", "组织", GroupOrDissolve),
+        new("拆组", string.Empty, "组织", UngroupSelection, Sheet: false),
         new("复制", "Ctrl+D", "组织", DuplicateSelection),
 
         // 连线按叠放次序把选中的串成一条链，全都在就是拆链（原型同一条命令两用）。
@@ -86,8 +101,8 @@ public sealed partial class MainWindow
         // 一块板一件事：这一组管的是"这扇窗口现在在处理哪件事"，不动板子上的任何一个字。
         new("新板块", "Ctrl+N", "换板子", CreateNewBoard),
         new("关掉这块板", "Ctrl+W", "换板子", CloseCurrentBoard, Sheet: false),
-        new("下一块板", "Ctrl+PageDown", "换板子", () => StepBoard(1)),
-        new("上一块板", "Ctrl+PageUp", "换板子", () => StepBoard(-1)),
+        new("下一块板", "Ctrl+Right", "换板子", () => StepBoard(1)),
+        new("上一块板", "Ctrl+Left", "换板子", () => StepBoard(-1)),
 
         // Shift+1 / Shift+2 同样走那枚 switch（数字键的 e.Key 是 Number1），这里只负责菜单与清单上有它。
         new("看到全部", "Shift+1", "看", ZoomToFit, Dispatched: false),
@@ -176,9 +191,27 @@ public sealed partial class MainWindow
     {
         var members = SelectedNotes();
 
-        if (members.Count < 1)
+        if (members.Count == 0)
         {
             Say("先选中至少一格再成组");
+            return;
+        }
+
+        var map = Groups();
+        var loose = members.Where(note => map.GroupOf(RectOf(note)) is null).ToList();
+
+        if (loose.Count == 0)
+        {
+            Say("选中的格子都已经在组里了 · 按 Ctrl＋G 是解散");
+            return;
+        }
+
+        // 选中里已经有组里的格子 ⇒ 把没成组的并进那个组，不再罩第二个框
+        // （他 10-24：成组和没成组的混选，没成组的入组）。
+        if (loose.Count < members.Count && TargetGroup(map, members) is { } target)
+        {
+            AppendToGroup(target, loose, map);
+
             return;
         }
 
@@ -198,14 +231,107 @@ public sealed partial class MainWindow
 
         _groupFocus = made.Id;
         Rebuild();
+        Reselect(members.Select(member => member.Id));
         SaveSoon();
         ProjectSelection();
 
         Say(members.Count == 1
-            ? $"成组：框住这 1 格（想往里再加，选中它再『创建分组』，或用组钮拖）"
-            : $"成组：框住 {members.Count} 格 · 点便签＝单枚，点名字或虚线边＝整组");
+            ? "成组：框住这 1 格 · 再按 Ctrl＋G 是解散"
+            : $"成组：框住 {members.Count} 格 · 再按 Ctrl＋G 是解散");
     }
 
+    /// <summary>
+    /// Ctrl＋G 这一发是"成组"还是"解散"：选中的每一格都已经在组里 ⇒ 解散；否则按
+    /// <see cref="GroupSelection"/> 办（全散＝新建，混选＝把散格并进已有的组）。
+    /// </summary>
+    private void GroupOrDissolve()
+    {
+        var members = SelectedNotes();
+        var map = Groups();
+
+        if (members.Count > 0 && members.All(note => map.GroupOf(RectOf(note)) is not null))
+        {
+            UngroupSelection();
+
+            return;
+        }
+
+        GroupSelection();
+    }
+
+    /// <summary>混选里该并进哪个组：先认当前聚焦的那个组，再认"选中成员最多的那个"。</summary>
+    private Grouping.Rect? TargetGroup(GroupMap map, IReadOnlyList<CanvasNode> members)
+    {
+        var groups = members
+            .Select(note => map.GroupOf(RectOf(note)))
+            .Where(group => group is not null)
+            .Select(group => group!.Value)
+            .ToList();
+
+        if (groups.Count == 0)
+        {
+            return null;
+        }
+
+        if (_groupFocus is { } focus && groups.Any(group => group.Id == focus))
+        {
+            return groups.First(group => group.Id == focus);
+        }
+
+        return groups
+            .GroupBy(group => group.Id)
+            .OrderByDescending(bucket => bucket.Count())
+            .ThenBy(bucket => bucket.Key, StringComparer.Ordinal)
+            .First()
+            .First();
+    }
+
+    /// <summary>把没成组的并进已有那个组：只改名单，框在 EndGesture 里按名单自己长。</summary>
+    private void AppendToGroup(Grouping.Rect target, IReadOnlyList<CanvasNode> loose, GroupMap map)
+    {
+        if (NodeOf(target.Id) is not { Kind: CanvasNodeKind.Group } frame)
+        {
+            return;
+        }
+
+        var ids = (frame.GroupMemberIds ?? map.MemberIds(target.Id)).ToList();
+
+        foreach (var note in loose)
+        {
+            if (!ids.Contains(note.Id, StringComparer.Ordinal))
+            {
+                ids.Add(note.Id);
+            }
+        }
+
+        var keep = _selection.ToList();
+
+        BeginGesture("并进组");
+        frame.SetGroupMembers(ids);
+        EndGesture();
+
+        _groupFocus = frame.Id;
+        Rebuild();
+        Reselect(keep);
+        SaveSoon();
+        ProjectSelection();
+
+        Say($"把 {loose.Count} 格并进了这个组 · 框跟着长，格子没动 · 再按 Ctrl＋G 是解散");
+    }
+
+    /// <summary>重铸会清选中；成组/解散之后要把人还选着——不然"再按一次"就没有对象了。</summary>
+    private void Reselect(IEnumerable<string> ids)
+    {
+        foreach (var id in ids)
+        {
+            if (NodeOf(id) is not null)
+            {
+                _selection.Add(id);
+            }
+        }
+    }
+
+    /// <summary>解散选中这些格子所在的组（菜单那一项；Ctrl＋G 在"全都在组里"时走这里）。</summary>
     private void UngroupSelection()
     {
         var groups = GroupRects();
@@ -239,12 +365,15 @@ public sealed partial class MainWindow
 
         _groupFocus = null;
 
+        var keep = _selection.ToList();
+
         EndGesture();
         Rebuild();
+        Reselect(keep);
         SaveSoon();
         ProjectSelection();
 
-        Say($"拆掉了 {hit.Count} 个组，格子的位置没动（Ctrl＋Z 可回退）");
+        Say($"解散了 {hit.Count} 个组，格子的位置没动（Ctrl＋Z 可回退）");
     }
 
     private void DuplicateSelection()
@@ -298,5 +427,96 @@ public sealed partial class MainWindow
             .ToList();
 
         ApplyUnitMoves(label, units, Aligning.Cluster([.. units.Select(PlacedOf)], keys));
+    }
+
+    /// <summary>
+    /// Ctrl＋G 是一枚开关：全散＝新建；混选＝把散格并进已有的那个组；全在组里＝解散。
+    /// 组完/解散以后选中必须还在——否则"再按一次"没有对象。三发撤销要回到原样。
+    /// </summary>
+    private void SelfTestGroupToggle(List<string> problems)
+    {
+        var before = _document.ToJson();
+        var loose = BoardNotes().Where(note => Groups().GroupOf(RectOf(note)) is null).Take(2).ToList();
+
+        if (loose.Count < 2)
+        {
+            problems.Add("自检成组开关: 板上不足两格散格，这一发不适用");
+
+            return;
+        }
+
+        var groupsBefore = GroupRects().Count;
+
+        SelectOnly(loose[0].Id);
+        GroupOrDissolve();
+
+        var group = Groups().GroupOf(RectOf(loose[0]))?.Id;
+
+        if (group is null || GroupRects().Count != groupsBefore + 1)
+        {
+            problems.Add($"自检成组开关: 单格 Ctrl＋G 没建出新组（组数 {GroupRects().Count}，原 {groupsBefore}）");
+
+            Undo();
+            Rebuild();
+            ClearSelection();
+            ProjectSelection();
+
+            return;
+        }
+
+        if (!_selection.Contains(loose[0].Id))
+        {
+            problems.Add("自检成组开关: 成组以后选中被清掉了——再按一次没有对象");
+        }
+
+        // 混选：这一格已在组里 ＋ 另一格散着 ⇒ 只把散的那格并进去，不罩第二个框。
+        SelectOnly(loose[0].Id);
+        _selection.Add(loose[1].Id);
+        ProjectSelection();
+        GroupOrDissolve();
+
+        var roster = NodeOf(group)?.GroupMemberIds ?? [];
+
+        if (GroupRects().Count != groupsBefore + 1)
+        {
+            problems.Add($"自检成组开关: 混选以后组数是 {GroupRects().Count}，应仍是 {groupsBefore + 1}（不该再造一个框）");
+        }
+
+        if (!roster.Contains(loose[1].Id, StringComparer.Ordinal))
+        {
+            problems.Add("自检成组开关: 混选里没成组的那格没被并进组");
+        }
+
+        // 全在组里 ⇒ 再按一次是解散。
+        GroupOrDissolve();
+
+        if (NodeOf(group) is not null)
+        {
+            problems.Add("自检成组开关: 选中的全在组里时按 Ctrl＋G 没解散");
+        }
+
+        if (!_selection.Contains(loose[0].Id) || !_selection.Contains(loose[1].Id))
+        {
+            problems.Add("自检成组开关: 解散以后选中丢了");
+        }
+
+        for (var step = 0; step < 3; step++)
+        {
+            Undo();
+        }
+
+        Rebuild();
+
+        if (_document.ToJson() != before)
+        {
+            problems.Add("自检成组开关: 三发撤销以后文档没回到原样");
+        }
+        else
+        {
+            Diagnostics.Write("selftest 成组开关: 全散新建、混选并入、全在组里解散、选中一路保住；三发撤销回原样");
+        }
+
+        ClearSelection();
+        ProjectSelection();
     }
 }

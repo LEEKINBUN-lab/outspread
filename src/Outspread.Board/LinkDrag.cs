@@ -280,11 +280,16 @@ public sealed partial class MainWindow
     }
 
     /// <summary>边缘命中带回的是 w/e/n/s（缩放那一套的坐标轴），文档里写的是格式那四个名字。</summary>
-    private static string SpecSide(string band) => band switch
+    /// <summary>
+    /// 两套写法都收：单字母（w/e/n/s，改尺寸那一条与老调用）和 spec 词（left/right/top/bottom，
+    /// 双击起线走 EdgeNear）。10-24 只收单字母、其余一律落到 Bottom，于是"在哪双击都从下边起线"。
+    /// </summary>
+    private static string SpecSide(string side) => side switch
     {
-        "w" => CanvasEdge.Left,
-        "e" => CanvasEdge.Right,
-        "n" => CanvasEdge.Top,
+        "w" or CanvasEdge.Left => CanvasEdge.Left,
+        "e" or CanvasEdge.Right => CanvasEdge.Right,
+        "n" or CanvasEdge.Top => CanvasEdge.Top,
+        "s" or CanvasEdge.Bottom => CanvasEdge.Bottom,
         _ => CanvasEdge.Bottom,
     };
 

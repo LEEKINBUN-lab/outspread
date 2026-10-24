@@ -2267,6 +2267,31 @@ public sealed partial class MainWindow
             problems.Add("还有命令占着 Ctrl+T：新板块已经改到 Ctrl+N");
         }
 
+        // 10-24 换的两组：切板走 Ctrl＋左右，四向对齐走 Alt＋方向键。
+        (string Label, string Chord)[] wanted =
+        [
+            ("上一块板", "Ctrl+Left"),
+            ("下一块板", "Ctrl+Right"),
+            ("左对齐", "Alt+Left"),
+            ("右对齐", "Alt+Right"),
+            ("上对齐", "Alt+Up"),
+            ("下对齐", "Alt+Down"),
+        ];
+
+        foreach (var (label, chord) in wanted)
+        {
+            if (!Commands().Any(command => command.Label == label && command.Chord == chord))
+            {
+                problems.Add($"「{label}」的键位不是 {chord}");
+            }
+        }
+
+        // 拆组不再占快捷键：Ctrl＋G 自己就是开关（全在组里＝解散）。
+        if (Commands().Any(command => command.Label == "拆组" && command.Chord is { Length: > 0 }))
+        {
+            problems.Add("拆组还挂着快捷键：Ctrl＋G 已经是开关，拆组只该留在菜单里");
+        }
+
         if (_boardPath is null)
         {
             problems.Add("自检换板子：窗口没有当前板子，这一发不适用");

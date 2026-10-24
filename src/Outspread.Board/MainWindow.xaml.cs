@@ -1637,7 +1637,7 @@ public sealed partial class MainWindow : Window
         // 组框不吃这一发：它的边是"点边＝选整组"的门，缩放一个派生出来的框也没有意义。
         if (_selection.Count == 1 && NodeOf(id) is { Kind: not CanvasNodeKind.Group } pressed && EdgeOf(pressed, screen) is { } edge)
         {
-            BeginResize(edge, screen);
+            BeginResize(ResizeLetter(edge), screen);
 
             BoardArea.CapturePointer(e.Pointer);
             e.Handled = true;
@@ -2021,6 +2021,18 @@ public sealed partial class MainWindow : Window
     /// </remarks>
     private string? EdgeOf(CanvasNode node, Point screen, double band = SelectionChrome.EdgeBandPx)
         => LinkPull.EdgeNear(ScreenRectOf(node), screen.X, screen.Y, band)?.Side;
+
+    /// <summary>
+    /// EdgeNear 给的是 spec 词（left/right/top/bottom），BeginResize 认的是单字母（w/e/n/s）。
+    /// 不转这一步的话"left".Contains('e') 会把左缘当成右缘——10-24 重构时就是这么坏掉的。
+    /// </summary>
+    private static string ResizeLetter(string side) => side switch
+    {
+        CanvasEdge.Left => "w",
+        CanvasEdge.Right => "e",
+        CanvasEdge.Top => "n",
+        _ => "s",
+    };
 
     /// <summary>这一格此刻在屏幕上的矩形（世界坐标乘缩放，不取排版后的 Width/Height——
     /// 自检在没排版的窗口上问这一句时那两个还是 0）。</summary>
@@ -3254,7 +3266,7 @@ public sealed partial class MainWindow : Window
 
         if (where == MenuWhere.Group)
         {
-            var ungroup = new MenuFlyoutItem { Text = "拆组", KeyboardAcceleratorTextOverride = "Ctrl+Shift+G" };
+            var ungroup = new MenuFlyoutItem { Text = "拆组" };
             ungroup.Click += (_, _) => UngroupSelection();
             menu.Items.Add(ungroup);
         }
@@ -3275,7 +3287,7 @@ public sealed partial class MainWindow : Window
             foreach (var command in rows)
             {
                 var action = command.Run;
-                var item = new MenuFlyoutItem { Text = command.Label, KeyboardAcceleratorTextOverride = command.Chord };
+                var item = new MenuFlyoutItem { Text = command.Label, KeyboardAcceleratorTextOverride = command.ChordDisplay };
                 item.Click += (_, _) => action();
                 submenu.Items.Add(item);
             }
@@ -4885,6 +4897,41 @@ public sealed partial class MainWindow : Window
                     problems.Add("双击边界外 20px 判成了拉线——空白新建的地盘被吃了");
                 }
 
+                // 四条边各起各的：判定给哪一面，StartPull 就钉哪一面。
+                // 旧账：SpecSide 只认单字母 w/e/n，spec 词全落到默认的 bottom——"在哪双击都从下边拉线"。
+                var boxLeft = _view.ToScreenX(tapped.X);
+                var boxTop = _view.ToScreenY(tapped.Y);
+                var boxRight = _view.ToScreenX(tapped.Right);
+                var boxBottom = _view.ToScreenY(tapped.Bottom);
+                var boxMidX = (boxLeft + boxRight) / 2;
+                var boxMidY = (boxTop + boxBottom) / 2;
+
+                (string Side, string Letter, Point At)[] sides =
+                [
+                    (CanvasEdge.Top, "n", new Point(boxMidX, boxTop - 5)),
+                    (CanvasEdge.Bottom, "s", new Point(boxMidX, boxBottom + 5)),
+                    (CanvasEdge.Left, "w", new Point(boxLeft - 5, boxMidY)),
+                    (CanvasEdge.Right, "e", new Point(boxRight + 5, boxMidY)),
+                ];
+
+                foreach (var (side, letter, at) in sides)
+                {
+                    if (DoubleTapTarget(at) is not ("拉线", var edgeNode, var chosen) || edgeNode?.Id != tapped.Id || chosen != side)
+                    {
+                        problems.Add($"双击这格的{side}边附近没判成那一面");
+                    }
+
+                    if (SpecSide(side) != side)
+                    {
+                        problems.Add($"SpecSide 把 {side} 认成了 {SpecSide(side)}");
+                    }
+
+                    if (ResizeLetter(side) != letter)
+                    {
+                        problems.Add($"压边缩放把 {side} 认成了 {ResizeLetter(side)}，应为 {letter}");
+                    }
+                }
+
                 if (DoubleTapTarget(inMiddle) is not ("编辑", var editNode, _))
                 {
                     problems.Add("双击格子正中没走到编辑");
@@ -5292,6 +5339,9 @@ public sealed partial class MainWindow : Window
 
         // 缩放后左缘那条色条要盖满整条边（10-24 他报"有时候没完整覆盖"）。
         SelfTestDueBarFollowsZoom(problems);
+
+        // Ctrl＋G 是开关：全散＝成组、混选＝散格入组、全在组里＝解散（10-24 他点的）。
+        SelfTestGroupToggle(problems);
 
         // 一块丢了图的板子也要开得成：那一格写"未找到"，而不是把窗口打死（10-23 撞上的那一发）。
         SelfTestMissingImageTile(problems);
@@ -6445,7 +6495,7 @@ public sealed partial class MainWindow : Window
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down));
 
         // One dispatch for the whole table: the chord is rebuilt in the same order the table writes
-        // them ("Ctrl+Shift+G"), so a command cannot be reachable from the menu but not the keyboard.
+        // them ("Ctrl+G"), so a command cannot be reachable from the menu but not the keyboard.
         var chord = $"{(control ? "Ctrl+" : string.Empty)}{(shift ? "Shift+" : string.Empty)}{(alt ? "Alt+" : string.Empty)}{e.Key}";
 
         foreach (var command in Commands())

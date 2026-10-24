@@ -182,7 +182,7 @@ public sealed partial class MainWindow
         // 他 10-24 点名为噪音（见 Command.Sheet）。菜单与键盘仍走同一张表。
         var rows = Sections().SelectMany(section => section)
             .Where(command => command.Sheet)
-            .Select(command => PanelKit.Row(command.Label, command.Chord, keys: true))
+            .Select(command => PanelKit.Row(command.Label, command.ChordDisplay, keys: true))
             .ToList();
 
         // 两栏、栏内尽量均分：760 是一张页面而不是一条横幅，单栏 ≈336 让"名字｜键帽"各自有地方。

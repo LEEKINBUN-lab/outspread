@@ -1330,12 +1330,11 @@ public sealed partial class MainWindow
 
         var menu = new MenuFlyout();
 
-        // 创建分组：把当前选中的（一枚或多枚）圈成一个<b>新</b>组——分组是显式动作，
-        // 单枚也能成组（10-22 他要的）。旧那条"移入分组＝塞进最近的一个已有框"已删；
-        // 要并进某个具体的框，走组钮按住拖那一条。
+        // 成组：全散＝圈成一个新组；混选＝把没成组的并进已有的那个组（10-24 与 Ctrl＋G 同一条语义）。
+        // 单枚也能成组（10-22 他要的）。要并进某个具体的框，还可以走组钮按住拖那一条。
         var create = new MenuFlyoutItem
         {
-            Text = SelectedNotes().Count == 1 ? "创建分组（这一格）" : $"创建分组（这 {SelectedNotes().Count} 格）",
+            Text = SelectedNotes().Count == 1 ? "成组（这一格）" : $"成组（这 {SelectedNotes().Count} 格）",
             Icon = DotIcon(new SolidColorBrush(Color.FromArgb(200, 150, 158, 166))),
         };
         create.IsEnabled = SelectedNotes().Count >= 1;

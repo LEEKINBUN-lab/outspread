@@ -287,9 +287,17 @@ public sealed partial class MainWindow
         return Math.Round(value * scale) / scale;
     }
 
-    // 三枚图标是同一档画法：24 网格、1.5 描边，缩到 16 摆进 30 的圆钮里。
-    // 比稿页上那三枚是圆头线帽；这一版的 Shape 拿不到（这个投影里没有 StrokeStartLineCap／
-    // StrokeLineJoin），所以实物端点是平的——16px 下差的是 0.75 个像素，先记在这里不装作一样。
+    // 三枚图标是同一档画法：24 网格、1.5 描边，经 Viewbox 缩到 16 摆进圆钮。
+    // 两处已知偏差，10-24 他判"太小、和稿不一样"时量出来的，等 design/controls.html 定档后一起改：
+    // ① 描边被稀释——24→16 是 2/3 缩放，1.5 落屏只剩 1.0 物理像素（本机 AppliedDPI=96，1 DIP＝1px），
+    //    而三个参照系没有一家把 1.0 当图标笔画：Fluent 实测 24px 档 1.5、IBM 20px 档 1.25、
+    //    Chrome 干脆不描边，把 ~1.9dp 的重量烘进填充路径（close.icon/delete.icon）。
+    // ② 端点是平的——但"这个投影拿不到线帽"这句是我 10-24 早先写错的判断：C# 里那个枚举的命名空间
+    //    确实看不见（Microsoft.UI.Xaml.Media 与 Windows.UI.Xaml.Media 两个全名都报 CS0234），
+    //    可 XAML 侧 <Path StrokeStartLineCap="Round" StrokeLineJoin="Round"/> 编译通过（本回合实测）。
+    //    所以真圆头的路是有的：几何写进 .xaml 资源字典，代码只换墨色。
+    // 另外这里的 16 与比稿页的 30 圆钮不是一档：实物圆钮 38（RailButtonPx），稿子 30——
+    // 上一版"1:1 搬"只搬了笔画形状，圆钮本体与常驻发丝环都还是旧的那套，这就是"不一样"的另一半。
     // 10-24 他在比稿页（design/icons.html，四档摆在一起）上点的 B 档——"细线自绘"。之前是
     // 三枚各画各的：组＝虚线框＋实心块、换色＝72 片色轮、删＝系统字形 E74D，笔画与站位不一致，
     // 他判"有些丑"读到的就是那层不一致。
@@ -484,7 +492,7 @@ public sealed partial class MainWindow
 
         Diagnostics.Write(
             $"selftest 图标集: 三枚都是 {IconGridPx:0} 网格缩到 {IconShownPx:0}、描边 {strokes.Count} 条全 {IconStrokePx:0.##}" +
-            $"（比稿页 design/icons.html 的 B 档；圆头线帽这一版拿不到，端点是平的）");
+            $"（落屏 {IconStrokePx * IconShownPx / IconGridPx:0.##} 像素——比稿页 design/controls.html 定档后按最终尺寸重画）");
     }
 
     private void AnimateRailIn()

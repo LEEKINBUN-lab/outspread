@@ -1,0 +1,368 @@
+<!doctype html>
+<!--
+  控件质感比稿（操作条圆钮 + 配套设置面）· 10-24
+
+  他 10-24 判上一版"太小了，而且和你给的设计稿也不一样…一用起来就感觉天差地别"。
+  这一页不再只比图标形状，而是把一枚控件拆成七个可量的量，同一页摆四档：
+  ① 现状（原样复刻，永远留在第一屏当反面基准）② Chrome 派 ③ Fluent 2 派 ④ M3 派。
+
+  两个硬前提：
+  · 本机 AppliedDPI=96（这回合现量），1 CSS 像素＝1 物理像素，所以这一页的尺寸就是实物的尺寸；
+    实物端要 1:1 搬，不许再靠"看起来差不多"。
+  · 每档都写"最终绘制描边"这个数——上一版的缺陷正是 24 网格的 1.5 被 Viewbox 缩到 16
+    只剩 1.0 物理像素，而三个参照系里没有一家把 1.0 当图标笔画（Fluent 实测 24px 档 1.5、
+    IBM 20px 档 1.25、Chrome 把 ~1.9dp 烘进填充形状）。
+-->
+<meta charset="utf-8">
+<title>控件质感比稿 · 操作条与设置面</title>
+<style>
+  :root {
+    --board: 249,250,251;
+    --panel: 251,252,253;
+    --ink: 27,27,27;
+    --muted: 96,96,96;
+    --line: 224,224,226;
+    --danger: 211,47,47;
+    --accent: 49,130,237;
+    /* 三档状态层的时长与曲线：抄各自官方，不自己发明 */
+    --fluent-in: cubic-bezier(.16,.67,.3,.99);
+    --fluent-out: cubic-bezier(.16,.67,.3,.99);
+    --m3-std: cubic-bezier(.2,0,0,1);
+    --m3-emph: cubic-bezier(.05,.7,.1,1);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 26px 30px 56px;
+    background: rgb(var(--board)); color: rgb(var(--ink));
+    font: 13px/1.55 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  h2 { font-size: 14.5px; margin: 30px 0 2px; display: flex; align-items: baseline; gap: 8px; }
+  h2 .tag { font: 11px/1.4 "Consolas", monospace; color: rgb(var(--muted)); }
+  .lede { color: rgb(var(--muted)); margin: 0 0 20px; max-width: 82ch; }
+  .src { color: rgb(var(--muted)); font-size: 12px; margin: 0 0 12px; max-width: 88ch; }
+  .card {
+    background: rgb(var(--panel)); border: 1px solid rgb(var(--line));
+    border-radius: 10px; padding: 16px 18px 14px; margin: 8px 0 10px;
+  }
+  .stage { display: flex; gap: 26px; align-items: flex-end; flex-wrap: wrap; }
+  .strip { display: flex; gap: 14px; align-items: flex-start; }
+  .strip figure { margin: 0; text-align: center; }
+  .strip figcaption { color: rgb(var(--muted)); font-size: 11px; margin-top: 6px; }
+  .rail { display: flex; flex-direction: column; gap: 4px; }
+  .note { color: rgb(var(--muted)); font-size: 12px; margin: 12px 0 0; max-width: 84ch; }
+  table { border-collapse: collapse; font-size: 12px; margin-top: 12px; }
+  th, td { text-align: left; padding: 3px 14px 3px 0; border-bottom: 1px solid rgba(var(--ink),.07); }
+  th { color: rgb(var(--muted)); font-weight: 600; }
+  td.n { font-family: Consolas, monospace; }
+  svg { display: block; }
+
+  /* ── 通用钮壳：尺寸与圆角由每档自己的类给，笔画状态由 --face/--ring 给 ── */
+  .btn {
+    display: grid; place-items: center; padding: 0; border: 0;
+    background: transparent; color: rgb(var(--ink)); cursor: default;
+    position: relative; outline: none; -webkit-tap-highlight-color: transparent;
+  }
+  .btn.danger { color: rgb(var(--danger)); }
+
+  /* ① 现状：原样复刻实物——38 圆 + 常驻 1.25 发丝环 + 16 图（平头、绘制后 1.0）+ 瞬间 5% 悬停 + 无按下态 */
+  .now .btn { width: 38px; height: 38px; border-radius: 50%; }
+  .now .btn::after {
+    content: ""; position: absolute; inset: 0; border-radius: 50%;
+    background: #fff; border: 1.25px solid rgba(0,0,0,.22); z-index: -1;
+  }
+  .now .btn:hover { background: rgba(var(--ink), .05); }
+  .now .btn:hover::after { border-color: rgba(0,0,0,.32); }
+  .now .btn.danger::after { border-color: rgba(var(--danger), .55); }
+
+  /* ② Chrome 派：34 圆（kMaximum＝min(w,h)/2）、静止无环、20 画布、悬停面 7.8% 250ms、按下面更深 */
+  .chrome .btn { width: 34px; height: 34px; border-radius: 50%; transition: background-color 250ms ease; }
+  .chrome .btn:hover, .chrome .btn.hovered { background: rgba(0,0,0,.078); }
+  .chrome .btn:active, .chrome .btn.pressed { background: rgba(0,0,0,.12); transition-duration: 90ms; }
+  .chrome .btn:focus-visible, .chrome .btn.focused { box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(var(--ink),.85); }
+
+  /* ③ Fluent 2 派：40 命中／32 视觉、静止留 5% 底、悬 10% 按 15%、90ms 进 250ms 出 */
+  .fluent .btn {
+    width: 40px; height: 40px; border-radius: 50%;
+    background: rgba(var(--ink), .05);
+    transition: background-color 250ms var(--fluent-out), transform 250ms var(--fluent-out);
+  }
+  .fluent .btn:hover, .fluent .btn.hovered { background: rgba(var(--ink), .10); transition-duration: 90ms; }
+  .fluent .btn:active, .fluent .btn.pressed {
+    background: rgba(var(--ink), .15); transform: scale(.94); transition-duration: 90ms;
+  }
+  .fluent .btn:focus-visible, .fluent .btn.focused { box-shadow: inset 0 0 0 1px #fff, 0 0 0 2px rgb(var(--ink)); }
+
+  /* ④ M3 派：40 命中／28 视觉全圆角、state layer 静 0／悬 8%／按 12%、emphasized 曲线 */
+  .m3 .btn {
+    width: 40px; height: 40px; border-radius: 50%;
+    transition: background-color 100ms var(--m3-std);
+  }
+  .m3 .btn .glyphbox { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; }
+  .m3 .btn:hover .glyphbox, .m3 .btn.hovered .glyphbox { background: rgba(var(--ink), .08); }
+  .m3 .btn:active .glyphbox, .m3 .btn.pressed .glyphbox { background: rgba(var(--ink), .12); }
+  .m3 .btn:focus-visible .glyphbox, .m3 .btn.focused .glyphbox { box-shadow: 0 0 0 3px rgba(var(--ink), .12), 0 0 0 4px rgb(var(--ink)); }
+
+  /* ① 现状的"按下"这一态实物不存在——把它冻在这里，就是要他看见那一格是空的 */
+  .now .btn.hovered { background: rgba(var(--ink), .05); }
+  .now .btn.hovered::after { border-color: rgba(0,0,0,.32); }
+  .now .btn.nostate { background: transparent; }
+
+  .frozen { display: flex; gap: 10px; align-items: center; }
+  .lbl { font-size: 11px; color: rgb(var(--muted)); text-align: center; margin-top: 6px; }
+
+  /* ── 设置面 ── 左档按 WinUI CommonStyles 现量复刻：圆角 8、描边 #0F000000、影 #24000000、行高 32、内衬 11,8,11,9 */
+  .menu {
+    background: #fff; border: 1px solid rgba(0,0,0,.06); border-radius: 8px;
+    padding: 2px 0; min-width: 232px; box-shadow: 0 2px 8px rgba(0,0,0,.14);
+  }
+  .menu.chromeish { border-color: #7F7F7F; border-radius: 12px; padding: 8px 0; min-width: 256px; box-shadow: none; }
+  .mrow { display: flex; align-items: center; gap: 12px; height: 32px; padding: 0 12px; color: rgb(var(--ink)); }
+  .chromeish .mrow { height: 36px; padding: 0 8px 0 12px; gap: 12px; color: #1F1F1F; border-radius: 2px; margin: 0 8px; }
+  .chromeish .mrow:hover, .chromeish .mrow.pressed { background: rgba(0,0,0,.078); }
+  .mrow .k { margin-left: auto; color: rgb(var(--muted)); font: 11px/1.4 Consolas, monospace; }
+  .mrow.off { color: rgba(var(--ink), .38); }
+  .msp { height: 1px; background: rgba(var(--ink), .08); margin: 6px 0; }
+  .chromeish .msp { margin: 5px 20px 7px 20px; }
+  .micon { flex: 0 0 auto; display: grid; place-items: center; }
+</style>
+
+<h1>控件质感比稿 · 操作条圆钮与配套设置面</h1>
+<p class="lede">
+  上一版的缺陷不是"形状没选好"，是<b>同一枚控件的七个量各自都偏了半档</b>：钮比参照大（38 对 34／32／40 视觉）、
+  图标画布比参照小一档（16 对 20／20／24）、笔画被缩放稀释到 1.0 物理像素、端点是平的、
+  静止还常驻一圈发丝、悬停瞬间换色、按下态根本不存在。这一页把四档整套摆出来，同一页可直接按。
+</p>
+
+<h2>① 现状 <span class="tag">反面基准 · 原样复刻实物</span></h2>
+<p class="src">
+  画法是实物代码的直译：<code>RailButtonPx=38</code>、常驻 <code>Ellipse</code> 发丝 1.25@22% 墨、
+  图标 24 网格经 Viewbox 缩到 16（故笔画最终 1.5×16/24=<b>1.0</b>）、平头线帽、悬停瞬间换面 5%、无按下态、无焦点环。
+</p>
+<div class="card now">
+  <div class="stage">
+    <div class="strip" id="s-now"></div>
+    <div class="frozen">
+      <div><div id="f-now-rest"></div><div class="lbl">静止</div></div>
+      <div><div id="f-now-hover"></div><div class="lbl">悬停 5%</div></div>
+      <div><div id="f-now-press"></div><div class="lbl">按下（无此态）</div></div>
+      <div><div id="f-now-focus"></div><div class="lbl">键盘（无环）</div></div>
+    </div>
+  </div>
+  <table>
+    <tr><th>钮本体</th><th>图标画布</th><th>笔画（最终绘制）</th><th>端点</th><th>静止的圈</th><th>悬停面</th><th>按下面</th><th>键盘焦点</th></tr>
+    <tr><td class="n">38</td><td class="n">16</td><td class="n">1.0</td><td>平</td><td>常驻发丝 1.25@22%</td><td class="n">5% 瞬间</td><td class="n">不存在</td><td class="n">无</td></tr>
+  </table>
+</div>
+
+<h2>② Chrome 派 <span class="tag">34 圆 / 20 画布 / 1.4 圆头 / 悬停 7.8% 250ms</span></h2>
+<p class="src">
+  来源：Chrome 源码现量——钮 <code>34</code>（<code>layout_constants.cc:131</code>）、图标 <code>20</code>
+  （<code>kDefaultIconSizeChromeRefresh=20</code>）、内衬 <code>7</code>（<code>TOOLBAR_BUTTON→Insets(7)</code>）、
+  圆角 <code>min(w,h)/2</code>（<code>layout_provider.cc:201</code>）、悬停面 alpha <code>0x14</code>≈<code>7.8%</code>
+  淡入淡出 <code>250ms</code>（<code>ink_drop_impl.cc:25-48</code>、<code>chrome_color_mixer.cc:866</code>）、
+  涟漪 <code>6%</code> 150ms 进／300ms 出、焦点环 <code>2px</code> 外扩 <code>2px</code>、菜单圆角 <code>12</code> 行高 <code>36</code>。
+  <b>它的图标是填充形状不是描边</b>，笔画重量烘进几何（close.icon 折算约 1.9dp）——我们用细线，所以 1.4 是我们这一派的等重档。
+</p>
+<div class="card chrome">
+  <div class="stage">
+    <div class="strip" id="s-chrome"></div>
+    <div class="frozen">
+      <div><div id="f-chrome-rest"></div><div class="lbl">静止</div></div>
+      <div><div id="f-chrome-hover"></div><div class="lbl">悬停 7.8%</div></div>
+      <div><div id="f-chrome-press"></div><div class="lbl">按下 12%</div></div>
+      <div><div id="f-chrome-focus"></div><div class="lbl">键盘</div></div>
+    </div>
+  </div>
+  <table>
+    <tr><th>钮本体</th><th>图标画布</th><th>笔画（最终绘制）</th><th>端点</th><th>静止的圈</th><th>悬停面</th><th>按下面</th><th>键盘焦点</th></tr>
+    <tr><td class="n">34</td><td class="n">20</td><td class="n">1.4</td><td>圆</td><td>无（静止透明）</td><td class="n">7.8% / 250ms</td><td class="n">12% / 90ms</td><td class="n">2px 外扩 2</td></tr>
+  </table>
+  <p class="note">
+    代价：WinUI 这版没有涟漪（ink drop）组件。这一档只做"面加深"，不做从落点扩散的水波——
+    差的那一层是 Chrome 手感里最不容易补的一半，实物上会看得见。
+  </p>
+</div>
+
+<h2>③ Fluent 2 派 <span class="tag">40 命中/32 视觉 / 20 画布 / 1.2 圆头 / 状态层 5→10→15%</span></h2>
+<p class="src">
+  来源：Fluent 2 官方令牌——subtle fill 静 <code>#000000 @5%</code>、悬 <code>10%</code>、按 <code>15%</code>
+  （VS 主题令牌表里写成 16 进制 alpha：<code>#0F→#0A</code> 那一族）、时长 <code>90ms 进 / 250ms 出</code>
+  配 <code>cubic-bezier(.16,.67,.3,.99)</code>、按下带 <code>scale(.94)</code> 下沉；
+  实测 Fluent System Icons 的笔画：16px 档 <code>1.0</code>、20px 档 <code>1.0</code>、24px 档 <code>1.5</code>——
+  <b>笔画按档重画，不按容器缩放</b>。命中 <code>40×40</code>（7.5mm，官方 targeting 文档）。
+</p>
+<div class="card fluent">
+  <div class="stage">
+    <div class="strip" id="s-fluent"></div>
+    <div class="frozen">
+      <div><div id="f-fluent-rest"></div><div class="lbl">静止 5%</div></div>
+      <div><div id="f-fluent-hover"></div><div class="lbl">悬停 10%</div></div>
+      <div><div id="f-fluent-press"></div><div class="lbl">按下 15%+缩</div></div>
+      <div><div id="f-fluent-focus"></div><div class="lbl">键盘 2px</div></div>
+    </div>
+  </div>
+  <table>
+    <tr><th>钮本体</th><th>图标画布</th><th>笔画（最终绘制）</th><th>端点</th><th>静止的圈</th><th>悬停面</th><th>按下面</th><th>键盘焦点</th></tr>
+    <tr><td class="n">40 命中 / 32 面</td><td class="n">20</td><td class="n">1.2</td><td>圆</td><td>无环、留 5% 面</td><td class="n">10% / 90ms</td><td class="n">15% + scale .94</td><td class="n">2px＋1px 白内衬</td></tr>
+  </table>
+  <p class="note">这一档与 Windows 本身最亲（同一族令牌、同一条时长表），代价是静止就带 5% 底面，三枚浮在板上会显重。</p>
+</div>
+
+<h2>④ M3 派 <span class="tag">40 命中/28 面 / 24 画布 / 1.5 圆头 / state layer 8%→12%</span></h2>
+<p class="src">
+  来源：material-web 令牌现量（v0_192）——icon button 命中 40、面 28 全圆角、图标 24；
+  state layer 悬停 <code>0.08</code>、聚焦 <code>0.12</code>、按下 <code>0.12</code>；
+  禁用墨 <code>0.38</code>；焦点环 <code>3px</code> 外扩 <code>2px</code>；时长 short2 <code>100ms</code>
+  配 emphasized <code>cubic-bezier(.05,.7,.1,1)</code>；官方图标规范 24dp 网格 / 20dp 视觉区 / 2dp 笔画，
+  且明确"缩小时不缩笔画、换档重画"（M3 optical size）。
+</p>
+<div class="card m3">
+  <div class="stage">
+    <div class="strip" id="s-m3"></div>
+    <div class="frozen">
+      <div><div id="f-m3-rest"></div><div class="lbl">静止</div></div>
+      <div><div id="f-m3-hover"></div><div class="lbl">悬停 8%</div></div>
+      <div><div id="f-m3-press"></div><div class="lbl">按下 12%</div></div>
+      <div><div id="f-m3-focus"></div><div class="lbl">键盘 3px</div></div>
+    </div>
+  </div>
+  <table>
+    <tr><th>钮本体</th><th>图标画布</th><th>笔画（最终绘制）</th><th>端点</th><th>静止的圈</th><th>悬停面</th><th>按下面</th><th>键盘焦点</th></tr>
+    <tr><td class="n">40 命中 / 28 面</td><td class="n">24</td><td class="n">1.5</td><td>圆</td><td>无（静止透明）</td><td class="n">8% / 100ms</td><td class="n">12% / 100ms</td><td class="n">3px 外扩 2</td></tr>
+  </table>
+</div>
+
+<h2>⑤ 配套设置面：⋮ 菜单</h2>
+<p class="src">
+  左＝实物现状，也是平台默认：WinUI 的 <code>MenuFlyout</code> 自带条目最小高 <code>32</code>、内衬 <code>11,8,11,9</code>、
+  条目外边距 <code>4,2,4,2</code>、分隔线 <code>1px</code>、浮层圆角 <code>8</code>、描边 <code>#0F000000</code>、
+  影 <code>#24000000</code>（WinUI CommonStyles 现量）。它不缺规范，缺的是<b>与操作条同源的那套笔画</b>——
+  现在里面塞的是 Segoe MDL2 16px 字形，和我们自绘的细线族混在一张板上。
+  右＝Chrome 应用菜单派：圆角 <code>12</code>、行高 <code>36</code>、水平内衬 <code>8/12</code>、图标 <code>20</code>
+  用墨 <code>#5F5F5F</code>、悬停只换前景＋<code>2px</code> 底角、分隔线上 <code>5</code> 下 <code>7</code> 厚 <code>1</code>
+  （<code>menu_config.h/.cc</code>、<code>menu_config_win.cc:24-29</code>、<code>app_menu.cc:301-307</code>）。
+  两版图标都换成我们自己的细线族，不再混系统字表。
+</p>
+<div class="card">
+  <div class="stage">
+    <div>
+      <div class="menu" id="m-now"></div>
+      <div class="lbl">现状：原生 MenuFlyout ＋ MDL2 字形</div>
+    </div>
+    <div>
+      <div class="menu chromeish" id="m-chrome"></div>
+      <div class="lbl">提案：Chrome 派行高与图标族</div>
+    </div>
+  </div>
+  <p class="note">
+    落到实物：右档不再走 <code>MenuFlyout</code> 的原生外观，而是用仓里已有的 <code>PanelKit</code> 浮层＋自绘行，
+    好处是行高/图标/时长能与操作条同一族；代价是"用系统原生件"这条他定过的规矩要在这一格上松开一次——<b>需要他点头</b>。
+  </p>
+</div>
+
+<h2>⑥ 浮层的边与影（同一页核对，别各写各的）</h2>
+<div class="card">
+  <div class="stage">
+    <div><div class="menu chromeish" style="min-width:190px"><div class="mrow"><span>只发丝边框</span></div></div><div class="lbl">Chrome：1px #7F7F7F，无影</div></div>
+    <div><div style="background:#fff;border-radius:8px;box-shadow:0 0 24px rgba(0,0,0,.15),0 0 8px rgba(0,0,0,.12),0 1px 3px rgba(0,0,0,.12);padding:12px 16px">Fluent 三层影</div><div class="lbl">Fluent Layer：24/8/1 三层，无描边</div></div>
+    <div><div style="background:#fff;border:1px solid rgba(0,0,0,.06);border-radius:8px;box-shadow:0 0 0 0 transparent,0 1px 2px rgba(0,0,0,.3),0 1px 3px 1px rgba(0,0,0,.15);padding:12px 16px">M3 level2</div><div class="lbl">M3 elevation2：影＋极淡描边</div></div>
+  </div>
+  <p class="note">实物现在用的是"1px 发丝＋单层软影"。三档任选，但只许选一次、写进令牌，别一个浮层一个画法。</p>
+</div>
+
+<h2>⑦ 选完之后，实物这边怎么搬（不靠感觉）</h2>
+<table>
+  <tr><th>量</th><th>缺陷</th><th>改法</th><th>谁来判</th></tr>
+  <tr><td>笔画稀释</td><td>24 网格经 Viewbox 缩到 16 ⇒ 1.0px</td><td>图标按<b>最终画布尺寸直接落笔</b>，笔画写成"最终像素"；Viewbox 撤掉</td><td>自检可闸（读绘制后的粗细）</td></tr>
+  <tr><td>平头端点</td><td>C# 里那个枚举命名空间看不见，上一版判成"拿不到"</td><td><b>本回合实测：XAML 里 <code>StrokeStartLineCap="Round"</code> 编译通过</b> ⇒ 图标几何写进 .xaml 资源字典（含 SVG 的 <code>d</code> 串），代码只负责换墨色</td><td>自检＋截图</td></tr>
+  <tr><td>常驻发丝环</td><td>三个参照系静止都无环</td><td>静止透明，面只在 hover/press 出现</td><td>他眼睛</td></tr>
+  <tr><td>无按下态</td><td>点下去没有任何反馈</td><td>加 press 面（＋可选 scale）</td><td>他真机点</td></tr>
+  <tr><td>瞬间换色</td><td>状态切换无时长</td><td>状态层带 90/100ms 进、250/100ms 出与指定曲线</td><td>录帧／计时可闸</td></tr>
+  <tr><td>无键盘焦点</td><td>Tab 到圆钮看不见</td><td>焦点环 2px／3px 外扩</td><td>他眼睛</td></tr>
+</table>
+
+<script>
+  // 三枚图标：同一批几何路径，按各档画布与"最终笔画"换算 stroke-width
+  // （SVG 里 stroke-width 以 viewBox 为单位，故 = 最终像素 × 网格 / 画布）。
+  const GRID = 24;
+  const P = {
+    group: '<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/><path d="M13 7h6a2 2 0 0 1 2 2v2"/>',
+    color: '<path d="M12 3a9 9 0 1 0 0 18h1.5a2 2 0 0 0 1.5-3.3 2 2 0 0 1 1.5-3.3H19a3 3 0 0 0 3-3A9 9 0 0 0 12 3Z"/><circle cx="8" cy="10" r="1.1" fill="currentColor" stroke="none"/><circle cx="12" cy="7.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="16" cy="10" r="1.1" fill="currentColor" stroke="none"/>',
+    trash: '<path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M10 11v6M14 11v6"/>',
+    // 设置面那三行：同一族细线，不再借系统字表（笔画不同源就是"不像一组"的成因）
+    pair: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 18.5h3"/>',
+    restore: '<path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4h4"/><path d="M12 8v4.5l3 1.8"/>',
+    filter: '<path d="M4 5h16l-6 7.2V20l-4-2v-5.8z"/>',
+  };
+
+  function icon(canvas, weight, round) {
+    const w = weight * GRID / canvas;
+    return '<svg width="' + canvas + '" height="' + canvas + '" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+      + ' stroke-width="' + w + '" stroke-linecap="' + (round ? 'round' : 'butt')
+      + '" stroke-linejoin="' + (round ? 'round' : 'miter') + '">';
+  }
+
+  function btn(cls, canvas, weight, round, key, label, extra) {
+    const danger = key === 'trash' ? ' danger' : '';
+    const shell = cls === 'm3' ? '<span class="glyphbox">' + icon(canvas, weight, round) + P[key] + '</svg></span>'
+                               : icon(canvas, weight, round) + P[key] + '</svg>';
+    return '<button class="btn' + danger + (extra ? ' ' + extra : '') + '" title="' + label + '" aria-label="' + label + '">' + shell + '</button>';
+  }
+
+  function rail(cls, canvas, weight, round) {
+    return '<div class="rail">' + btn(cls, canvas, weight, round, 'group', '成组')
+      + btn(cls, canvas, weight, round, 'color', '换色') + btn(cls, canvas, weight, round, 'trash', '删除') + '</div>';
+  }
+
+  function one(cls, canvas, weight, round, key, extra) {
+    return '<div class="' + cls + '">' + btn(cls, canvas, weight, round, key, key, extra) + '</div>';
+  }
+
+  // ① 现状：16 画布、平头、缩后笔画 1.0（在页上直接用最终像素 1.0 画，等同实物）
+  document.getElementById('s-now').innerHTML = '<figure>' + rail('now', 16, 1.0, false) + '<figcaption>悬停试试：瞬间换面，没有按下态</figcaption></figure>';
+  document.getElementById('f-now-rest').innerHTML = one('now', 16, 1.0, false, 'group');
+  document.getElementById('f-now-hover').innerHTML = one('now', 16, 1.0, false, 'group', 'hovered');
+  document.getElementById('f-now-press').innerHTML = one('now', 16, 1.0, false, 'group', 'nostate');
+  document.getElementById('f-now-focus').innerHTML = one('now', 16, 1.0, false, 'group');
+  // ② Chrome：34/20/1.4 圆头
+  document.getElementById('s-chrome').innerHTML = '<figure>' + rail('chrome', 20, 1.4, true) + '<figcaption>34 圆·20 画布·笔画 1.4·悬停 250ms</figcaption></figure>';
+  document.getElementById('f-chrome-rest').innerHTML = one('chrome', 20, 1.4, true, 'group');
+  document.getElementById('f-chrome-hover').innerHTML = one('chrome', 20, 1.4, true, 'group', 'hovered');
+  document.getElementById('f-chrome-press').innerHTML = one('chrome', 20, 1.4, true, 'group', 'pressed');
+  document.getElementById('f-chrome-focus').innerHTML = one('chrome', 20, 1.4, true, 'group', 'focused');
+  // ③ Fluent：40 命中/32 面/20 画布/1.2
+  document.getElementById('s-fluent').innerHTML = '<figure>' + rail('fluent', 20, 1.2, true) + '<figcaption>40 命中·20 画布·笔画 1.2·状态层 5→10→15</figcaption></figure>';
+  document.getElementById('f-fluent-rest').innerHTML = one('fluent', 20, 1.2, true, 'group');
+  document.getElementById('f-fluent-hover').innerHTML = one('fluent', 20, 1.2, true, 'group', 'hovered');
+  document.getElementById('f-fluent-press').innerHTML = one('fluent', 20, 1.2, true, 'group', 'pressed');
+  document.getElementById('f-fluent-focus').innerHTML = one('fluent', 20, 1.2, true, 'group', 'focused');
+  // ④ M3：40 命中/28 面/24 画布/1.5
+  document.getElementById('s-m3').innerHTML = '<figure>' + rail('m3', 24, 1.5, true) + '<figcaption>40 命中·28 面·24 画布·笔画 1.5</figcaption></figure>';
+  document.getElementById('f-m3-rest').innerHTML = one('m3', 24, 1.5, true, 'group');
+  document.getElementById('f-m3-hover').innerHTML = one('m3', 24, 1.5, true, 'group', 'hovered');
+  document.getElementById('f-m3-press').innerHTML = one('m3', 24, 1.5, true, 'group', 'pressed');
+  document.getElementById('f-m3-focus').innerHTML = one('m3', 24, 1.5, true, 'group', 'focused');
+
+  // ⑤ 菜单两版：左＝系统字表，右＝我们自己的细线族（配对／恢复／筛选各一枚）
+  const rows = [
+    { t: '配对手机…', g: 'pair', k: '' },
+    { sep: true },
+    { t: '恢复…', g: 'restore', k: 'Ctrl+Shift+R' },
+    { t: '筛选：日期与标签…', g: 'filter', k: '' },
+  ];
+  const mdl2 = { pair: '\uE717', restore: '\uE81C', filter: '\uE71C' };
+  function iconSvg(key, canvas, weight) {
+    return '<span class="micon">' + icon(canvas, weight, true) + P[key] + '</svg></span>';
+  }
+  let htmlNow = '', htmlNew = '';
+  for (const r of rows) {
+    if (r.sep) { htmlNow += '<div class="msp"></div>'; htmlNew += '<div class="msp"></div>'; continue; }
+    htmlNow += '<div class="mrow"><span class="micon" style="font-family:\'Segoe MDL2 Assets\';font-size:16px">'
+      + mdl2[r.g] + '</span><span>' + r.t + '</span></div>';
+    htmlNew += '<div class="mrow">' + iconSvg(r.g, 20, 1.4) + '<span>' + r.t + '</span>'
+      + (r.k ? '<span class="k">' + r.k + '</span>' : '') + '</div>';
+  }
+  document.getElementById('m-now').innerHTML = htmlNow;
+  document.getElementById('m-chrome').innerHTML = htmlNew;
+</script>

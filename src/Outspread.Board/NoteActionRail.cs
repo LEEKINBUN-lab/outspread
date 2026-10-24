@@ -141,6 +141,8 @@ public sealed partial class MainWindow
 
         _railGroup = RoundButton("NoteRailGroup", GroupIcon(), "分组（点＝菜单，按住拖＝拖入/拖出）");
         _railColor = RoundButton("NoteRailColor", ColorWheelIcon(), "换色");
+
+        // 删＝红，和这枚钮的红描边一起把"危险"说清楚；但它仍是同一档细线，不是填实的一坨。
         _railDelete = RoundButton("NoteRailDelete", TrashIcon(), "删掉这格");
 
         host.Children.Add(_railGroup);
@@ -285,154 +287,204 @@ public sealed partial class MainWindow
         return Math.Round(value * scale) / scale;
     }
 
-    // WinUI 的几何没有 Geometry.Parse／RectangleGeometry.RadiusX 那套（那是 WPF 的），
-    // 三枚图标就用 Shape／字形直接拼：虚线框＋实心块＝组、圆滴＝颜色、垃圾桶＝删。
+    // 三枚图标是同一档画法：24 网格、1.5 描边，缩到 16 摆进 30 的圆钮里。
+    // 比稿页上那三枚是圆头线帽；这一版的 Shape 拿不到（这个投影里没有 StrokeStartLineCap／
+    // StrokeLineJoin），所以实物端点是平的——16px 下差的是 0.75 个像素，先记在这里不装作一样。
+    // 10-24 他在比稿页（design/icons.html，四档摆在一起）上点的 B 档——"细线自绘"。之前是
+    // 三枚各画各的：组＝虚线框＋实心块、换色＝72 片色轮、删＝系统字形 E74D，笔画与站位不一致，
+    // 他判"有些丑"读到的就是那层不一致。
+    //
+    // WinUI 的几何没有 Geometry.Parse／RadiusX 那套（那是 WPF 的），所以每一枚都用 Shape 拼。
+
+    private const double IconGridPx = 24;
+
+    private const double IconShownPx = 16;
+
+    /// <summary>三枚共用这一条粗细——自检拿它当"是一组"的凭据，谁改了另外两枚必须一起改。</summary>
+    private const double IconStrokePx = 1.5;
 
     private static UIElement GroupIcon()
     {
-        var ink = new SolidColorBrush(NoteStyling.InkFor(NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark))));
+        var canvas = IconCanvas();
 
-        var grid = new Grid { Width = 20, Height = 20 };
+        // 两枚方块＋一条连过去的手：读作"把这两格并成一伙"。
+        IconRect(canvas, 3, 3, 8, 8, 1.5);
+        IconRect(canvas, 13, 13, 8, 8, 1.5);
+        IconPolyline(canvas, [(13, 7), (19, 7), (21, 9), (21, 11)]);
 
-        grid.Children.Add(new Rectangle
-        {
-            Width = 15,
-            Height = 15,
-            RadiusX = 2.5,
-            RadiusY = 2.5,
-            Stroke = ink,
-            StrokeThickness = 1.5,
-            StrokeDashArray = [3, 2.2],
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-        });
-
-        grid.Children.Add(new Rectangle
-        {
-            Width = 7,
-            Height = 7,
-            RadiusX = 1.5,
-            RadiusY = 1.5,
-            Fill = ink,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-        });
-
-        return grid;
+        return Shown(canvas);
     }
 
-    // 换色钮：一枚自然晕染的色轮（色相绕圈、越靠圆心越淡到白）。WinUI 这版没有 ConicGradientBrush，
-    // 就用连续插值的扇形拼出色相环，再压一层"白心→透明"的径向渐变当饱和度衰减——
-    // 72 片在 22px 下接缝看不出来，读起来就是一张调色的色盘；最外一圈发丝把这圈色收干净。
+    /// <summary>换色钮：一枚描边的调色板，三枚点是板上那几档预设的位置。</summary>
+    /// <remarks>
+    /// 这一档换掉的是原来那枚 72 片色轮（自然晕染、越靠圆心越淡）。色轮在实物上读起来确实最像
+    /// "调色"，但它和另两枚不是一档笔画——他这轮要的是"一套"。要退回去：`git show 92c3ecd~1` 里
+    /// 那份 <c>ColorWheelIcon</c> 整段贴回来就行（连带 <c>HsvToColor</c>）。
+    /// 如果想两样都要：把下面三枚点填成板上预设色，是一行的改法。
+    /// </remarks>
     private static UIElement ColorWheelIcon()
     {
-        var grid = new Grid { Width = 22, Height = 22 };
+        var canvas = IconCanvas();
 
-        const double cx = 11, cy = 11, r = 10;
-        const int slices = 72;
-        var step = System.Math.PI * 2 / slices;
-
-        for (var i = 0; i < slices; i++)
+        var dish = new Ellipse
         {
-            var a0 = i * step;
-            var a1 = (i + 1) * step;
-            var color = HsvToColor(360.0 * i / slices, 1, 1);
-
-            var figure = new PathFigure
-            {
-                StartPoint = new Point(cx + (r * System.Math.Cos(a0)), cy + (r * System.Math.Sin(a0))),
-                IsClosed = true,
-            };
-
-            figure.Segments.Add(new ArcSegment
-            {
-                Point = new Point(cx + (r * System.Math.Cos(a1)), cy + (r * System.Math.Sin(a1))),
-                Size = new Size(r, r),
-                SweepDirection = SweepDirection.Clockwise,
-                IsLargeArc = false,
-            });
-
-            figure.Segments.Add(new LineSegment { Point = new Point(cx, cy) });
-
-            var geometry = new PathGeometry();
-            geometry.Figures.Add(figure);
-
-            grid.Children.Add(new Microsoft.UI.Xaml.Shapes.Path { Data = geometry, Fill = new SolidColorBrush(color) });
-        }
-
-        grid.Children.Add(new Ellipse
-        {
-            Width = r * 2,
-            Height = r * 2,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            IsHitTestVisible = false,
-            Stroke = new SolidColorBrush(Color.FromArgb(30, 0, 0, 0)),
-            StrokeThickness = 1,
-        });
-
-        grid.Children.Add(new Ellipse
-        {
-            Width = r * 2,
-            Height = r * 2,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            IsHitTestVisible = false,
-            Fill = new RadialGradientBrush
-            {
-                GradientOrigin = new Point(0.5, 0.5),
-                Center = new Point(0.5, 0.5),
-                RadiusX = 0.5,
-                RadiusY = 0.5,
-                GradientStops =
-                {
-                    new GradientStop { Color = Color.FromArgb(255, 255, 255, 255), Offset = 0 },
-                    new GradientStop { Color = Color.FromArgb(0, 255, 255, 255), Offset = 0.72 },
-                },
-            },
-        });
-
-        return grid;
-    }
-
-    private static Color HsvToColor(double h, double s, double v)
-    {
-        var c = v * s;
-        var x = c * (1 - System.Math.Abs(((h / 60) % 2) - 1));
-        var m = v - c;
-
-        var (r1, g1, b1) = h switch
-        {
-            < 60 => (c, x, 0.0),
-            < 120 => (x, c, 0.0),
-            < 180 => (0.0, c, x),
-            < 240 => (0.0, x, c),
-            < 300 => (x, 0.0, c),
-            _ => (c, 0.0, x),
+            Width = 19,
+            Height = 18,
+            Stroke = IconInk(),
+            StrokeThickness = IconStrokePx,
         };
 
-        return Color.FromArgb(
-            255,
-            (byte)System.Math.Round((r1 + m) * 255),
-            (byte)System.Math.Round((g1 + m) * 255),
-            (byte)System.Math.Round((b1 + m) * 255));
+        Canvas.SetLeft(dish, 2.5);
+        Canvas.SetTop(dish, 3);
+        canvas.Children.Add(dish);
+
+        IconDot(canvas, 7.5, 10, 1.1);
+        IconDot(canvas, 12, 7.4, 1.1);
+        IconDot(canvas, 16, 10, 1.1);
+
+        return Shown(canvas);
     }
 
     private static UIElement TrashIcon()
     {
-        // 删除＝红色，和那颗红描边的按钮一起把"危险"说清楚。字形用系统自带的垃圾桶
-        // （Segoe MDL2 Assets E74D）——之前那版是两块矩形拼的盖和身，1.6px 的直角在
-        // 38px 圆里读起来像故障，而这类通用图标本来就该交给系统字体画。
-        return new FontIcon
+        var canvas = IconCanvas();
+
+        // 盖、提手、身、两道竖——四件都在同一张 24 网格上，1.5 描边。
+        IconLine(canvas, 4, 7, 20, 7);
+        IconPolyline(canvas, [(9, 7), (9, 5), (15, 5), (15, 7)]);
+        IconPolyline(canvas, [(6.5, 7), (7.4, 19.5), (16.6, 19.5), (17.5, 7)]);
+        IconLine(canvas, 10, 11, 10, 16);
+        IconLine(canvas, 14, 11, 14, 16);
+
+        return Shown(canvas);
+    }
+
+    private static SolidColorBrush IconInk()
+        => new(NoteStyling.InkFor(NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark))));
+
+    /// <summary>一枚图标的那张 24×24 网格，最后由 Viewbox 缩到 16——比稿页上量的就是这一档。</summary>
+    private static Canvas IconCanvas() => new() { Width = IconGridPx, Height = IconGridPx };
+
+    private static UIElement Shown(Canvas canvas)
+        => new Viewbox { Width = IconShownPx, Height = IconShownPx, Child = canvas, IsHitTestVisible = false };
+
+    private static void IconLine(Canvas canvas, double x1, double y1, double x2, double y2)
+    {
+        var ink = IconInk();
+
+        canvas.Children.Add(new Line
         {
-            Glyph = "\uE74D",
-            FontFamily = new FontFamily("Segoe MDL2 Assets"),
-            FontSize = 18,
-            Foreground = new SolidColorBrush(RailDangerInk),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            IsHitTestVisible = false,
+            X1 = x1,
+            Y1 = y1,
+            X2 = x2,
+            Y2 = y2,
+            Stroke = ink,
+            StrokeThickness = IconStrokePx,
+        });
+    }
+
+    private static void IconPolyline(Canvas canvas, (double X, double Y)[] points)
+    {
+        var polyline = new Polyline
+        {
+            Stroke = IconInk(),
+            StrokeThickness = IconStrokePx,
         };
+
+        foreach (var (x, y) in points)
+        {
+            polyline.Points.Add(new Point(x, y));
+        }
+
+        canvas.Children.Add(polyline);
+    }
+
+    private static void IconRect(Canvas canvas, double x, double y, double width, double height, double radius)
+    {
+        var rect = new Rectangle
+        {
+            Width = width,
+            Height = height,
+            RadiusX = radius,
+            RadiusY = radius,
+            Stroke = IconInk(),
+            StrokeThickness = IconStrokePx,
+        };
+
+        Canvas.SetLeft(rect, x);
+        Canvas.SetTop(rect, y);
+        canvas.Children.Add(rect);
+    }
+
+    private static void IconDot(Canvas canvas, double cx, double cy, double radius)
+    {
+        var dot = new Ellipse
+        {
+            Width = radius * 2,
+            Height = radius * 2,
+            Fill = IconInk(),
+        };
+
+        Canvas.SetLeft(dot, cx - radius);
+        Canvas.SetTop(dot, cy - radius);
+        canvas.Children.Add(dot);
+    }
+
+    /// <summary>
+    /// 三枚图标必须是同一档画法：同一张 24 网格缩到 16、每一条描边都是同一个粗细，
+    /// 而且**不许再退回系统字形**——他 10-24 判"有些丑"读到的就是三枚各画各的那层不一致。
+    /// </summary>
+    private void SelfTestRailIconSet(List<string> problems)
+    {
+        if (_railGroup is null || _railColor is null || _railDelete is null)
+        {
+            problems.Add("自检图标集: 操作条没建出来（三枚钮读不到）");
+
+            return;
+        }
+
+        var buttons = new[] { (_railGroup, "组"), (_railColor, "色"), (_railDelete, "删") };
+        var strokes = new List<double>();
+
+        foreach (var (button, name) in buttons)
+        {
+            // 圆钮那层是 Border → Grid（一枚底圈 ＋ 图标），图标本身才是 Viewbox 套 24 网格。
+            var box = (button.Child as Grid)?.Children.OfType<Viewbox>().FirstOrDefault();
+
+            if (box is null || box.Child is not Canvas canvas)
+            {
+                problems.Add(
+                    $"自检图标集: {name} 那枚不是「Viewbox 套 24 网格」这一形" +
+                    $"（圆钮里读到 {(button.Child as Grid)?.Children.Count.ToString() ?? "不是 Grid"} 件，没有 Viewbox）");
+
+                continue;
+            }
+
+            if (box.Width != IconShownPx || canvas.Width != IconGridPx)
+            {
+                problems.Add($"自检图标集: {name} 那枚的尺寸不是这一档（显示 {box.Width:0.#}、网格 {canvas.Width:0.#}）");
+            }
+
+            var shapes = canvas.Children.OfType<Shape>().ToList();
+
+            if (shapes.Count == 0)
+            {
+                problems.Add($"自检图标集: {name} 那枚网格上一个形状都没有");
+            }
+
+            strokes.AddRange(shapes.Where(shape => shape.Stroke is not null).Select(shape => shape.StrokeThickness));
+        }
+
+        if (strokes.Count > 0 && strokes.Any(thickness => Math.Abs(thickness - IconStrokePx) > 0.001))
+        {
+            problems.Add(
+                $"自检图标集: 描边粗细不是一套——读到 {string.Join("、", strokes.Distinct().Select(value => value.ToString("0.##")))}，" +
+                $"应全是 {IconStrokePx:0.##}");
+        }
+
+        Diagnostics.Write(
+            $"selftest 图标集: 三枚都是 {IconGridPx:0} 网格缩到 {IconShownPx:0}、描边 {strokes.Count} 条全 {IconStrokePx:0.##}" +
+            $"（比稿页 design/icons.html 的 B 档；圆头线帽这一版拿不到，端点是平的）");
     }
 
     private void AnimateRailIn()

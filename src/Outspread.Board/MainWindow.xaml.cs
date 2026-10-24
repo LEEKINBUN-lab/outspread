@@ -5031,6 +5031,9 @@ public sealed partial class MainWindow : Window
         // 删除那一发连选中框一起淡，投影要把框抬回来（10-24 他报的第四格）。
         SelfTestChromeComesBackAfterFade(problems);
 
+        // 操作条三枚图标是同一档画法（10-24 他在比稿页上点了 B 档）。
+        SelfTestRailIconSet(problems);
+
         // 一块丢了图的板子也要开得成：那一格写"未找到"，而不是把窗口打死（10-23 撞上的那一发）。
         SelfTestMissingImageTile(problems);
 

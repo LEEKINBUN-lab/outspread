@@ -47,7 +47,16 @@ if not "%ERRORLEVEL%"=="0" goto :fail
 
 echo [4/4] 界面自检（在临时副本上跑，绝不动 boards 里的板子）
 if not exist "%SCRATCH%" mkdir "%SCRATCH%"
-if exist "%SCRATCH%\selftest.canvas" del "%SCRATCH%\selftest.canvas"
+rem Reset the WHOLE scratch board set, not just the one file. The window writes a sidecar
+rem next to each board (camera: pan/zoom, manualSize), and the self test itself ends up at
+rem zoom 112% while the "all notes" parent file keeps a node per run. Left in place, the next
+rem run starts somewhere the assertions were not written for: on 2026-10-24 that leaked a
+rem zoom=1.12 sidecar and the markdown-fit step went red (140 < 142.08) on a board nobody
+rem touched. ASCII wildcards on purpose: the Chinese file names cannot be spelled in this
+rem file (cmd parses a batch in the OEM codepage).
+del /q "%SCRATCH%\*.canvas" >nul 2>&1
+del /q "%SCRATCH%\*.canvas.view.json" >nul 2>&1
+if exist "%SCRATCH%\.outspread-history" rd /s /q "%SCRATCH%\.outspread-history"
 copy /y "tests\fixtures\gate.canvas" "%SCRATCH%\selftest.canvas" >nul
 if exist "boards\assets" xcopy /y /i /e /q "boards\assets" "%SCRATCH%\assets" >nul
 if not exist "%BOARD%" goto :fail

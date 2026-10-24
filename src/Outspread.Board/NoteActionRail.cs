@@ -498,35 +498,42 @@ public sealed partial class MainWindow
             (byte)System.Math.Round((b1 + m) * 255));
     }
 
-    /// <summary>删＝系统自带的垃圾桶字形：那类通用符号的字形已被针对字号调过，不该自己拼。</summary>
+    /// <summary>
+    /// 删＝比稿页 design/icons.html 上那枚垃圾桶，原样搬：盖、提手、身、两道竖，1.5 描边，
+    /// <b>圆头线帽与圆角连接</b>。上一版"和稿不一样"就差在这两端是平的——不是形状选错了。
+    /// 圆头只有 XAML 侧拿得到：这个投影的 C# 里那个枚举的命名空间看不见（两种全名都 CS0234），
+    /// 而 XamlReader 按元数据解析，认。所以几何写成一段 path 串，代码只负责换墨色。
+    /// </summary>
     private static UIElement TrashIcon()
-        => new FontIcon
+    {
+        var canvas = (Canvas)Microsoft.UI.Xaml.Markup.XamlReader.Load(
+            "<Canvas xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Width='22' Height='22' IsHitTestVisible='False'>"
+            + "<Path StrokeThickness='1.5' StrokeStartLineCap='Round' StrokeEndLineCap='Round' StrokeLineJoin='Round'"
+            + " Data='M3,6.5 L19,6.5 M8,6.5 L8,4 L14,4 L14,6.5 M5,6.5 L6,19 L16,19 L17,6.5 M9,10.5 L9,15.5 M13,10.5 L13,15.5'/>"
+            + "</Canvas>");
+
+        foreach (var path in canvas.Children.OfType<Microsoft.UI.Xaml.Shapes.Path>())
         {
-            Glyph = "\uE74D",
-            FontFamily = new FontFamily("Segoe MDL2 Assets"),
-            FontSize = 18,
-            Foreground = new SolidColorBrush(RailDangerInk),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            IsHitTestVisible = false,
-        };
+            path.Stroke = new SolidColorBrush(RailDangerInk);
+        }
+
+        return canvas;
+    }
 
     /// <summary>
     /// 操作条那三枚的画法凭据：每枚都是"纸面＋悬停层＋按压层＋激活环"四层叠出来的，
-    /// 静止时后三层必须完全透明，两层的墨占比要等于令牌，删除那枚的图形必须是系统垃圾桶且是红的。
+    /// 静止时后三层必须全透明，两层的墨占比要等于令牌；删那枚必须是**圆头线帽**的 Path。
     /// </summary>
     /// <remarks>
-    /// 10-24 这一发锁的是**控件层**，不是图形：图形他自己判过"自绘三版都不如原样"，
-    /// 所以图形退回原样、不再锁形状；而"点下去有没有反馈"这一格是新加的，正是他说的
-    /// "一用起来就天差地别"那一半，得钉住——三层顺序错了、静止时漏出一层、
-    /// 或者谁把状态层改成"瞬间换背景色"，这一发都会红。
+    /// 10-24 这一发锁的是**控件层与端点**，不锁图形形状：图形他自己判过"自绘三版都不如原样"，
+    /// 形状还会再改，锁形状等于锁一个他手里正在定的东西。但"实物和稿子不一样"这一格要钉住——
+    /// 上一版差就差在稿子是圆头、实物是平头（1.5 描边两端各少 0.75 像素），所以这里读回
+    /// StrokeEndLineCap 的实际值。三层顺序错了、静止时漏出一层、或谁把状态层改回"瞬间换背景色"，
+    /// 这一发都会红。
     /// </remarks>
     private void SelfTestRailStateLayers(List<string> problems)
     {
-        var buttons = new[]
-        {
-            (_railGroup, "组"), (_railColor, "色"), (_railDelete, "删"),
-        };
+        var buttons = new[] { (_railGroup, "组"), (_railColor, "色"), (_railDelete, "删") };
 
         if (buttons.Any(candidate => candidate.Item1 is null))
         {
@@ -569,26 +576,25 @@ public sealed partial class MainWindow
             ExpectAlpha(layers, name, "按压", layers.Press, ControlKit.PressAlpha, problems);
         }
 
-        if (_railDelete?.Child is Grid deleteGrid && deleteGrid.Children.OfType<FontIcon>().FirstOrDefault() is { } trash)
-        {
-            if (trash.Glyph != "" || trash.FontFamily.Source != "Segoe MDL2 Assets")
-            {
-                problems.Add($"自检状态层: 删那枚不再是系统垃圾桶字形（读到 {trash.Glyph} / {trash.FontFamily.Source}）");
-            }
+        var trash = (_railDelete?.Child as Grid)?.Children.OfType<Canvas>()
+            .SelectMany(canvas => canvas.Children.OfType<Microsoft.UI.Xaml.Shapes.Path>()).ToList() ?? [];
 
-            if (trash.Foreground is not SolidColorBrush brush || brush.Color != RailDangerInk)
-            {
-                problems.Add("自检状态层: 删那枚的图形不是危险红");
-            }
-        }
-        else
+        if (trash.Count == 0)
         {
-            problems.Add("自检状态层: 删那枚里读不到 FontIcon");
+            problems.Add("自检状态层: 删那枚里读不到 Path——垃圾桶不再是稿子上那一段几何");
+        }
+        else if (trash.Any(path => System.Convert.ToString(path.StrokeEndLineCap) != "Round" || System.Convert.ToString(path.StrokeLineJoin) != "Round"))
+        {
+            problems.Add("自检状态层: 删那枚的端点或拐角不是圆头（稿子上是 round，平头就是「和稿不一样」那一格）");
+        }
+        else if (trash.Any(path => Math.Abs(path.StrokeThickness - 1.5) > 0.001))
+        {
+            problems.Add($"自检状态层: 删那枚的描边是 {trash[0].StrokeThickness:0.###}，稿子上是 1.5");
         }
 
         Diagnostics.Write(
-            $"selftest 状态层: 三枚都是纸面＋悬停 {ControlKit.HoverAlpha:0.###}＋按压 {ControlKit.PressAlpha:0.###}＋环，" +
-            $"静止时后三层全透明；进 {ControlKit.HoverInMs:0}ms／退 {ControlKit.HoverOutMs:0}ms／按 {ControlKit.PressMs:0}ms");
+            $"selftest 状态层: 三枚都是纸面＋悬停 {ControlKit.HoverAlpha:0.###}＋按压 {ControlKit.PressAlpha:0.###}＋环，静止时后三层全透明；" +
+            $"进 {ControlKit.HoverInMs:0}ms／退 {ControlKit.HoverOutMs:0}ms／按 {ControlKit.PressMs:0}ms；删那枚 Path 端点圆头、描边 1.5");
     }
 
     private static void ExpectAlpha(

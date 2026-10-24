@@ -80,6 +80,10 @@ public sealed partial class MainWindow : Window
 
     private NodeGesture? _nodeGesture;
 
+    /// <summary>这一发按下已经走过 4 像素的拖动阈值没有：没过就不许写格子的位置（手抖不是拖动）。
+    /// 每一发按下重新归零，所以它跟着 <see cref="_nodeGesture"/> 的两处创建点各写一次 false。</summary>
+    private bool _nodeDragStarted;
+
     private ResizeGesture? _resizeGesture;
 
     /// <summary>Last pointer position on the surface, in screen pixels: where a paste lands.</summary>
@@ -924,6 +928,16 @@ public sealed partial class MainWindow : Window
         var deltaX = worldX - gesture.StartPointerX;
         var deltaY = worldY - gesture.StartPointerY;
 
+        // 没过 4 像素的那一发是手抖，不是拖动。以前每一发 PointerMoved 都直接写进格子，
+        // 于是"单击选中"偶尔留下一两像素的位移（10-24 他报这一格；日志里的凭据是
+        // "drag ended: 1 node(s), 2.0 world px"）。阈值与框选读的是同一枚数。
+        if (!_nodeDragStarted && !BoardGestures.IsDrag((Math.Abs(deltaX) + Math.Abs(deltaY)) * _view.Zoom))
+        {
+            return;
+        }
+
+        _nodeDragStarted = true;
+
         var (adjustedX, adjustedY, guides) = SnapDrag(gesture, deltaX, deltaY);
 
         deltaX = adjustedX;
@@ -1607,6 +1621,8 @@ public sealed partial class MainWindow : Window
             startMembers = [.. Grouping.Members(sg, BoardNotes().ConvertAll(RectOf)).Select(member => member.Id)];
         }
 
+        _nodeDragStarted = false;
+
         _nodeGesture = new NodeGesture(
             _view.ToWorldX(screen.X),
             _view.ToWorldY(screen.Y),
@@ -1798,6 +1814,11 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void ProjectSelection()
     {
+        // 删除那一发会把描边与内对比线一起淡到 0（见 SelectionChromeVisuals）：这两枚是常驻元素、
+        // 不是每次新建的，所以每一次投影都要先抬回满不透明——不然"套子"再也回不来。
+        SelectionOutline.Opacity = 1;
+        SelectionInner.Opacity = 1;
+
         foreach (var handle in _handles)
         {
             HandleLayer.Children.Remove(handle);
@@ -4983,6 +5004,12 @@ public sealed partial class MainWindow : Window
         // 编辑中那一发滚轮走的是"滚这一格"，不是"缩放整块板子"（10-24 他点的）。
         SelfTestEditingWheel(problems);
 
+        // 单击选中不许把格子挪走：没过 4 像素的那一发是手抖（10-24 他报的第三格）。
+        SelfTestClickDoesNotNudge(problems);
+
+        // 删除那一发连选中框一起淡，投影要把框抬回来（10-24 他报的第四格）。
+        SelfTestChromeComesBackAfterFade(problems);
+
         // 一块丢了图的板子也要开得成：那一格写"未找到"，而不是把窗口打死（10-23 撞上的那一发）。
         SelfTestMissingImageTile(problems);
 
@@ -5210,6 +5237,101 @@ public sealed partial class MainWindow : Window
         _view.Zoom = savedZoom;
 
         Rebuild();
+    }
+
+    /// <summary>
+    /// 单击选中不许把格子挪走：没过 4 像素的那一发位移必须是 0，过了的那一发必须整段跟上。
+    /// </summary>
+    /// <remarks>
+    /// 他 10-24 报"单击选中便签时偶尔会轻微移动一下"。凭据在日志里：`drag ended: 1 node(s), 2.0 world px`
+    /// ——上一版每一发 PointerMoved 都直接把格子写到指针上，手抖两像素就留两像素。
+    /// 这一发摆的是同一条路（真 <see cref="ApplyNodeDrag"/>），两头都判：抖的那一发不许动，
+    /// 过了阈值的要整段跟上（不是扣掉那 4 像素再走——那是另一套手感，得明说）。
+    /// </remarks>
+    private void SelfTestClickDoesNotNudge(List<string> problems)
+    {
+        if (_document.Nodes.FirstOrDefault(node => node.Kind == CanvasNodeKind.Text) is not { } node)
+        {
+            problems.Add("selftest 单击不挪格: 这块板上没有文字格，这一发不适用");
+
+            return;
+        }
+
+        var startX = node.X;
+        var startY = node.Y;
+        var screen = new Point(
+            _view.ToScreenX(node.X + (node.Width / 2)),
+            _view.ToScreenY(node.Y + (node.Height / 2)));
+
+        void Press()
+        {
+            _nodeGesture = new NodeGesture(
+                _view.ToWorldX(screen.X),
+                _view.ToWorldY(screen.Y),
+                new Dictionary<string, (double X, double Y)>(StringComparer.Ordinal) { [node.Id] = (startX, startY) },
+                node.Id);
+
+            _nodeDragStarted = false;
+        }
+
+        Press();
+        ApplyNodeDrag(new Point(screen.X + 2, screen.Y + 1));   // 曼哈顿 3 屏幕像素：没过 4 那一档
+
+        if (Math.Abs(node.X - startX) > 1e-9 || Math.Abs(node.Y - startY) > 1e-9)
+        {
+            problems.Add(
+                $"selftest 单击不挪格: 抖了 3 屏幕像素就把格子从 ({startX:0.##},{startY:0.##}) 写到了 " +
+                $"({node.X:0.##},{node.Y:0.##})，阈值那一头不成立");
+        }
+
+        Press();
+        ApplyNodeDrag(new Point(screen.X + 40, screen.Y));      // 过了阈值：整段 40 屏幕像素都要跟上
+
+        var movedWorld = _view.ToWorldX(screen.X + 40) - _view.ToWorldX(screen.X);
+        var actual = node.X - startX;
+
+        // 那一发走的是"指针位移＋吸附"两笔账：8 世界像素（按缩放折到世界）以内的偏差是吸附带宽，
+        // 不算漏。要钉的是"过了阈值就得整段跟上"，不是"一格一像素都不许差"。
+        if (actual <= 0)
+        {
+            problems.Add("selftest 单击不挪格: 过了 4 像素那一发格子一格都没动——那道闸把拖动也挡了");
+        }
+        else if (Math.Abs(actual - movedWorld) > SnapThreshold)
+        {
+            problems.Add(
+                $"selftest 单击不挪格: 过了阈值那一发走了 {actual:0.##} 世界像素，指针那一发是 {movedWorld:0.##}，" +
+                $"超出吸附带宽 {SnapThreshold:0.##}");
+        }
+
+        Diagnostics.Write(
+            $"selftest 单击不挪格: 抖 3 屏幕像素＝一格未动；走满 40 屏幕像素＝格子跟到 {actual:0.##}（指针 {movedWorld:0.##}、吸附带宽 {SnapThreshold:0.##}）；阈值与框选同一枚 4");
+
+        node.X = startX;
+        node.Y = startY;
+        _nodeGesture = null;
+        _nodeDragStarted = false;
+    }
+
+    /// <summary>
+    /// 删除那一发现在连描边与内对比线一起淡（10-24 他点的第四格："便签渐渐没了、套子还在，最后忽然消失"）。
+    /// 这两枚是常驻元素、不是每次新建的，所以每一次投影都要把它们抬回满不透明——这一发钉的就是那一句。
+    /// </summary>
+    private void SelfTestChromeComesBackAfterFade(List<string> problems)
+    {
+        SelectionOutline.Opacity = 0;
+        SelectionInner.Opacity = 0;
+
+        ProjectSelection();
+
+        if (SelectionOutline.Opacity < 0.99 || SelectionInner.Opacity < 0.99)
+        {
+            problems.Add(
+                $"淡出以后选中框没抬回来：描边 {SelectionOutline.Opacity:0.##}、内对比线 {SelectionInner.Opacity:0.##}");
+        }
+        else
+        {
+            Diagnostics.Write("selftest 选中框回血: 两枚都抬回 1（删除那一发一起淡，投影时负责抬回来）");
+        }
     }
 
     /// <summary>

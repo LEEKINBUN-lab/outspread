@@ -634,6 +634,8 @@ public sealed partial class MainWindow
 
         BeginGesture(state.StartPositions.Count > 1 ? $"把 {state.StartPositions.Count} 格拖进／拖出组" : "把这格拖进／拖出组");
 
+        _nodeDragStarted = false;
+
         _nodeGesture = new NodeGesture(
             _view.ToWorldX(screen.X),
             _view.ToWorldY(screen.Y),
@@ -1168,8 +1170,32 @@ public sealed partial class MainWindow
             board.Children.Add(FadeTo(visual, 0, Motion.BaseMs));
         }
 
+        // 选中框、手柄与操作条要跟着那一格一起淡：只淡卡片、把那几层留到最后一拍忽然消失，
+        // 读起来就是"东西没了但套子还在"（10-24 他点的第四格）。
+        foreach (var chrome in SelectionChromeVisuals())
+        {
+            board.Children.Add(FadeTo(chrome, 0, Motion.BaseMs));
+        }
+
         board.Completed += (_, _) => RemoveSelection();
         board.Begin();
+    }
+
+    /// <summary>跟着"选中那一格"走的那几层皮：描边、内对比线、八枚手柄、操作条。</summary>
+    private IEnumerable<UIElement> SelectionChromeVisuals()
+    {
+        yield return SelectionOutline;
+        yield return SelectionInner;
+
+        foreach (var handle in _handles)
+        {
+            yield return handle;
+        }
+
+        if (_rail is { Visibility: Visibility.Visible })
+        {
+            yield return _rail;
+        }
     }
 
     // ---------------------------------------------------------------------

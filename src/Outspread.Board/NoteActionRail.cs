@@ -12,7 +12,7 @@ using Windows.UI;
 namespace Outspread.Board;
 
 /// <summary>
-/// 便签的操作条（10-22 他点了形的 v3 原型 1:1）：选中恰好一枚时，它左侧浮出三枚圆钮——
+/// 便签的操作条（10-22 他点了形的 v3 原型 1:1）：选中恰好一枚时，它左侧浮出四枚圆钮——
 /// 组 / 换色 / 删。分组这件事从"拖便签"里摘出来，只归组钮：
 /// <list type="bullet">
 /// <item>轻点组钮＝菜单（创建分组 / 移出分组，不可用的灰着）。点便签不再被塞进某个已有组——
@@ -31,6 +31,8 @@ namespace Outspread.Board;
 public sealed partial class MainWindow
 {
     private Border? _rail;
+    private StackPanel? _railHost;
+    private readonly List<Ellipse> _railHalos = [];
     private Border? _railGroup;
     private Border? _railColor;
     private Border? _railDelete;
@@ -86,8 +88,13 @@ public sealed partial class MainWindow
 
         var screenLeft = _view.ToScreenX(box.X);
         var flip = screenLeft < 60;
-        var x = flip ? _view.ToScreenX(box.Right) + 12 : screenLeft - 50;
-        var y = Math.Clamp(_view.ToScreenY(box.Y + box.Height / 2) - 64, 8, Math.Max(8, BoardArea.ActualHeight - 140));
+        // 外壳比圆盘宽 2×晕影、上沿还多留了下压那一截：落位把这层内缩抵消掉，
+        // 圆盘仍贴在原来那条 12 像素的缝上、第一枚的顶边仍是离包围盒中心 64。
+        var x = (flip ? _view.ToScreenX(box.Right) + 12 : screenLeft - 50) - ControlKit.VignetteSpreadPx;
+        var y = Math.Clamp(
+            _view.ToScreenY(box.Y + box.Height / 2) - 64 - RailTopInsetPx,
+            8,
+            Math.Max(8, BoardArea.ActualHeight - RailShellHeightPx - 8));
 
         // 落位对齐到整枚设备像素：38px 的圆在 .37 这种偏移上描边会一段实一段虚，看起来就是锯齿。
         x = SnapToPixel(x);
@@ -156,9 +163,15 @@ public sealed partial class MainWindow
     {
         var host = new StackPanel
         {
-            Spacing = 10,
+            Spacing = RailGapPx,
+            Width = RailButtonPx,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, RailTopInsetPx, 0, 0),
             Opacity = 0,
         };
+
+        _railHost = host;
 
         _railGroup = RoundButton("NoteRailGroup", GroupIcon(), "分组（点＝菜单，按住拖＝拖入/拖出）");
         _railColor = RoundButton("NoteRailColor", ColorWheelIcon(), "换色");
@@ -177,10 +190,42 @@ public sealed partial class MainWindow
 
         WireRailButtons();
 
+        // 晕影单独一层垫在钮下面，而不是塞进每一枚的格子里：塞进格子就得把格子撑到 58，
+        // 钮与钮的净空会从 10 变成 30（布局被影改了）。这一层正好是四枚的外接盒，
+        // 也不存在"58 的影被 38 的格子裁掉"——10-24 第一发右下角那块直边灰楔就是这么来的。
+        var halos = new Canvas
+        {
+            Width = RailShellWidthPx,
+            Height = RailShellHeightPx,
+            IsHitTestVisible = false,
+        };
+
+        _railHalos.Clear();
+
+        for (var i = 0; i < RailCells; i++)
+        {
+            var halo = Vignette();
+            Canvas.SetLeft(halo, 0);
+            Canvas.SetTop(halo, i * RailPitchPx);
+            _railHalos.Add(halo);
+            halos.Children.Add(halo);
+        }
+
+        var stack = new Grid
+        {
+            Width = RailShellWidthPx,
+            Height = RailShellHeightPx,
+        };
+
+        stack.Children.Add(halos);
+        stack.Children.Add(host);
+
         var shell = new Border
         {
             Name = "NoteRail",
-            Child = host,
+            Width = RailShellWidthPx,
+            Height = RailShellHeightPx,
+            Child = stack,
             Visibility = Visibility.Collapsed,
             IsHitTestVisible = true,
         };
@@ -196,6 +241,22 @@ public sealed partial class MainWindow
 
     /// <summary>圆钮本体直径——令牌里那一个数，色板落位与命中区都按它算。</summary>
     private const double RailButtonPx = ControlKit.ButtonPx;
+
+    /// <summary>钮与钮之间的净空。加晕影之前就是 10——影不许参与布局。</summary>
+    private const double RailGapPx = 10;
+
+    private const double RailPitchPx = RailButtonPx + RailGapPx;
+
+    private const int RailCells = 4;
+
+    private const double RailColumnPx = (RailCells * RailButtonPx) + ((RailCells - 1) * RailGapPx);
+
+    /// <summary>外壳：晕影那一圈在左右各扩 10，上下也各扩 10（下压已经算在里面）。</summary>
+    private const double RailShellWidthPx = RailButtonPx + (2 * ControlKit.VignetteSpreadPx);
+    private const double RailShellHeightPx = RailColumnPx + (2 * ControlKit.VignetteSpreadPx);
+
+    /// <summary>圆盘列在外壳里的顶边：上面留 10 给影，下压 2 由外壳底边多出的那截补。</summary>
+    private const double RailTopInsetPx = ControlKit.VignetteSpreadPx - ControlKit.VignetteDropPx;
 
     /// <summary>纸面那一圈发丝：1 逻辑像素（上一版是 1.25，小数宽度本身就是一条灰边）。</summary>
     private const double RailHairlinePx = 1;
@@ -219,15 +280,17 @@ public sealed partial class MainWindow
             Height = RailButtonPx,
         };
 
-        stack.Children.Add(new Ellipse { Width = RailButtonPx, Height = RailButtonPx, IsHitTestVisible = false });
-        stack.Children.Add(new Ellipse { Width = RailButtonPx, Height = RailButtonPx, Opacity = 0, IsHitTestVisible = false });
-        stack.Children.Add(new Ellipse { Width = RailButtonPx, Height = RailButtonPx, Opacity = 0, IsHitTestVisible = false });
+        stack.Children.Add(Disc(opacity: 1));
+        stack.Children.Add(Disc());
+        stack.Children.Add(Disc());
         stack.Children.Add(new Ellipse
         {
             Width = RailButtonPx - 2 * RailHairlinePx,
             Height = RailButtonPx - 2 * RailHairlinePx,
             StrokeThickness = 2,
             Opacity = 0,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
             IsHitTestVisible = false,
         });
         stack.Children.Add(icon);
@@ -245,7 +308,7 @@ public sealed partial class MainWindow
             Opacity = 0,
         };
 
-        // 三枚钮只有图标没有字：读屏与悬停都需要这行说明（它原来只躺在 Tag 里，没人读）。
+        // 四枚钮只有图标没有字：读屏与悬停都需要这行说明（它原来只躺在 Tag 里，没人读）。
         ToolTipService.SetToolTip(button, help);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, help);
 
@@ -256,7 +319,7 @@ public sealed partial class MainWindow
 
     /// <summary>
     /// 一枚钮的四层：纸面、悬停层、按压层、组钮激活环。按加入顺序取——顺序变了自检会红，
-    /// 因为时长与哪一层该出现在哪一档，全靠这个顺序对上。
+    /// 因为时长与哪一层该出现在哪一档，全靠这个顺序对上。晕影不在这四层里（见 BuildRail 那段）。
     /// </summary>
     private static (Ellipse Face, Ellipse Hover, Ellipse Press, Ellipse Ring)? LayersOf(Border button)
     {
@@ -272,6 +335,56 @@ public sealed partial class MainWindow
             : (layers[0], layers[1], layers[2], layers[3]);
     }
 
+    /// <summary>一枚圆盘：直径就是令牌那一格；默认全透明，只有纸面那一枚起来。</summary>
+    private static Ellipse Disc(double opacity = 0)
+        => new()
+        {
+            Width = RailButtonPx,
+            Height = RailButtonPx,
+            Opacity = opacity,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+        };
+
+    /// <summary>
+    /// 一圈径向渐变的晕影：盘以内全透明（不糊纸面），盘沿那一圈最实，往外散到零。
+    /// 出处见 <see cref="ControlKit.VignetteAlpha"/>——Chrome 那圈"几乎看不见的影"在容器上，
+    /// 而这几枚浮在板面上就是容器。自己画渐变而不挂投影：那要一张遮罩，这版 WinUI 没有现成的。
+    /// 下压不写在这里，落在 Canvas 的落位上——有 RenderTransform 就会往外顶，反而多一层裁剪的口子。
+    /// </summary>
+    private static Ellipse Vignette()
+    {
+        var size = ControlKit.ButtonPx + (2 * ControlKit.VignetteSpreadPx);
+        var edge = (ControlKit.ButtonPx / 2) / size;
+
+        var halo = new RadialGradientBrush
+        {
+            GradientOrigin = new Point(0.5, 0.5),
+            Center = new Point(0.5, 0.5),
+            RadiusX = 0.5,
+            RadiusY = 0.5,
+        };
+
+        // 透明端必须写死成"黑且 alpha 0"：Colors.Transparent 是白透明（#00FFFFFF），
+        // 这个投影的渐变按非预乘插值，中途会掺进灰色——深底上那圈影反而比板面亮。
+        var clear = Color.FromArgb(0, 0, 0, 0);
+
+        halo.GradientStops.Add(new GradientStop { Color = clear, Offset = 0 });
+        halo.GradientStops.Add(new GradientStop { Color = clear, Offset = Math.Max(0, edge - 0.12) });
+        halo.GradientStops.Add(new GradientStop { Color = AtAlpha(Colors.Black, ControlKit.VignetteAlpha), Offset = edge });
+        halo.GradientStops.Add(new GradientStop { Color = clear, Offset = 1 });
+
+        return new Ellipse
+        {
+            Width = size,
+            Height = size,
+            Opacity = 1,
+            IsHitTestVisible = false,
+            Fill = halo,
+        };
+    }
+
     /// <summary>一层的颜色：静止时它是透明的，所以这里只定"上来了有多深"。</summary>
     private void PaintRailButton(Border button)
     {
@@ -285,14 +398,14 @@ public sealed partial class MainWindow
         var paper = NoteStyling.ToColor(SelectionChrome.HandleFace(dark));
 
         layers.Face.Fill = new SolidColorBrush(paper);
-        layers.Face.Stroke = new SolidColorBrush(AtAlpha(dark ? Colors.White : Colors.Black, SelectionChrome.HandleEdgeAlpha(dark)));
+        layers.Face.Stroke = new SolidColorBrush(AtAlpha(dark ? Colors.White : Colors.Black, ControlKit.RingAlpha));
         layers.Face.StrokeThickness = RailHairlinePx;
         layers.Hover.Fill = new SolidColorBrush(AtAlpha(ink, ControlKit.HoverAlpha));
         layers.Press.Fill = new SolidColorBrush(AtAlpha(ink, ControlKit.PressAlpha));
         layers.Ring.Stroke = new SolidColorBrush(AtAlpha(NoteStyling.ToColor(SelectionChrome.Ring(dark)), 0.9));
     }
 
-    /// <summary>换主题时把三枚的纸面、发丝与状态层颜色一起跟上。</summary>
+    /// <summary>换主题时把四枚的纸面、发丝、状态层与晕影颜色一起跟上。</summary>
     private void PaintRailSurface()
     {
         if (_rail is null)
@@ -305,6 +418,22 @@ public sealed partial class MainWindow
         foreach (var button in RailButtons())
         {
             PaintRailButton(button);
+        }
+
+        PaintRailHalos();
+    }
+
+    /// <summary>晕影是黑的一层，深底要更实——只在换主题时重画，不必每帧造刷子。</summary>
+    private void PaintRailHalos()
+    {
+        var dark = NoteStyling.IsDark;
+
+        foreach (var halo in _railHalos)
+        {
+            if (halo.Fill is RadialGradientBrush brush && brush.GradientStops.Count == 4)
+            {
+                brush.GradientStops[2].Color = AtAlpha(Colors.Black, dark ? ControlKit.VignetteAlphaDark : ControlKit.VignetteAlpha);
+            }
         }
     }
 
@@ -358,7 +487,7 @@ public sealed partial class MainWindow
     /// 于是它既没淡进画面（停在 Opacity 0）、也没刷过纸面色（连底圈都没有），看着就是凭空少一枚。
     /// </summary>
     private Border[] RailButtons()
-        => (_rail?.Child as StackPanel)?.Children.OfType<Border>().ToArray() ?? [];
+        => _railHost?.Children.OfType<Border>().ToArray() ?? [];
 
     /// <summary>连线钮的激活环：拉线态进行中，那枚钮一直戴着环（他要知道"现在点便签是落点不是选中"）。</summary>
     private void SetRailLinkActive(bool active)
@@ -581,7 +710,7 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// 操作条那三枚的画法凭据：每枚都是"纸面＋悬停层＋按压层＋激活环"四层叠出来的，
+    /// 操作条那四枚的画法凭据：每枚都是"纸面＋悬停层＋按压层＋激活环"四层叠出来的，
     /// 静止时后三层必须全透明，两层的墨占比要等于令牌；删那枚必须是**圆头线帽**的 Path。
     /// </summary>
     /// <remarks>
@@ -648,6 +777,8 @@ public sealed partial class MainWindow
             ExpectAlpha(layers, name, "按压", layers.Press, ControlKit.PressAlpha, problems);
         }
 
+        SelfTestRailHalos(problems);
+
         var trash = (_railDelete?.Child as Grid)?.Children.OfType<Canvas>()
             .SelectMany(canvas => canvas.Children.OfType<Microsoft.UI.Xaml.Shapes.Path>()).ToList() ?? [];
 
@@ -665,8 +796,8 @@ public sealed partial class MainWindow
         }
 
         Diagnostics.Write(
-            $"selftest 状态层: 三枚都是纸面＋悬停 {ControlKit.HoverAlpha:0.###}＋按压 {ControlKit.PressAlpha:0.###}＋环，静止时后三层全透明；" +
-            $"进 {ControlKit.HoverInMs:0}ms／退 {ControlKit.HoverOutMs:0}ms／按 {ControlKit.PressMs:0}ms；删那枚 Path 端点圆头、描边 1.5");
+            $"selftest 状态层: 四枚都是纸面＋悬停 {ControlKit.HoverAlpha:0.###}＋按压 {ControlKit.PressAlpha:0.###}＋环，静止时后三层全透明；" +
+            $"进 {ControlKit.HoverInMs:0}ms／退 {ControlKit.HoverOutMs:0}ms／按 {ControlKit.PressMs:0}ms；删那枚 Path 端点圆头、描边 1.5；晕影 {ControlKit.VignetteAlpha:0.##}／深底 {ControlKit.VignetteAlphaDark:0.##}，四圈都装在外壳里");
     }
 
     private static void ExpectAlpha(
@@ -692,10 +823,90 @@ public sealed partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// 晕影的凭据：四枚各一圈，整圈都装在外壳里，影心比盘心低一个下压量。
+    /// 10-24 第一发把 58 的影塞进 38 的格，排版把盘外那圈裁掉了——屏幕上就是右下角一块直边灰楔。
+    /// 这里不比对像素，读的是变换后的实际边界：影的外接盒越出外壳，哪怕 1 像素，就是那一格回来了。
+    /// </summary>
+    private void SelfTestRailHalos(List<string> problems)
+    {
+        if (_rail is null || _railHalos.Count != RailCells)
+        {
+            problems.Add($"自检状态层: 晕影读到 {_railHalos.Count} 圈，{RailCells} 枚钮要一圈一枚");
+
+            return;
+        }
+
+        var cells = RailButtons();
+
+        // 透明端必须是「黑且 alpha 0」。Colors.Transparent 是 #00FFFFFF（白透明），这个投影的
+        // 渐变按非预乘插值，中途会掺灰——深底上实测 16→24，影反而比板面亮（10-24 抓到的）。
+        foreach (var halo in _railHalos)
+        {
+            if (halo.Fill is not RadialGradientBrush brush || brush.GradientStops.Count != 4)
+            {
+                problems.Add("自检状态层: 晕影不是四停点的径向渐变");
+
+                continue;
+            }
+
+            foreach (var stop in new[] { 0, 1, 3 })
+            {
+                var color = brush.GradientStops[stop].Color;
+
+                if (color.A != 0 || color.R != 0 || color.G != 0 || color.B != 0)
+                {
+                    problems.Add(
+                        $"自检状态层: 晕影第 {stop} 个停点是 #{color.A:x2}{color.R:x2}{color.G:x2}{color.B:x2}——" +
+                        "透明端要用黑透明，白透明会在深底上发亮");
+                }
+            }
+
+            var peak = brush.GradientStops[2].Color;
+
+            if (peak.A == 0 || peak.R != 0 || peak.G != 0 || peak.B != 0)
+            {
+                problems.Add($"自检状态层: 晕影的峰值不是黑（#{peak.A:x2}{peak.R:x2}{peak.G:x2}{peak.B:x2}）");
+            }
+        }
+
+        for (var index = 0; index < _railHalos.Count; index++)
+        {
+            var halo = _railHalos[index];
+            var bounds = halo.TransformToVisual(_rail).TransformBounds(new Rect(0, 0, halo.ActualWidth, halo.ActualHeight));
+
+            if (bounds.X < -0.001 || bounds.Y < -0.001
+                || bounds.Right > _rail.ActualWidth + 0.001 || bounds.Bottom > _rail.ActualHeight + 0.001)
+            {
+                problems.Add(
+                    $"自检状态层: 第 {index + 1} 圈晕影 ({bounds.X:0.#},{bounds.Y:0.#})–({bounds.Right:0.#},{bounds.Bottom:0.#}) " +
+                    $"越出外壳 {_rail.ActualWidth:0.#}×{_rail.ActualHeight:0.#}——盘外那圈会被裁成直边");
+            }
+
+            if (index >= cells.Length || LayersOf(cells[index])?.Face is not { } disc)
+            {
+                continue;
+            }
+
+            var face = disc.TransformToVisual(_rail).TransformBounds(new Rect(0, 0, disc.ActualWidth, disc.ActualHeight));
+
+            // 入场那一手每枚钮还在横移（8→0）；影不跟着滑，量的是落定之后的对位。
+            var slide = (cells[index].RenderTransform as TranslateTransform)?.X ?? 0;
+            var dx = System.Math.Abs((bounds.X + bounds.Width / 2) + slide - (face.X + face.Width / 2));
+            var dy = (bounds.Y + bounds.Height / 2) - (face.Y + face.Height / 2);
+
+            if (dx > 0.5 || System.Math.Abs(dy - ControlKit.VignetteDropPx) > 0.5)
+            {
+                problems.Add(
+                    $"自检状态层: 第 {index + 1} 圈晕影没对准它的钮（横偏 {dx:0.##}、下压 {dy:0.##}，令牌给 {ControlKit.VignetteDropPx:0.##}）");
+            }
+        }
+    }
+
 
     private void AnimateRailIn()
     {
-        var host = (StackPanel)_rail!.Child;
+        var host = _railHost!;
         var buttons = RailButtons();
 
         // "看得见"不再挂在逐枚的淡入名单上：整条一起淡，逐枚只错峰平移。
@@ -707,7 +918,7 @@ public sealed partial class MainWindow
             button.RenderTransform = new TranslateTransform { X = _capturingShot ? 0 : 8 };
         }
 
-        _rail.Opacity = 1;
+        _rail!.Opacity = 1;
 
         if (_capturingShot)
         {
@@ -1287,24 +1498,25 @@ public sealed partial class MainWindow
 
         const double swatch = 30;
         const double gap = 12;
-        const double railWidth = RailButtonPx;
         var height = ColourSwatches.Length * swatch + (ColourSwatches.Length - 1) * 8;
 
-        // 贴在操作条那一列的旁边、离便签远的那一侧；贴不下就翻到另一侧。
-        var left = _railFlipped ? _railLeft + railWidth + gap : _railLeft - swatch - gap;
+        // 贴在那列圆盘的旁边、离便签远的那一侧；贴不下就翻到另一侧。
+        // 外壳比圆盘多出左右各一圈晕影，这里要按盘沿算，不能按外壳边算。
+        var discLeft = _railFlipped ? _railLeft + RailShellWidthPx - ControlKit.VignetteSpreadPx : _railLeft + ControlKit.VignetteSpreadPx;
+        var left = _railFlipped ? discLeft + gap : discLeft - swatch - gap;
 
         if (left < 4)
         {
-            left = _railLeft + railWidth + gap;
+            left = discLeft + RailButtonPx + gap;
         }
         else if (left + swatch > BoardArea.ActualWidth - 4)
         {
-            left = _railLeft - swatch - gap;
+            left = discLeft - swatch - gap;
         }
 
-        // 色板列的中心对齐换色钮那颗（它是三枚里第 2 枚：38＋10 间距 → 中心在列顶 +67）。
+        // 色板列的中心对齐换色钮那颗（第 2 枚：外壳顶 8＋半枚 19＋一格 48 = 列顶 +75）。
         var top = Math.Clamp(
-            _railTop + 67 - height / 2,
+            _railTop + RailTopInsetPx + (RailButtonPx / 2) + RailPitchPx - height / 2,
             8,
             Math.Max(8, BoardArea.ActualHeight - height - 8));
 

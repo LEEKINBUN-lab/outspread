@@ -106,6 +106,33 @@ public static class ControlKit
     /// <summary>按下：Fluent 的 90ms 进。</summary>
     public const double PressMs = 90;
 
+    /// <summary>
+    /// 晕影：Chrome 的小钮静止**不带影**（它的静止 affordance 是一层底色，环只在高亮态出现，
+    /// alpha 0x20≈12.5%）；那圈"几乎看不见、但你注意得到"的影在<b>容器</b>上——
+    /// 气泡/菜单/地址栏下拉用 key＋ambient 两层。数从上游源码读的（ui/gfx/shadow_value.cc
+    /// MakeShadowValues，影色见 ui/color/ui_color_mixer.cc：浅底 Grey800、深底纯黑）：
+    /// e3＝key (0,1) 模糊 12 40% ＋ ambient (0,4) 模糊 64 25%；
+    /// e16＝key (0,0) 模糊 32 10% ＋ ambient (0,12) 模糊 32 24%。
+    /// 重不重不在 alpha，在模糊：同样 24% 摊在 64 像素的斜坡上只剩一圈空气，摊在 10 像素里就是黑箍。
+    /// 几枚钮浮在板面上，性质就是容器，所以给一层**缩小**的影：外扩 10、峰值 14%。
+    /// </summary>
+    public const double VignetteSpreadPx = 10;
+
+    /// <summary>晕影往下压一点：影在下方，物体才像"坐在板面上方"。</summary>
+    public const double VignetteDropPx = 2;
+
+    /// <summary>晕影峰值的不透明度：浅底 14%（Chrome 容器那两档是 10~24%，这里取它的下沿）。</summary>
+    public const double VignetteAlpha = 0.14;
+
+    /// <summary>
+    /// 深底给到 34%：Chrome 的影色在深色主题换成纯黑。板底本身就是近黑（#101011），
+    /// 黑影最多把它压到全黑——深底上的分层靠纸面明度（盘 29 对底 16），不靠这圈影。
+    /// </summary>
+    public const double VignetteAlphaDark = 0.34;
+
+    /// <summary>纸面那一圈环：Chrome 高亮态的 0x20≈12.5%，不再是原来的 22%。</summary>
+    public const double RingAlpha = 0.125;
+
 
 
 }

@@ -35,7 +35,10 @@ public sealed partial class MainWindow
     private readonly List<Ellipse> _railHalos = [];
     private Border? _railGroup;
     private Border? _railColor;
+    private Border? _railArrange;
     private Border? _railDelete;
+    private Grid? _railStack;
+    private Canvas? _railHaloCanvas;
     private Ellipse? _tether;
     private RailDrag? _railDrag;
     private bool _railShown;
@@ -84,6 +87,10 @@ public sealed partial class MainWindow
 
         _rail ??= BuildRail();
 
+        // 排列钮只在选中多枚时插进来；先同步，外壳高度与落位都跟着这一发的钮数走。
+        SyncRailArrange(SelectedNotes().Count >= 2);
+
+        var shellHeight = RailShellHeight(RailButtons().Length);
         var screenLeft = _view.ToScreenX(box.X);
         var flip = screenLeft < 60;
         // 外壳比圆盘宽 2×晕影、上沿还多留了下压那一截：落位把这层内缩抵消掉，
@@ -92,7 +99,7 @@ public sealed partial class MainWindow
         var y = Math.Clamp(
             _view.ToScreenY(box.Y + box.Height / 2) - 64 - RailTopInsetPx,
             8,
-            Math.Max(8, BoardArea.ActualHeight - RailShellHeightPx - 8));
+            Math.Max(8, BoardArea.ActualHeight - shellHeight - 8));
 
         // 落位对齐到整枚设备像素：38px 的圆在 .37 这种偏移上描边会一段实一段虚，看起来就是锯齿。
         x = SnapToPixel(x);
@@ -173,6 +180,7 @@ public sealed partial class MainWindow
 
         _railGroup = RoundButton("NoteRailGroup", GroupIcon(), "分组（点＝菜单，按住拖＝拖入/拖出）");
         _railColor = RoundButton("NoteRailColor", ColorWheelIcon(), "换色");
+        _railArrange = RoundButton("NoteRailArrange", ArrangeIcon(), "排列（选中的按标签排成矩阵；没选中＝整板）");
 
         // 删的红现在长在图形本身，不再长在圈上——静止那一档根本没有圈。
         _railDelete = RoundButton("NoteRailDelete", TrashIcon(), "删掉这格");
@@ -189,17 +197,20 @@ public sealed partial class MainWindow
         var halos = new Canvas
         {
             Width = RailShellWidthPx,
-            Height = RailShellHeightPx,
+            Height = RailShellHeight(3),
             IsHitTestVisible = false,
         };
 
+        _railHaloCanvas = halos;
         _railHalos.Clear();
 
-        for (var i = 0; i < RailCells; i++)
+        // 四圈影先建好，用哪几圈由钮数决定（排列钮是后插进来的，不能等到那时再补影）。
+        for (var i = 0; i < RailMaxCells; i++)
         {
             var halo = Vignette();
             Canvas.SetLeft(halo, 0);
             Canvas.SetTop(halo, i * RailPitchPx);
+            halo.Visibility = i < 3 ? Visibility.Visible : Visibility.Collapsed;
             _railHalos.Add(halo);
             halos.Children.Add(halo);
         }
@@ -207,9 +218,10 @@ public sealed partial class MainWindow
         var stack = new Grid
         {
             Width = RailShellWidthPx,
-            Height = RailShellHeightPx,
+            Height = RailShellHeight(3),
         };
 
+        _railStack = stack;
         stack.Children.Add(halos);
         stack.Children.Add(host);
 
@@ -217,7 +229,7 @@ public sealed partial class MainWindow
         {
             Name = "NoteRail",
             Width = RailShellWidthPx,
-            Height = RailShellHeightPx,
+            Height = RailShellHeight(3),
             Child = stack,
             Visibility = Visibility.Collapsed,
             IsHitTestVisible = true,
@@ -240,14 +252,14 @@ public sealed partial class MainWindow
 
     private const double RailPitchPx = RailButtonPx + RailGapPx;
 
-    /// <summary>三枚：组、色、删。拉线不再占一格——双击边缘起头（他 10-24 点名的）。</summary>
-    private const int RailCells = 3;
+    /// <summary>最多四枚：组、色、排列、删。排列只在选中 ≥2 时插进来，所以格子数是活的。</summary>
+    private const int RailMaxCells = 4;
 
-    private const double RailColumnPx = (RailCells * RailButtonPx) + ((RailCells - 1) * RailGapPx);
-
-    /// <summary>外壳：晕影那一圈在左右各扩 10，上下也各扩 10（下压已经算在里面）。</summary>
+    /// <summary>外壳：晕影那一圈在左右各扩 10；高度按此刻的钮数算（上下各扩 10）。</summary>
     private const double RailShellWidthPx = RailButtonPx + (2 * ControlKit.VignetteSpreadPx);
-    private const double RailShellHeightPx = RailColumnPx + (2 * ControlKit.VignetteSpreadPx);
+
+    private static double RailShellHeight(int cells)
+        => (cells * RailButtonPx) + (Math.Max(0, cells - 1) * RailGapPx) + (2 * ControlKit.VignetteSpreadPx);
 
     /// <summary>圆盘列在外壳里的顶边：上面留 10 给影，下压 2 由外壳底边多出的那截补。</summary>
     private const double RailTopInsetPx = ControlKit.VignetteSpreadPx - ControlKit.VignetteDropPx;
@@ -515,6 +527,32 @@ public sealed partial class MainWindow
     // 本就该交给系统字体，它的字形是按字号调过 hinting 的。
     // 控件层（纸面圆盘、悬停/按压状态层与时长）保留，那部分他没说退。
 
+    /// <summary>排列＝2×3 的方块矩阵：画的就是排完的样子（10-25 他选的 A 档）。</summary>
+    private static UIElement ArrangeIcon()
+    {
+        var ink = new SolidColorBrush(NoteStyling.InkFor(NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark))));
+
+        var canvas = new Canvas { Width = 20, Height = 20, IsHitTestVisible = false };
+
+        foreach (var (x, y) in new[] { (3.0, 4.0), (8.0, 4.0), (13.0, 4.0), (3.0, 10.0), (8.0, 10.0), (13.0, 10.0) })
+        {
+            var cell = new Microsoft.UI.Xaml.Shapes.Rectangle
+            {
+                Width = 4,
+                Height = 4,
+                RadiusX = 1,
+                RadiusY = 1,
+                Fill = ink,
+            };
+
+            Canvas.SetLeft(cell, x);
+            Canvas.SetTop(cell, y);
+            canvas.Children.Add(cell);
+        }
+
+        return canvas;
+    }
+
     private static UIElement GroupIcon()
     {
         var ink = new SolidColorBrush(NoteStyling.InkFor(NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark))));
@@ -682,33 +720,54 @@ public sealed partial class MainWindow
     /// </remarks>
     private void SelfTestRailStateLayers(List<string> problems)
     {
-        var buttons = new[] { (_railGroup, "组"), (_railColor, "色"), (_railDelete, "删") };
+        var probe = BoardNotes().Take(2).ToList();
 
-        // 每一枚都必须恒为可见：入场不再逐枚淡入（见 AnimateRailIn 那段说明），
-        // 所以这里读到 0 就是有人把逐枚透明度加回来了——那正是"屏幕上凭空少一枚"的形状。
-        foreach (var entry in RailButtons().Where(button => button.Opacity < 0.99))
+        if (probe.Count < 2)
         {
-            problems.Add($"自检状态层: {entry.Name} 的透明度是 {entry.Opacity:0.##}——逐枚淡入会漏名单，屏幕上就是少一枚");
-        }
-
-        if (RailButtons().Length != buttons.Length)
-        {
-            problems.Add($"自检状态层: 操作条上有 {RailButtons().Length} 枚钮，自检认的是 {buttons.Length} 枚——两份名单不同步");
-        }
-
-        if (buttons.Any(candidate => candidate.Item1 is null))
-        {
-            problems.Add("自检状态层: 操作条没建出来（三枚钮读不到）");
+            problems.Add("自检状态层: 板上不足两格，这一发不适用");
 
             return;
         }
 
-        foreach (var (button, name) in buttons)
+        // 排列钮的出现条件：选中一格＝三枚；再加一格＝四枚（10-25 他定的）。
+        SelectOnly(probe[0].Id);
+        ProjectSelection();
+
+        var single = RailButtons();
+
+        if (single.Length != 3 || single.Any(button => button.Name == "NoteRailArrange"))
         {
-            if (button is null)
-            {
-                continue;
-            }
+            problems.Add($"自检状态层: 选中 1 格时操作条应 3 枚、且没有排列钮，读到 {single.Length} 枚");
+        }
+
+        _selection.Add(probe[1].Id);
+        ProjectSelection();
+
+        var buttons = RailButtons();
+
+        if (buttons.Length != 4 || buttons.All(button => button.Name != "NoteRailArrange"))
+        {
+            problems.Add($"自检状态层: 选中 2 格时操作条应 4 枚、且含排列钮，读到 {buttons.Length} 枚");
+        }
+
+        // 每一枚都必须恒为可见：入场不再逐枚淡入（见 AnimateRailIn 那段说明），
+        // 所以这里读到 0 就是有人把逐枚透明度加回来了——那正是"屏幕上凭空少一枚"的形状。
+        foreach (var entry in buttons.Where(button => button.Opacity < 0.99))
+        {
+            problems.Add($"自检状态层: {entry.Name} 的透明度是 {entry.Opacity:0.##}——逐枚淡入会漏名单，屏幕上就是少一枚");
+        }
+
+        static string NameOf(Border button) => button.Name switch
+        {
+            "NoteRailGroup" => "组",
+            "NoteRailColor" => "色",
+            "NoteRailArrange" => "排列",
+            _ => "删",
+        };
+
+        foreach (var button in buttons)
+        {
+            var name = NameOf(button);
 
             if (LayersOf(button) is not { } layers)
             {
@@ -756,8 +815,11 @@ public sealed partial class MainWindow
         }
 
         Diagnostics.Write(
-            $"selftest 状态层: 三枚都是纸面＋悬停 {ControlKit.HoverAlpha:0.###}＋按压 {ControlKit.PressAlpha:0.###}＋环，静止时后三层全透明；" +
+            $"selftest 状态层: 选中 1 格＝3 枚、选中 2 格＝4 枚（排列钮）；每枚都是纸面＋悬停 {ControlKit.HoverAlpha:0.###}＋按压 {ControlKit.PressAlpha:0.###}＋环，静止时后三层全透明；" +
             $"进 {ControlKit.HoverInMs:0}ms／退 {ControlKit.HoverOutMs:0}ms／按 {ControlKit.PressMs:0}ms；删那枚 Path 端点圆头、描边 1.5；晕影 {ControlKit.VignetteAlpha:0.##}／深底 {ControlKit.VignetteAlphaDark:0.##}，四圈都装在外壳里");
+
+        ClearSelection();
+        ProjectSelection();
     }
 
     private static void ExpectAlpha(
@@ -784,20 +846,42 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// 晕影的凭据：三枚各一圈，整圈都装在外壳里，影心比盘心低一个下压量。
+    /// 晕影的凭据：每枚钮一圈（最多四圈），整圈都装在外壳里，影心比盘心低一个下压量。
     /// 10-24 第一发把 58 的影塞进 38 的格，排版把盘外那圈裁掉了——屏幕上就是右下角一块直边灰楔。
     /// 这里不比对像素，读的是变换后的实际边界：影的外接盒越出外壳，哪怕 1 像素，就是那一格回来了。
     /// </summary>
     private void SelfTestRailHalos(List<string> problems)
     {
-        if (_rail is null || _railHalos.Count != RailCells)
+        if (_rail is null || _railHalos.Count != RailMaxCells)
         {
-            problems.Add($"自检状态层: 晕影读到 {_railHalos.Count} 圈，{RailCells} 枚钮要一圈一枚");
+            problems.Add($"自检状态层: 晕影读到 {_railHalos.Count} 圈，最多 {RailMaxCells} 枚钮要一圈一枚");
 
             return;
         }
 
+        // 刚插/拔了一枚钮和改了外壳高度：先排一次版，下面的变换与 Actual* 才是这一帧的。
+        _rail.UpdateLayout();
+
         var cells = RailButtons();
+        var visibleHalos = _railHalos.Count(halo => halo.Visibility == Visibility.Visible);
+
+        if (visibleHalos != cells.Length)
+        {
+            problems.Add($"自检状态层: 亮着的晕影 {visibleHalos} 圈，钮 {cells.Length} 枚——多一圈少一圈都会露边");
+        }
+
+        // 排列钮只在选中 ≥2 时出现；这条与钮数、影数一起钉。
+        var wantArrange = SelectedNotes().Count >= 2;
+
+        if ((cells.Any(button => button.Name == "NoteRailArrange")) != wantArrange)
+        {
+            problems.Add($"自检状态层: 选中 {SelectedNotes().Count} 格时，排列钮{(wantArrange ? "应该出现却没有" : "不该出现却在")}");
+        }
+
+        if (cells.Length != (wantArrange ? 4 : 3))
+        {
+            problems.Add($"自检状态层: 操作条上有 {cells.Length} 枚钮（选中 {SelectedNotes().Count} 格）");
+        }
 
         // 透明端必须是「黑且 alpha 0」。Colors.Transparent 是 #00FFFFFF（白透明），这个投影的
         // 渐变按非预乘插值，中途会掺灰——深底上实测 16→24，影反而比板面亮（10-24 抓到的）。
@@ -833,6 +917,12 @@ public sealed partial class MainWindow
         for (var index = 0; index < _railHalos.Count; index++)
         {
             var halo = _railHalos[index];
+
+            if (halo.Visibility != Visibility.Visible)
+            {
+                continue;
+            }
+
             var bounds = halo.TransformToVisual(_rail).TransformBounds(new Rect(0, 0, halo.ActualWidth, halo.ActualHeight));
 
             if (bounds.X < -0.001 || bounds.Y < -0.001
@@ -938,6 +1028,65 @@ public sealed partial class MainWindow
     // 组钮：轻点＝菜单，按住拖＝分组模式
     // ---------------------------------------------------------------------
 
+    /// <summary>
+    /// 排列钮是第四枚、只在选中多枚时出现：插在"换色"和"删"之间，外壳/影层的高度跟着重算。
+    /// 没有动画——一条已经在屏幕上的操作条里多一枚，突然出现比淡入更不容易被错过。
+    /// </summary>
+    private void SyncRailArrange(bool show)
+    {
+        if (_railHost is null || _railArrange is null || _rail is null)
+        {
+            return;
+        }
+
+        var present = _railHost.Children.Contains(_railArrange);
+
+        if (present == show)
+        {
+            return;
+        }
+
+        if (show)
+        {
+            _railArrange.Opacity = 1;
+            _railArrange.RenderTransform = new TranslateTransform { X = 0 };
+            _railHost.Children.Insert(2, _railArrange);
+        }
+        else
+        {
+            _railHost.Children.Remove(_railArrange);
+        }
+
+        RelayoutRail();
+    }
+
+    /// <summary>钮数变了：外壳、网格、影层的盒子一起改；多出来的影藏起来。</summary>
+    private void RelayoutRail()
+    {
+        var cells = RailButtons().Length;
+        var height = RailShellHeight(cells);
+
+        if (_rail is not null)
+        {
+            _rail.Height = height;
+        }
+
+        if (_railStack is not null)
+        {
+            _railStack.Height = height;
+        }
+
+        if (_railHaloCanvas is not null)
+        {
+            _railHaloCanvas.Height = height;
+        }
+
+        for (var index = 0; index < _railHalos.Count; index++)
+        {
+            _railHalos[index].Visibility = index < cells ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
     private void WireRailButtons()
     {
         var group = _railGroup!;
@@ -1038,6 +1187,18 @@ public sealed partial class MainWindow
             RailPress(_railColor, down: false);
         };
 
+        _railArrange!.PointerPressed += (_, e) =>
+        {
+            RailPress(_railArrange, down: true);
+            ArrangeSelectionOrBoard();
+            e.Handled = true;
+        };
+
+        _railArrange.PointerReleased += (_, e) =>
+        {
+            RailPress(_railArrange, down: false);
+        };
+
         _railDelete!.PointerPressed += (_, e) =>
         {
             RailPress(_railDelete, down: true);
@@ -1050,7 +1211,7 @@ public sealed partial class MainWindow
             RailPress(_railDelete, down: false);
         };
 
-        foreach (var button in new[] { _railGroup!, _railColor!, _railDelete! })
+        foreach (var button in new[] { _railGroup!, _railColor!, _railArrange!, _railDelete! })
         {
             var target = button;
 

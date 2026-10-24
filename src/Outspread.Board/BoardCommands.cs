@@ -73,8 +73,8 @@ public sealed partial class MainWindow
         new("横向均分", "Alt+J", "排布", () => Arrange("横向均分", items => Aligning.Distribute(items, horizontal: true))),
         new("纵向均分", "Alt+K", "排布", () => Arrange("纵向均分", items => Aligning.Distribute(items, horizontal: false))),
         new("堆叠", "Alt+L", "排布", () => Arrange("堆叠", Aligning.Stack)),
-        new("按颜色排列", "Alt+Y", "排列", () => ArrangeByKey("按颜色排列", node => node.Color ?? "无颜色")),
-        new("按标签排列", "Alt+T", "排列", () => ArrangeByKey("按标签排列", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签")),
+        new("按颜色排列", "Alt+Y", "排列", () => ArrangeByKey("按颜色排列", node => node.Color ?? "无颜色"), Menu: false),
+        new("按标签排列", "Alt+T", "排列", () => ArrangeByKey("按标签排列", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签"), Menu: false),
         new("成组", "Ctrl+G", "组织", GroupOrDissolve),
         new("拆组", string.Empty, "组织", UngroupSelection, Sheet: false),
         new("复制", "Ctrl+D", "组织", DuplicateSelection),
@@ -413,10 +413,118 @@ public sealed partial class MainWindow
     /// like with like", which means nothing over a subset.
     /// </summary>
     /// <summary>
-    /// 排列：同一颜色 / 同一标签的合成一块、块内排成矩阵、块间距更大；块内按到期优先级，
-    /// 并尽量把有连线的排在一起（块也按连线多少相邻），这样线不会横穿整块板。
+    /// 排列的入口：选中了至少两格就只排选中的那些（就近找空地），没选中就是整块板
+    /// （10-25 他："只选中一部分标签，然后点击排列"）。
     /// </summary>
     private void ArrangeByKey(string label, Func<CanvasNode, string> keyOf)
+    {
+        var selected = SelectedNotes();
+
+        if (selected.Count >= 2)
+        {
+            ArrangeNotes(label, selected, keyOf);
+
+            return;
+        }
+
+        ArrangeWholeBoard(label, keyOf);
+    }
+
+    /// <summary>操作条上那枚圆钮：选中的按标签排（无标签是一档）；没选中时等同整板。</summary>
+    private void ArrangeSelectionOrBoard()
+        => ArrangeByKey("排列", note => Tags.Of(note.Text).FirstOrDefault() ?? "#无标签");
+
+    /// <summary>只排选中的这些格子：排成块后就近找一块不压人的空地落下去。</summary>
+    private void ArrangeNotes(string label, IReadOnlyList<CanvasNode> notes, Func<CanvasNode, string> keyOf)
+    {
+        var items = notes.Select(PlacedOf).ToList();
+        var keys = notes.Select(keyOf).ToList();
+        var priorities = notes.Select(DuePriority).ToList();
+        var ids = notes.Select(note => note.Id).ToHashSet(StringComparer.Ordinal);
+
+        var links = _document.Edges
+            .Where(edge => ids.Contains(edge.FromNode) && ids.Contains(edge.ToNode))
+            .Select(edge => (edge.FromNode, edge.ToNode))
+            .ToList();
+
+        var outcome = Aligning.Arrange(items, keys, priorities, links);
+
+        if (!outcome.Ok)
+        {
+            Say($"『{label}』要至少 {outcome.Needed} 格，现在能排的有 {outcome.Have} 格");
+
+            return;
+        }
+
+        var sizes = notes.ToDictionary(note => note.Id, note => (note.Width, note.Height), StringComparer.Ordinal);
+        var arranged = outcome.Moves
+            .Select(move => new Aligning.Placed(
+                move.Id,
+                move.X,
+                move.Y,
+                sizes[move.Id].Width,
+                sizes[move.Id].Height))
+            .ToList();
+
+        // 障碍＝别的格子（还有组框）：排好的块落在谁身上都算遮挡。
+        var obstacles = BoardNotes()
+            .Where(note => !ids.Contains(note.Id))
+            .Select(note => RectOf(note))
+            .Concat(GroupRects())
+            .Select(rect => new Aligning.Placed(rect.Id, rect.X, rect.Y, rect.Width, rect.Height))
+            .ToList();
+
+        var anchorX = notes.Min(note => note.X);
+        var anchorY = notes.Min(note => note.Y);
+        var spot = Aligning.PlaceNear(arranged, obstacles, anchorX, anchorY);
+
+        var blockLeft = arranged.Min(item => item.X);
+        var blockTop = arranged.Min(item => item.Y);
+        var shiftX = spot.X - blockLeft;
+        var shiftY = spot.Y - blockTop;
+
+        var moved = 0;
+
+        foreach (var move in outcome.Moves)
+        {
+            if (NodeOf(move.Id) is not { } node
+                || (Math.Abs(node.X - (move.X + shiftX)) < 0.001 && Math.Abs(node.Y - (move.Y + shiftY)) < 0.001))
+            {
+                continue;
+            }
+
+            moved++;
+        }
+
+        if (moved == 0)
+        {
+            Say($"{label}：这几格已经在位子上，没动任何东西");
+
+            return;
+        }
+
+        BeginGesture(label);
+
+        foreach (var move in outcome.Moves)
+        {
+            if (NodeOf(move.Id) is { } node)
+            {
+                node.X = move.X + shiftX;
+                node.Y = move.Y + shiftY;
+            }
+        }
+
+        EndGesture();
+        Rebuild();
+        Reselect(ids);
+        SaveSoon();
+        ProjectSelection();
+
+        Say($"排列了 {notes.Count} 格 · 落在离选中那块最近、没压到别人的空地上");
+    }
+
+    /// <summary>整块板：组算一件、颜色/标签分块、矩阵与小间距都在 Core 里。</summary>
+    private void ArrangeWholeBoard(string label, Func<CanvasNode, string> keyOf)
     {
         var units = Groups().UnitsOf();
 
@@ -612,6 +720,92 @@ public sealed partial class MainWindow
         else
         {
             Diagnostics.Write($"selftest 排列: {placed.Count} 格无重叠、按颜色排成矩阵（块内 {Aligning.MinGapPx}／块间 {Aligning.BucketGapPx}）、撤销回原样");
+        }
+
+        ClearSelection();
+        ProjectSelection();
+    }
+
+    /// <summary>
+    /// 只排选中的那一发（操作条上的圆钮）：排完必须不压任何没选中的格子/组框；
+    /// 整发一步撤销，撤销后文档回原样。
+    /// </summary>
+    private void SelfTestArrangeSelection(List<string> problems)
+    {
+        var before = _document.ToJson();
+        var loose = BoardNotes().Where(note => Groups().GroupOf(RectOf(note)) is null).Take(3).ToList();
+
+        if (loose.Count < 3)
+        {
+            problems.Add("自检排列选中: 板上不足三格散格，这一发不适用");
+
+            return;
+        }
+
+        var ids = loose.Select(note => note.Id).ToHashSet(StringComparer.Ordinal);
+
+        // 没选中的那些必须一个都不动：这一发是"只排选中的"。
+        var untouched = BoardNotes()
+            .Where(note => !ids.Contains(note.Id))
+            .ToDictionary(note => note.Id, note => (note.X, note.Y), StringComparer.Ordinal);
+
+        ClearSelection();
+
+        foreach (var note in loose)
+        {
+            _selection.Add(note.Id);
+        }
+
+        ProjectSelection();
+        ArrangeSelectionOrBoard();
+
+        foreach (var (id, (x, y)) in untouched)
+        {
+            if (NodeOf(id) is { } still && (Math.Abs(still.X - x) > 0.001 || Math.Abs(still.Y - y) > 0.001))
+            {
+                problems.Add($"自检排列选中: 没选中的 {id} 也被挪了（{x:0.#},{y:0.#} → {still.X:0.#},{still.Y:0.#}）");
+            }
+        }
+
+        var obstacles = BoardNotes()
+            .Where(note => !ids.Contains(note.Id))
+            .Select(note => RectOf(note))
+            .Concat(GroupRects())
+            .ToList();
+
+        var collisions = 0;
+
+        foreach (var id in ids)
+        {
+            if (NodeOf(id) is not { } moved)
+            {
+                continue;
+            }
+
+            var box = RectOf(moved);
+
+            collisions += obstacles.Count(obstacle =>
+                box.X < obstacle.X + obstacle.Width
+                && obstacle.X < box.X + box.Width
+                && box.Y < obstacle.Y + obstacle.Height
+                && obstacle.Y < box.Y + box.Height);
+        }
+
+        if (collisions > 0)
+        {
+            problems.Add($"自检排列选中: 排完压到了 {collisions} 个没选中的格子/组框");
+        }
+
+        Undo();
+        Rebuild();
+
+        if (_document.ToJson() != before)
+        {
+            problems.Add("自检排列选中: 撤销一发以后文档没回到原样");
+        }
+        else
+        {
+            Diagnostics.Write($"selftest 排列选中: 3 格就地排成一块、0 处遮挡、撤销回原样");
         }
 
         ClearSelection();

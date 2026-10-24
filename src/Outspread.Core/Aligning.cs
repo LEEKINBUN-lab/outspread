@@ -350,6 +350,62 @@ public static class Aligning
         return new Outcome(true, moves, Needed: 2, Have: items.Count);
     }
 
+    /// <summary>
+    /// 把排好的一块挪到离锚点最近、又不压到别人的地方（“就近找空地”）。
+    /// 候选是绕锚点的方格环（步长 <paramref name="step"/>，先近后远），第一个与障碍物
+    /// 保持 <paramref name="margin"/> 空隙的位置胜出；一圈都没找到就退回锚点（至少不乱跑）。
+    /// </summary>
+    /// <param name="block">已经排好的那些格子（坐标未平移，用来量这一块的宽高）。</param>
+    /// <param name="obstacles">不能被压住的东西：没参与排列的格子、组框。</param>
+    /// <param name="anchorX">块的左上角从哪找起（一般用选中那块原来的包围盒左上角）。</param>
+    public static (double X, double Y) PlaceNear(
+        IReadOnlyList<Placed> block,
+        IReadOnlyList<Placed> obstacles,
+        double anchorX,
+        double anchorY,
+        double margin = 12,
+        double step = 32,
+        int rings = 24)
+    {
+        if (block.Count == 0)
+        {
+            return (anchorX, anchorY);
+        }
+
+        var left = block.Min(item => item.X);
+        var top = block.Min(item => item.Y);
+        var width = block.Max(item => item.X + item.Width) - left;
+        var height = block.Max(item => item.Y + item.Height) - top;
+
+        for (var ring = 0; ring <= rings; ring++)
+        {
+            for (var dx = -ring; dx <= ring; dx++)
+            {
+                for (var dy = -ring; dy <= ring; dy++)
+                {
+                    if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != ring)
+                    {
+                        continue;
+                    }
+
+                    var x = anchorX + (dx * step);
+                    var y = anchorY + (dy * step);
+
+                    if (obstacles.All(obstacle =>
+                        x - margin >= obstacle.X + obstacle.Width
+                        || x + width + margin <= obstacle.X
+                        || y - margin >= obstacle.Y + obstacle.Height
+                        || y + height + margin <= obstacle.Y))
+                    {
+                        return (x, y);
+                    }
+                }
+            }
+        }
+
+        return (anchorX, anchorY);
+    }
+
     /// <summary>不同颜色 / 不同标签之间留的空：比块内的 <see cref="MinGapPx"/> 宽一倍半以上，才看得出分组。</summary>
     public const double BucketGapPx = 64;
 

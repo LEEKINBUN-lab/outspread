@@ -3302,8 +3302,11 @@ public sealed partial class MainWindow : Window
                     .SelectMany(sub => sub.Items.OfType<MenuFlyoutItem>().Select(item => item.Text)))
                 .ToList();
 
-        var all = Texts(BuildBoardMenu(MenuWhere.OneNote)).Concat(Texts(BuildBoardMenu(MenuWhere.Empty))).ToList();
-        string[] gone = ["叠放", "提到最前", "压到最后", "上移一格", "下移一格", "左移一格", "右移一格", "从边缘拉一根线", "回到 100%", "在这里新建一格"];
+        var all = Texts(BuildBoardMenu(MenuWhere.OneNote))
+            .Concat(Texts(BuildBoardMenu(MenuWhere.Group)))
+            .Concat(Texts(BuildBoardMenu(MenuWhere.Empty)))
+            .ToList();
+        string[] gone = ["叠放", "提到最前", "压到最后", "上移一格", "下移一格", "左移一格", "右移一格", "从边缘拉一根线", "回到 100%", "在这里新建一格", "按颜色排列", "按标签排列"];
         var leaked = gone.Where(all.Contains).Distinct().ToList();
 
         if (leaked.Count > 0)
@@ -3311,9 +3314,9 @@ public sealed partial class MainWindow : Window
             problems.Add($"右键菜单里还有他点掉的那几项：{string.Join("、", leaked)}");
         }
 
-        if (!all.Contains("按颜色排列") || !all.Contains("按标签排列"))
+        if (!all.Contains("堆叠") || !all.Contains("成组"))
         {
-            problems.Add("右键菜单里读不到两条排列命令——删过头了");
+            problems.Add("右键菜单里读不到排布/组织命令——删过头了");
         }
 
         if (!all.Any(text => text.StartsWith("删掉这 ", StringComparison.Ordinal)))
@@ -3321,7 +3324,7 @@ public sealed partial class MainWindow : Window
             problems.Add("右键菜单里读不到『删掉这 N 格』——删过头了");
         }
 
-        Diagnostics.Write($"selftest 右键菜单: {all.Count} 行，叠放/四向微调/边缘拉线/回到100%/新建一格均不在；排列与删除仍在");
+        Diagnostics.Write($"selftest 右键菜单: {all.Count} 行，叠放/四向微调/边缘拉线/回到100%/新建一格/两条排列均不在；排布与组织仍在");
     }
 
     private void ApplyColor(string? preset)
@@ -5336,6 +5339,9 @@ public sealed partial class MainWindow : Window
 
         // 排列：矩阵、块间距、到期优先级、连线顺序（10-24 他把"聚拢"改名并换了排法）。
         SelfTestArrange(problems);
+
+        // 只排选中的那一发：就近落、不压人、一步撤销（10-25 操作条上的圆钮）。
+        SelfTestArrangeSelection(problems);
 
         // 右键菜单删掉的那几项（叠放、四向微调、边缘拉线、回到 100%、新建一格）。
         SelfTestBoardMenu(problems);

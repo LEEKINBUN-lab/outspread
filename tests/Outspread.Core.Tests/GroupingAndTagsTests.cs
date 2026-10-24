@@ -370,4 +370,64 @@ public class GroupingAndTagsTests
         Assert.Equal(2_100 + (2 * Grouping.Pad), after.Width);
         Assert.Contains(onTheWay.Id, Grouping.Members(after, [a, dragged, onTheWay]).Select(member => member.Id));
     }
+
+    [Fact]
+    public void PlaceNear_keeps_the_block_at_the_anchor_when_the_way_is_clear()
+    {
+        var block = new[]
+        {
+            new Aligning.Placed("a", 40, 40, 100, 60),
+            new Aligning.Placed("b", 164, 40, 100, 60),
+        };
+
+        var spot = Aligning.PlaceNear(block, [], anchorX: 300, anchorY: 200);
+
+        Assert.Equal(300, spot.X);
+        Assert.Equal(200, spot.Y);
+    }
+
+    [Fact]
+    public void PlaceNear_moves_the_block_off_an_obstacle_but_stays_close()
+    {
+        var block = new[] { new Aligning.Placed("a", 0, 0, 100, 60) };
+        var obstacles = new[] { new Aligning.Placed("other", 350, 200, 100, 60) };
+
+        var spot = Aligning.PlaceNear(block, obstacles, anchorX: 300, anchorY: 200, margin: 12, step: 32);
+        var moved = new Aligning.Placed("a", spot.X, spot.Y, 100, 60);
+
+        // 不压、留缝：与障碍在两个轴上都不相交（含 12px 空隙）。
+        Assert.True(
+            moved.X + moved.Width + 12 <= 350
+            || moved.X >= 450 + 12
+            || moved.Y + moved.Height + 12 <= 200
+            || moved.Y >= 260 + 12,
+            $"放到 ({spot.X},{spot.Y})，还是压着/贴着障碍");
+
+        // 就近：往左两圈（64px）就够让开。
+        var away = Math.Max(Math.Abs(spot.X - 300), Math.Abs(spot.Y - 200));
+        Assert.True(away <= 64, $"跑到 {away}px 之外了，不算“最近”");
+    }
+
+    [Fact]
+    public void PlaceNear_uses_the_blocks_own_bounds_not_the_first_note()
+    {
+        // 块里最靠左上的一格不是第一枚：必须按整块的外接框来量，否则会压到左边。
+        var block = new[]
+        {
+            new Aligning.Placed("a", 140, 40, 100, 60),
+            new Aligning.Placed("b", 40, 120, 100, 60),
+        };
+        var obstacles = new[] { new Aligning.Placed("other", 20, 10, 200, 200) };
+
+        var spot = Aligning.PlaceNear(block, obstacles, anchorX: 30, anchorY: 20, margin: 10, step: 20);
+        var width = 240;   // 40..240
+        var height = 140;  // 40..180
+
+        Assert.True(
+            spot.X + width + 10 <= 20
+            || spot.X >= 220 + 10
+            || spot.Y + height + 10 <= 10
+            || spot.Y >= 210 + 10,
+            $"放到 ({spot.X},{spot.Y})，整块还在障碍里");
+    }
 }

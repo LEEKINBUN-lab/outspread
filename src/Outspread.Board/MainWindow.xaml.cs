@@ -27,6 +27,10 @@ public sealed partial class MainWindow : Window
 
     private const double WheelStep = 1.12;
 
+    /// <summary>编辑中那一格滚轮走多少屏幕像素。第一版这个数按"两行正文多一点"挑的
+    /// （正文一行 21 像素），手感归他判；几何本身在 <see cref="EditorScroll.Reveal"/>。</summary>
+    private const double EditorScrollPxPerNotch = 48;
+
     /// <summary>How far outside the visible area nodes are still kept realised.</summary>
     private const double CullMargin = 400;
 
@@ -1111,8 +1115,53 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // 正在写那一格时，滚轮不再是"缩放整块板子"：那一发要把正在编辑的内容滚进视野
+        // （他 10-24 点的）。一格走多少屏幕像素是手感，所以这个数留在界面，几何在 Core。
+        if (_editingId is not null)
+        {
+            if (!ScrollEditorIntoView(delta))
+            {
+                Say("这一格已经全部看得见：编辑中滚轮不缩放整块板子");
+            }
+
+            e.Handled = true;
+
+            return;
+        }
+
         ApplyWheel(point.Position, delta);
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// 把正在编辑的那一格朝滚轮那一头搬进视野。返回 false＝这一发没地方可滚。
+    /// </summary>
+    private bool ScrollEditorIntoView(int delta)
+    {
+        if (_editor is null)
+        {
+            return false;
+        }
+
+        var step = EditorScroll.Reveal(
+            Canvas.GetTop(_editor),
+            _editor.ActualHeight > 0 ? _editor.ActualHeight : _editor.Height,
+            BoardArea.ActualHeight,
+            delta,
+            EditorScrollPxPerNotch);
+
+        if (step == 0)
+        {
+            return false;
+        }
+
+        _view.PanBy(0, step);
+        ArrangeAll();
+        PlaceEditor();
+        ProjectSelection();
+        SaveSoon();
+
+        return true;
     }
 
     // -------------------------------------------------------------------------

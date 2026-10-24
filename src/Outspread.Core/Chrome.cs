@@ -64,6 +64,81 @@ public static class Motion
 }
 
 /// <summary>
+/// 自绘小控件（操作条那几枚圆钮与它们的图标）的一套数——一枚控件的七个量各写一次，
+/// 界面侧不许就地写字面数。
+/// </summary>
+/// <remarks>
+/// 出处（10-24 两票调研，全部现量）：Chrome 源码——钮 34、图标画布 20、内衬 7、圆角 min(w,h)/2、
+/// 悬停 alpha 0x14≈7.8% 且淡入淡出 250ms、焦点环 2px；Fluent 2 令牌——subtle fill 5→10→15%、
+/// 90ms 进 250ms 出；M3 令牌——state layer .08/.12、short2 100ms。
+/// <para>
+/// 三家的共同点比差别重要，就两条：① <b>静止不画常驻描边</b>，圆面只在悬停/按下时出现；
+/// ② <b>笔画按最终尺寸重画，不靠缩放</b>——实测 Fluent 图标 16px 档笔画 1.0、24px 档 1.5，
+/// IBM 20px 档 1.25，Chrome 更彻底：它的图标是填充形状，~1.9dp 的重量烘在几何里。
+/// 我方上一版是 24 网格 1.5 描边经 Viewbox 缩到 16，落屏 1.0 且坐标全成了小数——
+/// 那既是他说的"太小"，也是他说的"晕染"。
+/// </para>
+/// </remarks>
+public static class ControlKit
+{
+    /// <summary>圆钮本体直径：Chrome 工具栏钮的 34。</summary>
+    public const double ButtonPx = 34;
+
+    /// <summary>图标画布：Chrome 的 <c>kDefaultIconSizeChromeRefresh = 20</c>。</summary>
+    public const double GlyphCanvasPx = 20;
+
+    /// <summary>
+    /// 笔画宽度。取 2 而不是稿子上的 1.5：1.5 这类小数在 96 DPI 上必然横跨两行像素，抗锯齿把它
+    /// 摊成一条灰边。2 落整像素，而且正好是 Chrome（~1.9dp 烘进填充）与 M3（2dp@24）那一档重量。
+    /// </summary>
+    public const double GlyphStrokePx = 2;
+
+    /// <summary>光学盒：画布的 80%（Apple HIG："image occupies about 80% of the canvas"）。</summary>
+    public const double GlyphLivePx = 16;
+
+    /// <summary>悬停那一层的墨占比：Chrome 的 0x14/255≈7.8%。</summary>
+    public const double HoverAlpha = 0.078;
+
+    /// <summary>按下那一层：Chrome 涟漪 6% 与 Fluent 15% 之间，取 12%。</summary>
+    public const double PressAlpha = 0.12;
+
+    /// <summary>悬停淡入：Fluent 90ms 与 M3 short2 100ms 同档。</summary>
+    public const double HoverInMs = 100;
+
+    /// <summary>悬停淡出：Chrome 的 250ms。</summary>
+    public const double HoverOutMs = 250;
+
+    /// <summary>按下：Fluent 的 90ms 进。</summary>
+    public const double PressMs = 90;
+
+    /// <summary>
+    /// 把逻辑笔画换算成"落满整设备像素"的那一档：先乘缩放取整，再除回来。
+    /// 96 DPI（scale=1）下 2 就是 2；125% 下 2×1.25=2.5 → 3 个物理像素 → 2.4 逻辑。
+    /// </summary>
+    public static double CrispStroke(double rasterizationScale, double logical = GlyphStrokePx)
+    {
+        var scale = rasterizationScale > 0 ? rasterizationScale : 1;
+
+        return Math.Max(1, Math.Round(logical * scale, MidpointRounding.AwayFromZero)) / scale;
+    }
+
+    /// <summary>这条笔画在给定缩放下是否落整设备像素——"晕染"的直接判据。</summary>
+    public static bool IsCrispStroke(double rasterizationScale, double logical)
+    {
+        var physical = logical * rasterizationScale;
+
+        return Math.Abs(physical - Math.Round(physical, MidpointRounding.AwayFromZero)) < 1e-9;
+    }
+
+    /// <summary>
+    /// 坐标是否落在半格网格上。直线笔画的中线在 0.5 的整数倍、宽度取整像素时，边缘才正好压住像素边界；
+    /// 否则一条 2 像素的线会被摊成 3 行（1/2/1 或 1/1/1）——看上去就是发虚。
+    /// </summary>
+    public static bool OnPixelGrid(double value)
+        => Math.Abs(value * 2 - Math.Round(value * 2)) < 1e-9;
+}
+
+/// <summary>
 /// The design language for floating surfaces — one set of numbers that the key sheet, the filter
 /// panel and the context menu all read, so a row is a row wherever it appears.
 /// </summary>

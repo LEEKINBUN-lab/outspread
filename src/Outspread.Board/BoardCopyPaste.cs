@@ -22,13 +22,24 @@ public sealed partial class MainWindow
 {
     private async Task CopySelectionAsync()
     {
+        if (await CopySelectionCoreAsync() is not { } count)
+        {
+            return;
+        }
+
+        Say($"复制了 {count} 格｜Ctrl+V 贴到别的板子上也在，图跟着搬");
+    }
+
+    /// <summary>把选中的放进剪贴板；返回放进去的格数，失败返回 null（回执已经说过了）。</summary>
+    private async Task<int?> CopySelectionCoreAsync()
+    {
         var notes = SelectedNotes();
 
         if (notes.Count == 0)
         {
             Say("没有选中任何格子");
 
-            return;
+            return null;
         }
 
         var fragment = BoardFragment.From(
@@ -42,7 +53,7 @@ public sealed partial class MainWindow
             Say("选中的格子拆不成片段（详情在日志）");
             Diagnostics.Write("copy: nothing to take apart — selection matched no node");
 
-            return;
+            return null;
         }
 
         var problem = await ClipboardIngest.PutFragmentAsync(fragment, plainText);
@@ -50,9 +61,46 @@ public sealed partial class MainWindow
         Diagnostics.Write($"copy: {notes.Count} 格、片段 {fragment.Length} 字、给外面的文字 {plainText.Length} 字"
             + (problem is null ? string.Empty : $"（没放上去：{problem}）"));
 
-        Say(problem is null
-            ? $"复制了 {notes.Count} 格｜Ctrl+V 贴到别的板子上也在，图跟着搬"
-            : $"复制没成：{problem}");
+        if (problem is not null)
+        {
+            Say($"复制没成：{problem}");
+
+            return null;
+        }
+
+        return notes.Count;
+    }
+
+    /// <summary>剪切＝先复制，复制成了才删；不成就原样留着（不留"删了却没进剪贴板"的路）。</summary>
+    private async Task CutSelectionAsync()
+    {
+        var notes = SelectedNotes();
+
+        if (notes.Count == 0)
+        {
+            Say("没有选中任何格子");
+
+            return;
+        }
+
+        if (await CopySelectionCoreAsync() is null)
+        {
+            return;
+        }
+
+        BeginGesture($"剪切 {notes.Count} 格");
+
+        foreach (var node in notes)
+        {
+            _document.Remove(node.Id);
+        }
+
+        ClearSelection();
+        EndGesture();
+        Rebuild();
+        SaveSoon();
+
+        Say($"剪切了 {notes.Count} 格｜Ctrl+V 贴回来");
     }
 
     /// <summary>

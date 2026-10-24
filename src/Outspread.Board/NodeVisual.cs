@@ -64,6 +64,18 @@ public sealed class NodeVisual : ContentControl
 
     internal VerticalAlignment DueBarAlignment => _dueBar.VerticalAlignment;
 
+    /// <summary>名牌在某个坐标空间里的矩形（没显示就是空的）。双击组名走的是这一块。</summary>
+    internal Windows.Foundation.Rect NamePlateBoundsIn(UIElement relativeTo)
+    {
+        if (_namePlate.Visibility != Visibility.Visible || _namePlate.ActualWidth <= 0 || _namePlate.ActualHeight <= 0)
+        {
+            return default;
+        }
+
+        return _namePlate.TransformToVisual(relativeTo)
+            .TransformBounds(new Windows.Foundation.Rect(0, 0, _namePlate.ActualWidth, _namePlate.ActualHeight));
+    }
+
     /// <summary>
     /// A group is a container, not a card: it gets a dashed frame and its label, and no fill and
     /// no paper shadow. Painting it as a card put a 620×300 opaque square with a shadow under the

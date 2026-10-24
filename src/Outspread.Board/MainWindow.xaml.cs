@@ -1196,7 +1196,7 @@ public sealed partial class MainWindow : Window
         {
             if (!ScrollEditorIntoView(delta))
             {
-                Say("这一格已经全部看得见：编辑中滚轮不缩放整块板子");
+                // 已经看得见＝这一发什么都不用做；不再解释给用户听（10-25 他点掉的噪音）。
             }
 
             return;
@@ -2557,6 +2557,16 @@ public sealed partial class MainWindow : Window
 
         var at = e.GetPosition(BoardArea);
 
+        // 组名（名牌）双击＝改名。NodeAt 是有意跳过组的（组不是一块场地），所以这里先单独认名牌；
+        // 不认这一下，双击组名会落到"空白＝新建"上（10-25 他报的）。
+        if (GroupLabelAt(at) is { } labeled)
+        {
+            BeginEdit(labeled.Id);
+            e.Handled = true;
+
+            return;
+        }
+
         /* 三条路都在板子这一侧判，不在卡片自己的 DoubleTapped 里判：按下时板子把指针捕获走了
            （快速拖动不能掉捕获），于是手势事件发到 BoardArea，卡片那个 handler 根本收不到——
            结果双击格内也走到"新建一格"，他 10-12 报的就是这个。判据抽在 DoubleTapTarget 里，
@@ -2593,6 +2603,22 @@ public sealed partial class MainWindow : Window
 
         BeginEdit(node.Id);
         e.Handled = true;
+    }
+
+    /// <summary>双击落在哪一组的名牌上（含名牌抬起后那一块）。</summary>
+    private CanvasNode? GroupLabelAt(Point at)
+    {
+        foreach (var node in _document.Nodes.Where(node => node.Kind == CanvasNodeKind.Group))
+        {
+            if (_realized.TryGetValue(node.Id, out var visual)
+                && visual.NamePlateBoundsIn(BoardArea) is { Width: > 0, Height: > 0 } plate
+                && plate.Contains(at))
+            {
+                return node;
+            }
+        }
+
+        return null;
     }
 
     private void BeginEdit(string id)
@@ -3110,7 +3136,7 @@ public sealed partial class MainWindow : Window
         Rebuild();
         SaveSoon();
 
-        Say($"{verb}：{entry.Label} · {entry.Json.Length} 字节的状态已回退 · 剩下 {_history.UndoCount} 步");
+        Say(verb);
         Diagnostics.Write($"{verb} {entry.Label}");
     }
 
@@ -3406,8 +3432,12 @@ public sealed partial class MainWindow : Window
 
     private void ResetView()
     {
-        _view.PanX = 24;
-        _view.PanY = 16;
+        // 起点不是写死的 (24,16)，而是"内容的左上角"：内容长到世界坐标 5000 那边时，
+        // 写死的家会落在一片空白里（10-25 他：回到 100% 屏幕是空的）。
+        var content = _document.Nodes.Where(IsPlaceable).ToList();
+
+        _view.PanX = content.Count == 0 ? 24 : 24 - content.Min(node => node.X);
+        _view.PanY = content.Count == 0 ? 16 : 16 - content.Min(node => node.Y);
         _view.Zoom = 1;
 
         ArrangeAll();
@@ -5372,6 +5402,12 @@ public sealed partial class MainWindow : Window
         // 只排选中的那一发：就近落、不压人、一步撤销（10-25 操作条上的圆钮）。
         SelfTestArrangeSelection(problems);
 
+        // 相机：幽灵格不许拉远"看到全部"；"回到 100%"以后屏幕上必须有内容。
+        SelfTestCameraFraming(problems);
+
+        // 双击组名＝改名（不是空白新建）。
+        SelfTestGroupLabelHit(problems);
+
         // 右键菜单删掉的那几项（叠放、四向微调、边缘拉线、回到 100%、新建一格）。
         SelfTestBoardMenu(problems);
 
@@ -6600,7 +6636,7 @@ public sealed partial class MainWindow : Window
                 }
 
                 ProjectSelection();
-                Say($"选中 {_selection.Count} 个节点 · 缩放 {Percent()}");
+                Say($"选中了 {_selection.Count} 格");
                 e.Handled = true;
                 break;
 

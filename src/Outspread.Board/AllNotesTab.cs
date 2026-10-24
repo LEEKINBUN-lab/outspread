@@ -148,7 +148,7 @@ public sealed partial class MainWindow
         Rebuild();
         RebuildTabs();
 
-        Say($"所有便签 · {_document.Nodes.Count} 格（各标签页 + 未归档的并集，只读总览可编辑但改动写回来源）");
+        Say($"所有便签 · {_document.Nodes.Count} 格");
         Diagnostics.Write($"all-notes merged {boards.Count} 块板 → {_document.Nodes.Count} 格");
     }
 

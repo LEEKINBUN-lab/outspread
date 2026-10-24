@@ -200,7 +200,7 @@ public sealed partial class MainWindow
         ShakeArrival(node);
         SaveSoon();
 
-        Say($"第 {_searchCursor + 1}/{_searchHits.Count} 处命中 · 跳到了那一格（Enter 下一处，Shift＋Enter 上一处）");
+        Say($"第 {_searchCursor + 1}/{_searchHits.Count} 处");
     }
 
     /// <summary>
@@ -280,11 +280,20 @@ public sealed partial class MainWindow
     // 相机：看到全部 / 看到选中
     // -------------------------------------------------------------------------
 
-    private void ZoomToFit() => Frame(_document.Nodes, "看到全部");
+    /// <summary>
+    /// 相机只认"真占地方"的格子：0 宽 0 高、或者坐标不是有限数的，是幽灵——
+    /// 它们不该把"看到全部"和"回到 100%"拉到一片空白里去（10-25 他报的那格）。
+    /// </summary>
+    private static bool IsPlaceable(CanvasNode node)
+        => double.IsFinite(node.X) && double.IsFinite(node.Y)
+            && double.IsFinite(node.Width) && double.IsFinite(node.Height)
+            && node.Width > 0.5 && node.Height > 0.5;
+
+    private void ZoomToFit() => Frame(_document.Nodes.Where(IsPlaceable).ToList(), "看到全部");
 
     private void ZoomToSelection()
     {
-        var members = _document.Nodes.Where(node => _selection.Contains(node.Id)).ToList();
+        var members = _document.Nodes.Where(node => _selection.Contains(node.Id) && IsPlaceable(node)).ToList();
 
         if (members.Count == 0)
         {
@@ -303,6 +312,8 @@ public sealed partial class MainWindow
     /// </summary>
     private void Frame(IReadOnlyList<CanvasNode> members, string label)
     {
+        members = members.Where(IsPlaceable).ToList();
+
         if (members.Count == 0)
         {
             Say("板子是空的，回到 100%");
@@ -335,4 +346,75 @@ public sealed partial class MainWindow
         Say($"{label}：{members.Count} 格，缩放 {Percent()}");
     }
 
+
+    /// <summary>
+    /// 相机两问：0 尺寸的幽灵格拉不拉远"看到全部"；"回到 100%"以后屏幕上有没有内容。
+    /// </summary>
+    private void SelfTestCameraFraming(List<string> problems)
+    {
+        var content = _document.Nodes.Where(IsPlaceable).ToList();
+
+        if (content.Count == 0)
+        {
+            problems.Add("自检相机: 板上没有可画的格子，这一发不适用");
+
+            return;
+        }
+
+        var saved = (_view.PanX, _view.PanY, _view.Zoom);
+        var ghost = _document.Add(CanvasNodeKind.Text, -50000, -50000, 0.1, 0.1);
+
+        try
+        {
+            ZoomToFit();
+            var withGhost = _view.Zoom;
+
+            _document.Remove(ghost.Id);
+            ZoomToFit();
+            var without = _view.Zoom;
+
+            if (Math.Abs(withGhost - without) > 0.001)
+            {
+                problems.Add($"自检相机: 一个 0 尺寸的幽灵格把『看到全部』从 {without:0.###} 拉到了 {withGhost:0.###}");
+            }
+
+            if (withGhost < 0.15)
+            {
+                problems.Add($"自检相机: 『看到全部』只剩 {withGhost:0.###} 的缩放，屏幕基本是空的");
+            }
+
+            _view.PanX = 40000;
+            _view.PanY = 40000;
+            ResetView();
+
+            var visible = content.Any(node =>
+            {
+                var left = _view.ToScreenX(node.X);
+                var top = _view.ToScreenY(node.Y);
+                var width = node.Width * _view.Zoom;
+                var height = node.Height * _view.Zoom;
+
+                return left < BoardArea.ActualWidth && left + width > 0
+                    && top < BoardArea.ActualHeight && top + height > 0;
+            });
+
+            if (!visible)
+            {
+                problems.Add("自检相机: 回到 100% 以后屏幕上没有任何内容（起点是写死的坐标）");
+            }
+            else
+            {
+                Diagnostics.Write($"selftest 相机: 幽灵格不改 fit（{withGhost:0.###} 对 {without:0.###}）、回到 100% 时屏幕上有内容");
+            }
+        }
+        finally
+        {
+            _view.PanX = saved.PanX;
+            _view.PanY = saved.PanY;
+            _view.Zoom = saved.Zoom;
+
+            ArrangeAll();
+            ProjectSelection();
+        }
+    }
 }

@@ -51,6 +51,13 @@ public static class Aligning
     {
         var bounds = Bounds(items);
 
+        // 已经齐在同一条线上时，"再对齐一次"不该把所有格子摞到同一点上（会完全盖住）：
+        // 退成堆叠的错位（10-25 他：同高选左/右对齐要像堆叠，别直接重合）。
+        if (items.Count >= 2 && FlushOnAxis(items, side))
+        {
+            return Stack(items);
+        }
+
         var moves = items.Select(item => side switch
         {
             Side.Left => new Move(item.Id, bounds.X, item.Y),
@@ -97,6 +104,22 @@ public static class Aligning
         }
 
         return new Outcome(true, moves, Needed: 3, Have: items.Count);
+    }
+
+    /// <summary>这一轴是不是已经贴在同一条线上了（0.5px 以内算同一条）。</summary>
+    private static bool FlushOnAxis(IReadOnlyList<Placed> items, Side side)
+    {
+        var values = items.Select(item => side switch
+        {
+            Side.Left => item.X,
+            Side.Right => item.X + item.Width,
+            Side.HCenter => item.X + (item.Width / 2),
+            Side.Top => item.Y,
+            Side.Bottom => item.Y + item.Height,
+            _ => item.Y + (item.Height / 2),
+        }).ToList();
+
+        return values.Max() - values.Min() <= 0.5;
     }
 
     /// <summary>

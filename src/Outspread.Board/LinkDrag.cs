@@ -86,7 +86,7 @@ public sealed partial class MainWindow
         GuideLayer.Children.Add(_pullDot);
 
 
-        Say($"拉线中：起点是这格的{SideWord(side)} · 点另一格就接上（先点＝起点），点空白或 Esc＝没画过");
+        Say("拉线中：点另一格接上，点空白或 Esc 取消");
     }
 
     /// <summary>菜单/键位那一条路：从选中那一格靠视野中心的那一面起头。</summary>

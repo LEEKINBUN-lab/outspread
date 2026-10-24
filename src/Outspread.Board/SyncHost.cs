@@ -354,7 +354,7 @@ internal sealed class SyncHost
             case SyncOutcome.RateLimited:
                 if (report.PendingNodes > 0)
                 {
-                    _say($"还没传上去 · 本地 {report.PendingNodes} 处等着（{report.Detail}）");
+                    _say($"还没传上去 · 本地 {report.PendingNodes} 处等着");
                 }
 
                 break;
@@ -368,7 +368,8 @@ internal sealed class SyncHost
                 break;
 
             default:
-                _say($"{report.StatusLine()}｜{report.Detail}");
+                // 内部读数（r195／待发 N／英文原因）只进日志；屏幕上只留能动作的那几种（上面）。
+                Diagnostics.Write($"sync {report.Outcome}: {report.StatusLine()}｜{report.Detail}");
 
                 break;
         }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace Outspread.Core;
@@ -24,8 +25,14 @@ public sealed record NoteProperties(
     IReadOnlyList<string> Tags,
     string Body)
 {
+    /// <summary>序号：<c>@n1</c> 就是 1 号（10-25 他加的，和日期、标签同一档）。</summary>
+    public int? Sequence { get; init; }
+
+    /// <summary>序号的原文 span（删牌子时要从正文里拿掉的那一段）。</summary>
+    public string? SequenceSource { get; init; }
+
     /// <summary>Whether a card earns the mark strip.</summary>
-    public bool HasMarks => Due is not null || MalformedDue is not null || Tags.Count > 0;
+    public bool HasMarks => Due is not null || MalformedDue is not null || Sequence is not null || Tags.Count > 0;
 
     /// <summary>The exact span that produced <see cref="Due"/> (or the unreadable one that produced
     /// <see cref="MalformedDue"/>) — what a delete on the card has to take out of the text.</summary>
@@ -87,7 +94,7 @@ public static class Tags
     /// can hold several, and both <c>-</c> and <c>/</c> are accepted inside a date because that is how
     /// people actually type one.
     /// </summary>
-    private static readonly Regex TokenShort = new(@"@(?<key>[dt])(?<value>\S*)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex TokenShort = new(@"@(?<key>[dtn])(?<value>\S*)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     /// <summary>The next token at the head of the remainder, or <see cref="Match.Empty"/>.</summary>
     private static Match NextToken(string rest)
@@ -127,6 +134,8 @@ public static class Tags
         DateOnly? due = null;
         string? malformed = null;
         string? dueSource = null;
+        int? sequence = null;
+        string? sequenceSource = null;
         var tags = new List<string>();
         var sources = new Dictionary<string, string>(StringComparer.Ordinal);
         var kept = new List<string>();
@@ -140,6 +149,14 @@ public static class Tags
                 continue;
             }
 
+            // @n 后面必须是数字：@nfoo 不是序号，整行照样是正文——别把人家的话吃掉。
+            if (tokens.Any(token => token.Groups["key"].Value.Equals("n", StringComparison.OrdinalIgnoreCase)
+                && !int.TryParse(token.Groups["value"].Value.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out _)))
+            {
+                kept.Add(line);
+                continue;
+            }
+
             props.Add(line.Trim());
 
             foreach (var token in tokens)
@@ -147,6 +164,20 @@ public static class Tags
                 var key = token.Groups["key"].Value;
                 var value = token.Groups["value"].Value.Trim();
                 var isDate = key.Equals("d", StringComparison.OrdinalIgnoreCase);
+                var isSequence = key.Equals("n", StringComparison.OrdinalIgnoreCase);
+
+                if (isSequence)
+                {
+                    // 第一个序号说了算；第二个不当第二个号（和日期同一条规矩）。
+                    if (sequence is null
+                        && int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var ordinal))
+                    {
+                        sequence = ordinal;
+                        sequenceSource = token.Value;
+                    }
+
+                    continue;
+                }
 
                 if (isDate)
                 {
@@ -203,6 +234,8 @@ public static class Tags
         return new NoteProperties(due, malformed, tags, body)
         {
             DueSource = dueSource,
+            Sequence = sequence,
+            SequenceSource = sequenceSource,
             TagSources = sources,
             Props = string.Join('\n', props),
         };

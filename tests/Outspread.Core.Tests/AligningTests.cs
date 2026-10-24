@@ -138,4 +138,29 @@ public class AligningTests
             Assert.All(outcome.Moves, move => Assert.True(double.IsFinite(move.X) && double.IsFinite(move.Y)));
         }
     }
+
+    [Fact]
+    public void Aligning_notes_that_are_already_flush_staggers_them_instead_of_piling()
+    {
+        var items = new[]
+        {
+            new Aligning.Placed("a", 10, 10, 100, 40),
+            new Aligning.Placed("b", 10, 80, 100, 40),
+        };
+
+        var left = Aligning.Align(items, Aligning.Side.Left);
+        var stack = Aligning.Stack(items);
+
+        Assert.True(left.Ok);
+        Assert.Equal(stack.Moves, left.Moves);
+
+        // 不齐的时候照旧对齐成一条线。
+        var loose = new[]
+        {
+            new Aligning.Placed("a", 10, 10, 100, 40),
+            new Aligning.Placed("b", 60, 80, 100, 40),
+        };
+
+        Assert.Equal(10, Aligning.Align(loose, Aligning.Side.Left).Moves[1].X);
+    }
 }

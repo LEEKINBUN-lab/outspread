@@ -76,6 +76,7 @@ public sealed partial class MainWindow
         new("堆叠", "Alt+L", "排布", () => Arrange("堆叠", Aligning.Stack)),
         new("按颜色排列", "Alt+Y", "排列", () => ArrangeByKey("按颜色排列", node => node.Color ?? "无颜色"), Menu: false),
         new("按标签排列", "Alt+T", "排列", () => ArrangeByKey("按标签排列", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签", "#无标签"), Menu: false),
+        new("按序号排列", "Alt+N", "排列", () => ArrangeBySequence("按序号排列"), Menu: false),
         new("成组", "Ctrl+G", "组织", GroupOrDissolve),
         new("拆组", string.Empty, "组织", UngroupSelection, Sheet: false),
         new("复制", "Ctrl+D", "组织", DuplicateSelection),
@@ -85,6 +86,7 @@ public sealed partial class MainWindow
         new("从边缘拉一根线", "双击边缘", "组织", StartPullFromSelection, Dispatched: false, Menu: false),
         new("全部选中", "Ctrl+A", "板子", SelectAll, Dispatched: false, Listed: false),
         new("复制选中", "Ctrl+C", "板子", () => _ = CopySelectionAsync(), Sheet: false),
+        new("剪切选中", "Ctrl+X", "板子", () => _ = CutSelectionAsync(), Listed: false, Sheet: false),
         new("粘贴剪贴板", "Ctrl+V", "板子", () => _ = PasteFromClipboardAsync(), Dispatched: false, Sheet: false),
         new("取消选中", "Esc", "板子", () => { ClearSelection(); ProjectSelection(); }, Dispatched: false, Sheet: false),
         new("删掉选中", "Delete", "板子", RemoveSelection, Dispatched: false, Listed: false),
@@ -234,8 +236,8 @@ public sealed partial class MainWindow
         ProjectSelection();
 
         Say(members.Count == 1
-            ? "成组：框住这 1 格 · 再按 Ctrl＋G 是解散"
-            : $"成组：框住 {members.Count} 格 · 再按 Ctrl＋G 是解散");
+            ? "成组了 1 格 · Ctrl＋G 可解散"
+            : $"成组了 {members.Count} 格 · Ctrl＋G 可解散");
     }
 
     /// <summary>
@@ -314,7 +316,7 @@ public sealed partial class MainWindow
         SaveSoon();
         ProjectSelection();
 
-        Say($"把 {loose.Count} 格并进了这个组 · 框跟着长，格子没动 · 再按 Ctrl＋G 是解散");
+        Say($"已并入 {loose.Count} 格 · Ctrl＋G 可解散");
     }
 
     /// <summary>重铸会清选中；成组/解散之后要把人还选着——不然"再按一次"就没有对象了。</summary>
@@ -406,7 +408,7 @@ public sealed partial class MainWindow
         Rebuild();
         SaveSoon();
 
-        Say($"复制了 {members.Count} 格，副本在右下方各 {Aligning.MinGapPx:0} 世界像素");
+        Say($"复制了 {members.Count} 格");
     }
 
     /// <summary>
@@ -417,26 +419,30 @@ public sealed partial class MainWindow
     /// 排列的入口：选中了至少两格就只排选中的那些（就近找空地），没选中就是整块板
     /// （10-25 他："只选中一部分标签，然后点击排列"）。
     /// </summary>
-    private void ArrangeByKey(string label, Func<CanvasNode, string> keyOf, string? lastKey = null)
+    private void ArrangeByKey(string label, Func<CanvasNode, string> keyOf, string? lastKey = null, Func<CanvasNode, int>? priorityOf = null)
     {
         var selected = SelectedNotes();
 
         if (selected.Count >= 2)
         {
-            ArrangeNotes(label, selected, keyOf, lastKey);
+            ArrangeNotes(label, selected, keyOf, lastKey, priorityOf);
 
             return;
         }
 
-        ArrangeWholeBoard(label, keyOf, lastKey);
+        ArrangeWholeBoard(label, keyOf, lastKey, priorityOf);
     }
 
+    /// <summary>按序号排：一整块矩阵，@n 小的在前，没有序号的排在最后。</summary>
+    private void ArrangeBySequence(string label)
+        => ArrangeByKey(label, _ => "序号", priorityOf: node => Tags.Read(node.Text).Sequence ?? int.MaxValue);
+
     /// <summary>只排选中的这些格子：排成块后就近找一块不压人的空地落下去。</summary>
-    private void ArrangeNotes(string label, IReadOnlyList<CanvasNode> notes, Func<CanvasNode, string> keyOf, string? lastKey)
+    private void ArrangeNotes(string label, IReadOnlyList<CanvasNode> notes, Func<CanvasNode, string> keyOf, string? lastKey, Func<CanvasNode, int>? priorityOf = null)
     {
         var items = notes.Select(PlacedOf).ToList();
         var keys = notes.Select(keyOf).ToList();
-        var priorities = notes.Select(DuePriority).ToList();
+        var priorities = notes.Select(priorityOf ?? DuePriority).ToList();
         var ids = notes.Select(note => note.Id).ToHashSet(StringComparer.Ordinal);
 
         var links = _document.Edges
@@ -517,11 +523,11 @@ public sealed partial class MainWindow
         SaveSoon();
         ProjectSelection();
 
-        Say($"排列了 {notes.Count} 格 · 落在离选中那块最近、没压到别人的空地上");
+        Say($"排列了 {notes.Count} 格");
     }
 
     /// <summary>整块板：组算一件、颜色/标签分块、矩阵与小间距都在 Core 里。</summary>
-    private void ArrangeWholeBoard(string label, Func<CanvasNode, string> keyOf, string? lastKey)
+    private void ArrangeWholeBoard(string label, Func<CanvasNode, string> keyOf, string? lastKey, Func<CanvasNode, int>? priorityOf = null)
     {
         var units = Groups().UnitsOf();
 
@@ -532,11 +538,13 @@ public sealed partial class MainWindow
             .ToList();
 
         // 组里有一格逾期，这个组就按逾期那一档排：时间是"这一件东西有多急"，不是某一格的事。
+        var priority = priorityOf ?? DuePriority;
+
         var priorities = units
             .Select(unit => unit.MemberIds
                 .Select(NodeOf)
                 .Where(note => note is not null)
-                .Select(note => DuePriority(note!))
+                .Select(note => priority(note!))
                 .DefaultIfEmpty(DuePriorityOfNone)
                 .Min())
             .ToList();
@@ -757,10 +765,16 @@ public sealed partial class MainWindow
 
         // 与圆钮菜单里"按标签排列"同一条路。
         var menu = BuildArrangeMenu();
+        var menuRows = menu.Items.OfType<MenuFlyoutItem>().Select(item => item.Text).ToList();
 
-        if (!menu.Items.OfType<MenuFlyoutItem>().Select(item => item.Text).SequenceEqual(["按颜色排列", "按标签排列"]))
+        if (!menuRows.SequenceEqual(["按颜色排列", "按标签排列", "按序号排列"]))
         {
-            problems.Add("自检排列选中: 圆钮的菜单不是「按颜色 / 按标签」两行");
+            problems.Add($"自检排列选中: 圆钮的菜单不是「颜色 / 标签 / 序号」三行（读到 {string.Join(" / ", menuRows)}）");
+        }
+
+        if (!Commands().Any(command => command.Label == "按序号排列" && command.Chord == "Alt+N"))
+        {
+            problems.Add("按序号排列没有 Alt＋N 这一条");
         }
 
         ArrangeByKey("按标签排列", note => Tags.Of(note.Text).FirstOrDefault() ?? "#无标签", "#无标签");
@@ -816,5 +830,80 @@ public sealed partial class MainWindow
 
         ClearSelection();
         ProjectSelection();
+    }
+
+    /// <summary>双击组名走的是改名，不是"空白新建"：名牌那一块必须能被单独认出来。</summary>
+    private void SelfTestGroupLabelHit(List<string> problems)
+    {
+        var before = _document.ToJson();
+        var created = false;
+        var group = _document.Nodes.FirstOrDefault(node => node.Kind == CanvasNodeKind.Group);
+
+        if (group is null)
+        {
+            var pair = BoardNotes().Take(2).ToList();
+
+            if (pair.Count < 2)
+            {
+                Diagnostics.Write("selftest 组名: 板上一格都不够，这一发跳过");
+
+                return;
+            }
+
+            ClearSelection();
+
+            foreach (var note in pair)
+            {
+                _selection.Add(note.Id);
+            }
+
+            ProjectSelection();
+            GroupSelection();
+            Rebuild();
+            created = true;
+            group = _document.Nodes.FirstOrDefault(node => node.Kind == CanvasNodeKind.Group);
+        }
+
+        if (group is null || !_realized.TryGetValue(group.Id, out var visual))
+        {
+            problems.Add("自检组名: 组建出来了却读不到它的视觉件");
+
+            return;
+        }
+
+        BoardArea.UpdateLayout();
+        var plate = visual.NamePlateBoundsIn(BoardArea);
+
+        if (plate.Width <= 0 || plate.Height <= 0)
+        {
+            problems.Add("自检组名: 名牌量不到（它没显示，或者还没排版）");
+        }
+        else
+        {
+            var centre = new Windows.Foundation.Point(plate.X + (plate.Width / 2), plate.Y + (plate.Height / 2));
+
+            if (GroupLabelAt(centre)?.Id != group.Id)
+            {
+                problems.Add($"自检组名: 名牌中心 ({centre.X:0.#},{centre.Y:0.#}) 没被认成 {group.Id} 的名牌——双击会当成空白新建");
+            }
+            else
+            {
+                Diagnostics.Write($"selftest 组名: 名牌中心能认回 {group.Id}（双击＝改名，不再落成新建）");
+            }
+        }
+
+        if (created)
+        {
+            Undo();
+            Rebuild();
+
+            if (_document.ToJson() != before)
+            {
+                problems.Add("自检组名: 造组测试收尾时撤销没回到原样");
+            }
+
+            ClearSelection();
+            ProjectSelection();
+        }
     }
 }

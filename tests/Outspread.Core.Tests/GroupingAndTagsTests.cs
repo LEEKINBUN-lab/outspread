@@ -462,4 +462,39 @@ public class GroupingAndTagsTests
     {
         Assert.True(Aligning.BucketGapPx >= 3 * Aligning.MinGapPx, "块间距至少是块内的三倍，才看得出分组");
     }
+
+    [Fact]
+    public void A_sequence_marker_reads_as_a_number_and_leaves_the_body_alone()
+    {
+        var marks = Tags.Read("@n2\n第二件");
+
+        Assert.Equal(2, marks.Sequence);
+        Assert.Equal("@n2", marks.SequenceSource);
+        Assert.Equal("第二件", marks.Body);
+        Assert.True(marks.HasMarks);
+        Assert.Equal("2 号", NoteMarks.Readout(marks, new DateOnly(2026, 10, 11)));
+
+        var chip = NoteMarks.Chips(marks, new DateOnly(2026, 10, 11)).Single(item => !item.IsDate);
+
+        Assert.Equal("2 号", chip.Label);
+        Assert.Equal("@n2", chip.Source);
+    }
+
+    [Fact]
+    public void Non_numeric_n_tokens_are_ordinary_text_not_swallowed()
+    {
+        var marks = Tags.Read("@nfoo\n正文");
+
+        Assert.Null(marks.Sequence);
+        Assert.Contains("@nfoo", marks.Body);
+    }
+
+    [Fact]
+    public void The_first_sequence_wins_and_a_second_one_is_not_a_second_number()
+    {
+        var marks = Tags.Read("@n3 @n9\n正文");
+
+        Assert.Equal(3, marks.Sequence);
+        Assert.Equal("@n3", marks.SequenceSource);
+    }
 }

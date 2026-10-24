@@ -1198,6 +1198,11 @@ public sealed partial class MainWindow
             {
                 EndGroupDrag(state);
             }
+            else if (SelectedNotes().Count >= 2)
+            {
+                // 多选时单击＝成组/并入/解散，和 Ctrl＋G 同一条；长按拖走的是上面那条 Started。
+                GroupOrDissolve();
+            }
             else
             {
                 ShowGroupMenu();
@@ -1591,6 +1596,10 @@ public sealed partial class MainWindow
         var byTag = new MenuFlyoutItem { Text = "按标签排列" };
         byTag.Click += (_, _) => ArrangeByKey("按标签排列", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签", "#无标签");
         menu.Items.Add(byTag);
+
+        var bySequence = new MenuFlyoutItem { Text = "按序号排列" };
+        bySequence.Click += (_, _) => ArrangeBySequence("按序号排列");
+        menu.Items.Add(bySequence);
 
         return menu;
     }

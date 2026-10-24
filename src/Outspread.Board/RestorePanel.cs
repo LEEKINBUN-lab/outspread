@@ -118,7 +118,7 @@ public sealed partial class MainWindow
             SaveSoon();
             ProjectSelection();
 
-            Say($"回到了 {entry.TakenAt.ToLocalTime():MM-dd HH:mm} 那一版 · {BoardNotes().Count} 格 · 按之前那一份也存进了快照");
+            Say($"已恢复到 {entry.TakenAt.ToLocalTime():MM-dd HH:mm}（再恢复一次可回到刚才）");
 
             // 行现在会自己吃掉按下那一发（浮层不再在按下时收），所以"选完就收起"要这层自己说。
             CloseRestorePanel();

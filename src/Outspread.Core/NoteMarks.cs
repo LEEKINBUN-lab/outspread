@@ -101,6 +101,11 @@ public static class NoteMarks
             parts.Add(DateLabel(marks, today));
         }
 
+        if (marks.Sequence is { } ordinal)
+        {
+            parts.Add($"{ordinal} 号");
+        }
+
         parts.AddRange(marks.Tags);
 
         return string.Join(" · ", parts);
@@ -125,6 +130,11 @@ public static class NoteMarks
         if (marks.DueSource is { } source)
         {
             chips.Add(new Mark(DateLabel(marks, today), source, true, StateOf(marks, today)));
+        }
+
+        if (marks.Sequence is { } ordinal && marks.SequenceSource is { } sequenceSource)
+        {
+            chips.Add(new Mark($"{ordinal} 号", sequenceSource, false));
         }
 
         foreach (var tag in marks.Tags)

@@ -27,4 +27,27 @@ public sealed class ControlKitTests
     [Fact]
     public void 命中区不小于二十四()
         => Assert.True(ControlKit.ButtonPx >= 24);
+
+    [Fact]
+    public void The_arrival_shake_starts_and_ends_at_rest_and_never_exceeds_four_pixels()
+    {
+        var frames = Motion.ArrivalShake;
+
+        Assert.True(frames.Length >= 4, "抖动至少要有几帧来回，否则只是一下平移");
+        Assert.Equal(0, frames[0].Px);
+        Assert.Equal(0, frames[^1].Px);
+        Assert.Equal(frames[^1].AtMs, Motion.ArrivalShakeMs);
+        Assert.Equal(frames.OrderBy(frame => frame.AtMs), frames);
+
+        Assert.All(frames, frame => Assert.True(Math.Abs(frame.Px) <= 4));
+        Assert.Contains(frames, frame => frame.Px < 0);
+        Assert.Contains(frames, frame => frame.Px > 0);
+
+        // 幅度要越来越小：前半段的最大幅度必须大于后半段。
+        var half = frames.Length / 2;
+        var early = frames.Take(half).Max(frame => Math.Abs(frame.Px));
+        var late = frames.Skip(half).Max(frame => Math.Abs(frame.Px));
+
+        Assert.True(early > late, $"不是阻尼：前半最大 {early}、后半最大 {late}");
+    }
 }

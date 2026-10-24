@@ -61,6 +61,24 @@ public static class Motion
 
     /// <summary>悬停那一档：页面里的 <c>--dur-hover</c>。</summary>
     public const double HoverMs = 120;
+
+    /// <summary>
+    /// 查找跳到那一格时"到了"的那一手：阻尼抖动，240ms 内左右各摆两下、幅度 4→1px，首尾都回 0。
+    /// 他 10-24 在两种做法里选了这一档（另一种是扩开一圈环）。数字在这里写一次，界面侧照着打关键帧。
+    /// </summary>
+    public static readonly (double AtMs, double Px)[] ArrivalShake =
+    [
+        (0, 0),
+        (40, -4),
+        (80, 3.5),
+        (120, -2.6),
+        (160, 1.8),
+        (200, -1),
+        (240, 0),
+    ];
+
+    /// <summary>抖动的总时长＝最后一帧的时刻。</summary>
+    public static double ArrivalShakeMs => ArrivalShake[^1].AtMs;
 }
 
 /// <summary>

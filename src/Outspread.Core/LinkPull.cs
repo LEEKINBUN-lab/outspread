@@ -15,6 +15,13 @@ public static class LinkPull
     /// <summary>屏幕上给多远的吸附距离（世界半径＝这个数除以缩放）。</summary>
     public const double ScreenReachPx = 44;
 
+    /// <summary>
+    /// 双击起线时"算在边缘上"的带宽（屏幕像素）：比改尺寸那一档（6）宽一倍，
+    /// 不必压在正中间那条线上——他 10-24 要的"边缘一点的范围都算"，同时把格内双击
+    /// （编辑）与空白双击（新建）各留在自己的地盘里。
+    /// </summary>
+    public const double StartBandPx = 12;
+
     /// <summary>吸附半径按缩放归一：缩放拿不到（≤0）时退回屏幕值，不除零。</summary>
     public static double Reach(double zoom) => zoom > 0 ? ScreenReachPx / zoom : ScreenReachPx;
 

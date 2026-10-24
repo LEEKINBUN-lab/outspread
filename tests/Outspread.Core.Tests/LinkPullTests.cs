@@ -80,4 +80,12 @@ public sealed class LinkPullTests
     [Fact]
     public void 零尺寸的格子不参与()
         => Assert.Null(LinkPull.Nearest([Note("ghost", 0, 0, 0, 0)], 50, 30, null, LinkPull.Reach(1)));
+
+    [Fact]
+    public void The_double_click_start_band_is_wider_than_the_resize_band_but_not_greedy()
+    {
+        // 起线要"边缘一点的范围都算"，但不能宽到把格内双击（编辑）也吃掉。
+        Assert.True(LinkPull.StartBandPx > SelectionChrome.EdgeBandPx);
+        Assert.True(LinkPull.StartBandPx <= 16, "再宽就会把靠边的格内双击判成拉线");
+    }
 }

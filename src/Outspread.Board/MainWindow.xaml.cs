@@ -2019,7 +2019,7 @@ public sealed partial class MainWindow : Window
     /// Measured in screen pixels, not world ones: the band is a target for the pointer, and a
     /// target that shrinks as the user zooms out is the opposite of what a hit area is for.
     /// </remarks>
-    private string? EdgeOf(CanvasNode node, Point screen)
+    private string? EdgeOf(CanvasNode node, Point screen, double band = SelectionChrome.EdgeBandPx)
     {
         var candidates = new (string Edge, double Away)[]
         {
@@ -2031,7 +2031,7 @@ public sealed partial class MainWindow : Window
 
         var nearest = candidates.MinBy(candidate => candidate.Away);
 
-        return nearest.Away <= SelectionChrome.EdgeBandPx ? nearest.Edge : null;
+        return nearest.Away <= band ? nearest.Edge : null;
     }
 
     private void OnHandlePressed(object sender, PointerRoutedEventArgs e)
@@ -2506,7 +2506,8 @@ public sealed partial class MainWindow : Window
             return ("新建", null, null);
         }
 
-        return EdgeOf(under, at) is { } side ? ("拉线", under, side) : ("编辑", under, null);
+        // 起线的边缘带比改尺寸那一档宽一倍：不必压在正中间那条线上，7~12px 也算边缘。
+        return EdgeOf(under, at, LinkPull.StartBandPx) is { } side ? ("拉线", under, side) : ("编辑", under, null);
     }
 
     private void OnSurfaceDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
@@ -4827,6 +4828,26 @@ public sealed partial class MainWindow : Window
                     problems.Add("双击上边正中没走到拉线（他 10-12 点名的那一条）");
                 }
 
+                // 10-24 他把"边缘"放宽到 12px：离边 10px 仍算起线，离边 20px 回到编辑。
+                // 这两格锁住"不必点到正中间那条线"与"不能把格内双击吃掉"之间的那条界。
+                var nearEdge = new Point(
+                    _view.ToScreenX(tapped.X + (tapped.Width / 2)),
+                    _view.ToScreenY(tapped.Y) + 10);
+
+                var inside = new Point(
+                    _view.ToScreenX(tapped.X + (tapped.Width / 2)),
+                    _view.ToScreenY(tapped.Y) + 20);
+
+                if (DoubleTapTarget(nearEdge).Route != "拉线")
+                {
+                    problems.Add("双击离边 10px 的地方没走到拉线——边缘带还是窄得要瞄准");
+                }
+
+                if (DoubleTapTarget(inside).Route != "编辑")
+                {
+                    problems.Add("双击离边 20px 的地方判成了拉线——格内编辑被边缘带吃掉了");
+                }
+
                 if (DoubleTapTarget(inMiddle) is not ("编辑", var editNode, _))
                 {
                     problems.Add("双击格子正中没走到编辑");
@@ -4887,6 +4908,25 @@ public sealed partial class MainWindow : Window
             else if (cheatColumns.Children.Count != 2)
             {
                 problems.Add($"键位清单读到 {cheatColumns.Children.Count} 栏，应 2（10-23 定的宽裕两栏，窗宽 {Root.ActualWidth:0}）");
+            }
+
+            // 清单只说"猜不到的键"（他 10-24 点掉的那几类）：复制粘贴、Esc、方向键微调、
+            // 双击空白新建、关板子都不该出现在这张页上。负面对照之外还要正面那几条在——
+            // 只剩空表也会让上面这一条"没有禁止项"变成假绿。
+            {
+                string[] forbidden = ["上移一格", "下移一格", "左移一格", "右移一格", "复制选中", "粘贴剪贴板", "取消选中", "新建一格", "关掉这块板"];
+                var sheetRows = MenuRows(CheatPanel);
+                var leaked = sheetRows.Where(row => forbidden.Contains(row.Text)).Select(row => row.Text).Distinct().ToList();
+
+                if (leaked.Count > 0)
+                {
+                    problems.Add($"键位清单里还有他点掉的那几行：{string.Join("、", leaked)}");
+                }
+
+                if (sheetRows.All(row => row.Text != "从边缘拉一根线"))
+                {
+                    problems.Add("键位清单里读不到『从边缘拉一根线』——操作条那枚钮撤掉以后，这条是它唯一的说明");
+                }
             }
 
             // 查找那一层要拿板上真的有的那半句话去搜：命中为 0 的面板只是在演它自己。
@@ -5020,6 +5060,12 @@ public sealed partial class MainWindow : Window
                     {
                         problems.Add(
                             $"查找跳转: 目标 ({box.X:0.#},{box.Y:0.#})–({box.Right:0.#},{box.Bottom:0.#}) 与面板（底 {panel.Bottom:0.#}）重叠——点了行看不出跳到了哪");
+                    }
+
+                    // 落地那一手（他选的 A 档抖动）必须真的挂到了那一格上：没挂上就只剩"跳过去"。
+                    if (!landed.IsShaking)
+                    {
+                        problems.Add("查找跳转: 跳过去以后那一格没有抖动——落地反馈断了");
                     }
                 }
 

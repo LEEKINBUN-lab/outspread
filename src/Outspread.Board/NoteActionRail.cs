@@ -12,7 +12,7 @@ using Windows.UI;
 namespace Outspread.Board;
 
 /// <summary>
-/// 便签的操作条（10-22 他点了形的 v3 原型 1:1）：选中恰好一枚时，它左侧浮出四枚圆钮——
+/// 便签的操作条（10-22 他点了形的 v3 原型 1:1）：选中恰好一枚时，它左侧浮出三枚圆钮——
 /// 组 / 换色 / 删。分组这件事从"拖便签"里摘出来，只归组钮：
 /// <list type="bullet">
 /// <item>轻点组钮＝菜单（创建分组 / 移出分组，不可用的灰着）。点便签不再被塞进某个已有组——
@@ -45,9 +45,7 @@ public sealed partial class MainWindow
     private bool _capturingShot;
 
     /// <summary>指针停在哪一枚上。这个投影里 <c>UIElement</c> 没有 IsPointerOver，自己记一格。</summary>
-    private Border? _railLink;
 
-    private bool _railLinkActive;
 
     private Border? _railHover;
     private Border? _colorPopover;
@@ -176,22 +174,17 @@ public sealed partial class MainWindow
         _railGroup = RoundButton("NoteRailGroup", GroupIcon(), "分组（点＝菜单，按住拖＝拖入/拖出）");
         _railColor = RoundButton("NoteRailColor", ColorWheelIcon(), "换色");
 
-        // 连线：第四枚（他 10-24 定的入口）。按下去＝起点已经选好（就是当前选中的那一枚），
-        // 再点另一枚＝终点。方向由操作顺序决定，不用去猜 Alt+C 那套叠放次序。
-        _railLink = RoundButton("NoteRailLink", LinkIcon(), "连线（先点这枚＝起点，再点另一枚＝终点）");
-
         // 删的红现在长在图形本身，不再长在圈上——静止那一档根本没有圈。
         _railDelete = RoundButton("NoteRailDelete", TrashIcon(), "删掉这格");
 
         host.Children.Add(_railGroup);
         host.Children.Add(_railColor);
-        host.Children.Add(_railLink);
         host.Children.Add(_railDelete);
 
         WireRailButtons();
 
         // 晕影单独一层垫在钮下面，而不是塞进每一枚的格子里：塞进格子就得把格子撑到 58，
-        // 钮与钮的净空会从 10 变成 30（布局被影改了）。这一层正好是四枚的外接盒，
+        // 钮与钮的净空会从 10 变成 30（布局被影改了）。这一层正好是三枚的外接盒，
         // 也不存在"58 的影被 38 的格子裁掉"——10-24 第一发右下角那块直边灰楔就是这么来的。
         var halos = new Canvas
         {
@@ -247,7 +240,8 @@ public sealed partial class MainWindow
 
     private const double RailPitchPx = RailButtonPx + RailGapPx;
 
-    private const int RailCells = 4;
+    /// <summary>三枚：组、色、删。拉线不再占一格——双击边缘起头（他 10-24 点名的）。</summary>
+    private const int RailCells = 3;
 
     private const double RailColumnPx = (RailCells * RailButtonPx) + ((RailCells - 1) * RailGapPx);
 
@@ -308,7 +302,7 @@ public sealed partial class MainWindow
             Opacity = 0,
         };
 
-        // 四枚钮只有图标没有字：读屏与悬停都需要这行说明（它原来只躺在 Tag 里，没人读）。
+        // 三枚钮只有图标没有字：读屏与悬停都需要这行说明（它原来只躺在 Tag 里，没人读）。
         ToolTipService.SetToolTip(button, help);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, help);
 
@@ -405,7 +399,7 @@ public sealed partial class MainWindow
         layers.Ring.Stroke = new SolidColorBrush(AtAlpha(NoteStyling.ToColor(SelectionChrome.Ring(dark)), 0.9));
     }
 
-    /// <summary>换主题时把四枚的纸面、发丝、状态层与晕影颜色一起跟上。</summary>
+    /// <summary>换主题时把三枚的纸面、发丝、状态层与晕影颜色一起跟上。</summary>
     private void PaintRailSurface()
     {
         if (_rail is null)
@@ -489,17 +483,6 @@ public sealed partial class MainWindow
     private Border[] RailButtons()
         => _railHost?.Children.OfType<Border>().ToArray() ?? [];
 
-    /// <summary>连线钮的激活环：拉线态进行中，那枚钮一直戴着环（他要知道"现在点便签是落点不是选中"）。</summary>
-    private void SetRailLinkActive(bool active)
-    {
-        _railLinkActive = active;
-
-        if (_railLink is not null && LayersOf(_railLink) is { } layers)
-        {
-            LayerTo(layers.Ring, active ? 1 : 0, active ? ControlKit.PressMs : ControlKit.HoverOutMs);
-        }
-    }
-
     /// <summary>组钮的激活环（拖动中／菜单开着）。</summary>
     private void SetRailGroupActive(bool active)
     {
@@ -531,29 +514,6 @@ public sealed partial class MainWindow
     // 色轮那一枚是**带颜色**的，任何线稿调色盘都没有颜色可看；垃圾桶那类通用符号
     // 本就该交给系统字体，它的字形是按字号调过 hinting 的。
     // 控件层（纸面圆盘、悬停/按压状态层与时长）保留，那部分他没说退。
-
-    /// <summary>连线＝两枚点连一条线、右端一个箭头：方向是这枚钮要说的事，不画成一根没有头的绳。</summary>
-    private static UIElement LinkIcon()
-    {
-        var ink = new SolidColorBrush(NoteStyling.InkFor(NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark))));
-
-        var canvas = new Canvas { Width = 20, Height = 20, IsHitTestVisible = false };
-
-        var dot = new Ellipse { Width = 5, Height = 5, Stroke = ink, StrokeThickness = 1.5 };
-        Canvas.SetLeft(dot, 1.5);
-        Canvas.SetTop(dot, 7.5);
-
-        canvas.Children.Add(dot);
-        canvas.Children.Add(new Line { X1 = 6, Y1 = 10, X2 = 13, Y2 = 10, Stroke = ink, StrokeThickness = 1.5 });
-
-        var head = new Polygon { Fill = ink };
-        head.Points.Add(new Point(13, 6));
-        head.Points.Add(new Point(19, 10));
-        head.Points.Add(new Point(13, 14));
-        canvas.Children.Add(head);
-
-        return canvas;
-    }
 
     private static UIElement GroupIcon()
     {
@@ -710,7 +670,7 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// 操作条那四枚的画法凭据：每枚都是"纸面＋悬停层＋按压层＋激活环"四层叠出来的，
+    /// 操作条那三枚的画法凭据：每枚都是"纸面＋悬停层＋按压层＋激活环"四层叠出来的，
     /// 静止时后三层必须全透明，两层的墨占比要等于令牌；删那枚必须是**圆头线帽**的 Path。
     /// </summary>
     /// <remarks>
@@ -722,7 +682,7 @@ public sealed partial class MainWindow
     /// </remarks>
     private void SelfTestRailStateLayers(List<string> problems)
     {
-        var buttons = new[] { (_railGroup, "组"), (_railColor, "色"), (_railLink, "连线"), (_railDelete, "删") };
+        var buttons = new[] { (_railGroup, "组"), (_railColor, "色"), (_railDelete, "删") };
 
         // 每一枚都必须恒为可见：入场不再逐枚淡入（见 AnimateRailIn 那段说明），
         // 所以这里读到 0 就是有人把逐枚透明度加回来了——那正是"屏幕上凭空少一枚"的形状。
@@ -738,7 +698,7 @@ public sealed partial class MainWindow
 
         if (buttons.Any(candidate => candidate.Item1 is null))
         {
-            problems.Add("自检状态层: 操作条没建出来（四枚钮读不到）");
+            problems.Add("自检状态层: 操作条没建出来（三枚钮读不到）");
 
             return;
         }
@@ -796,7 +756,7 @@ public sealed partial class MainWindow
         }
 
         Diagnostics.Write(
-            $"selftest 状态层: 四枚都是纸面＋悬停 {ControlKit.HoverAlpha:0.###}＋按压 {ControlKit.PressAlpha:0.###}＋环，静止时后三层全透明；" +
+            $"selftest 状态层: 三枚都是纸面＋悬停 {ControlKit.HoverAlpha:0.###}＋按压 {ControlKit.PressAlpha:0.###}＋环，静止时后三层全透明；" +
             $"进 {ControlKit.HoverInMs:0}ms／退 {ControlKit.HoverOutMs:0}ms／按 {ControlKit.PressMs:0}ms；删那枚 Path 端点圆头、描边 1.5；晕影 {ControlKit.VignetteAlpha:0.##}／深底 {ControlKit.VignetteAlphaDark:0.##}，四圈都装在外壳里");
     }
 
@@ -824,7 +784,7 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// 晕影的凭据：四枚各一圈，整圈都装在外壳里，影心比盘心低一个下压量。
+    /// 晕影的凭据：三枚各一圈，整圈都装在外壳里，影心比盘心低一个下压量。
     /// 10-24 第一发把 58 的影塞进 38 的格，排版把盘外那圈裁掉了——屏幕上就是右下角一块直边灰楔。
     /// 这里不比对像素，读的是变换后的实际边界：影的外接盒越出外壳，哪怕 1 像素，就是那一格回来了。
     /// </summary>
@@ -1078,18 +1038,6 @@ public sealed partial class MainWindow
             RailPress(_railColor, down: false);
         };
 
-        _railLink!.PointerPressed += (_, e) =>
-        {
-            RailPress(_railLink, down: true);
-            StartPullFromSelection();
-            e.Handled = true;
-        };
-
-        _railLink.PointerReleased += (_, e) =>
-        {
-            RailPress(_railLink, down: false);
-        };
-
         _railDelete!.PointerPressed += (_, e) =>
         {
             RailPress(_railDelete, down: true);
@@ -1102,7 +1050,7 @@ public sealed partial class MainWindow
             RailPress(_railDelete, down: false);
         };
 
-        foreach (var button in new[] { _railGroup!, _railColor!, _railLink!, _railDelete! })
+        foreach (var button in new[] { _railGroup!, _railColor!, _railDelete! })
         {
             var target = button;
 

@@ -481,6 +481,57 @@ public sealed class NodeVisual : ContentControl
         board.Begin();
     }
 
+    /// <summary>
+    /// 查找跳过来时的那一手：阻尼抖动（曲线与幅度在 <see cref="Motion.ArrivalShake"/> 里只写一次）。
+    /// 走 Canvas.Left 的布局动画而不是 RenderTransform——卡片那一枚变换是折叠用的，
+    /// 借它抖动会和"折进组里那一格"打架；这一手只有 240ms，落定后把位置写回起手那一格。
+    /// </summary>
+    /// <summary>自检读的那一格：这一手是否还在抖（同步点完就在抖，240ms 后落回 false）。</summary>
+    internal bool IsShaking { get; private set; }
+
+    internal void ShakeArrival()
+    {
+        var baseX = Canvas.GetLeft(this);
+
+        if (double.IsNaN(baseX))
+        {
+            baseX = 0;
+        }
+
+        var shake = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimationUsingKeyFrames
+        {
+            Duration = TimeSpan.FromMilliseconds(Motion.ArrivalShakeMs),
+            EnableDependentAnimation = true,
+        };
+
+        foreach (var (atMs, px) in Motion.ArrivalShake)
+        {
+            shake.KeyFrames.Add(new Microsoft.UI.Xaml.Media.Animation.LinearDoubleKeyFrame
+            {
+                KeyTime = Microsoft.UI.Xaml.Media.Animation.KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(atMs)),
+                Value = baseX + px,
+            });
+        }
+
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(shake, this);
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(shake, "(Canvas.Left)");
+
+        var board = new Microsoft.UI.Xaml.Media.Animation.Storyboard
+        {
+            FillBehavior = Microsoft.UI.Xaml.Media.Animation.FillBehavior.Stop,
+        };
+
+        board.Children.Add(shake);
+        board.Completed += (_, _) =>
+        {
+            IsShaking = false;
+            Canvas.SetLeft(this, baseX);
+        };
+
+        IsShaking = true;
+        board.Begin();
+    }
+
     public string NodeId { get; }
 
     public CanvasNodeKind Kind { get; }

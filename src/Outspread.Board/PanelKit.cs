@@ -135,7 +135,10 @@ internal static class PanelKit
         {
             FontSize = Sheet.FontPx,
             MinHeight = Sheet.RowPx,
-            Padding = new Thickness(Sheet.PadX, 0, Sheet.PadX, 0),
+            // 竖向 11/3：这个投影的 TextBox 把内容按顶边排（VerticalContentAlignment=Center 没被模板吃下），
+            // 只给 0 的话 14px 的字贴在这一行 40px 的顶上——10-24 他点的那张图就是这一格。
+            // 11 是按量出来的字盒调的：字盒落在 101..112，行是 87..126，正中。
+            Padding = new Thickness(Sheet.PadX, 11, Sheet.PadX, 3),
             Background = new SolidColorBrush(Colors.Transparent),
             BorderThickness = new Thickness(0),
             CornerRadius = new CornerRadius(0),

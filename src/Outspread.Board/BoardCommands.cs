@@ -32,7 +32,12 @@ public sealed partial class MainWindow
     /// everyday five (全选 / 删除 / 撤销 / 重做 / 查找) do not need a menu route — a list that
     /// carries them reads like a manual, and the sheet is for the chords nobody guesses.
     /// </param>
-    private readonly record struct Command(string Label, string Chord, string Section, Action Run, bool Dispatched = true, bool Listed = true)
+    /// <param name="Sheet">
+    /// False keeps the row off the Tab sheet only. The sheet is the "chords nobody guesses" page:
+    /// copy/paste, Esc, arrow nudges, double-click-new and closing a board were named by him on
+    /// 10-24 as noise there. The menu and the keyboard still use the same row.
+    /// </param>
+    private readonly record struct Command(string Label, string Chord, string Section, Action Run, bool Dispatched = true, bool Listed = true, bool Sheet = true)
     {
         public string MenuText => Chord is { Length: > 0 } chord ? $"{Label}    {chord}" : Label;
     }
@@ -51,10 +56,10 @@ public sealed partial class MainWindow
 
         // 微调走的是窗口自己那枚 switch（e.Key 的名字是 Up/Down/Left/Right，写不成一张表里的键位串），
         // 但每一行仍在这里：菜单是单键快捷键缺席时唯一的替代面（WCAG 2.5.7），不在表里就等于够不着。
-        new("上移一格", "↑", "排布", () => Nudge(0, -NudgePx), Dispatched: false),
-        new("下移一格", "↓", "排布", () => Nudge(0, NudgePx), Dispatched: false),
-        new("左移一格", "←", "排布", () => Nudge(-NudgePx, 0), Dispatched: false),
-        new("右移一格", "→", "排布", () => Nudge(NudgePx, 0), Dispatched: false),
+        new("上移一格", "↑", "排布", () => Nudge(0, -NudgePx), Dispatched: false, Sheet: false),
+        new("下移一格", "↓", "排布", () => Nudge(0, NudgePx), Dispatched: false, Sheet: false),
+        new("左移一格", "←", "排布", () => Nudge(-NudgePx, 0), Dispatched: false, Sheet: false),
+        new("右移一格", "→", "排布", () => Nudge(NudgePx, 0), Dispatched: false, Sheet: false),
         new("按颜色聚拢", "Alt+Y", "聚拢", () => Cluster("按颜色聚拢", node => node.Color ?? "none")),
         new("按标签聚拢", "Alt+T", "聚拢", () => Cluster("按标签聚拢", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签")),
         new("成组", "Ctrl+G", "组织", GroupSelection),
@@ -65,14 +70,14 @@ public sealed partial class MainWindow
         new("连线", "Alt+C", "组织", ConnectSelection),
         new("从边缘拉一根线", "双击边缘", "组织", StartPullFromSelection, Dispatched: false),
         new("全部选中", "Ctrl+A", "板子", SelectAll, Dispatched: false, Listed: false),
-        new("复制选中", "Ctrl+C", "板子", () => _ = CopySelectionAsync()),
-        new("粘贴剪贴板", "Ctrl+V", "板子", () => _ = PasteFromClipboardAsync(), Dispatched: false),
-        new("取消选中", "Esc", "板子", () => { ClearSelection(); ProjectSelection(); }, Dispatched: false),
+        new("复制选中", "Ctrl+C", "板子", () => _ = CopySelectionAsync(), Sheet: false),
+        new("粘贴剪贴板", "Ctrl+V", "板子", () => _ = PasteFromClipboardAsync(), Dispatched: false, Sheet: false),
+        new("取消选中", "Esc", "板子", () => { ClearSelection(); ProjectSelection(); }, Dispatched: false, Sheet: false),
         new("删掉选中", "Delete", "板子", RemoveSelection, Dispatched: false, Listed: false),
         new("撤回", "Ctrl+Z", "板子", Undo, Dispatched: false, Listed: false),
         new("重做", "Ctrl+Y", "板子", Redo, Dispatched: false, Listed: false),
         new("回到 100%", "Ctrl+0", "看", ResetView, Dispatched: false, Listed: false),
-        new("新建一格", "双击空白", "板子", NewNoteAtCentre, Dispatched: false),
+        new("新建一格", "双击空白", "板子", NewNoteAtCentre, Dispatched: false, Sheet: false),
 
         // 查找与恢复没有第二个入口的要不得：查找是"贴进去的东西找得回来"，恢复是"改坏了还够得着"。
         new("查找", "Ctrl+F", "板子", OpenSearch, Listed: false),
@@ -80,7 +85,7 @@ public sealed partial class MainWindow
 
         // 一块板一件事：这一组管的是"这扇窗口现在在处理哪件事"，不动板子上的任何一个字。
         new("新板块", "Ctrl+T", "换板子", CreateNewBoard),
-        new("关掉这块板", "Ctrl+W", "换板子", CloseCurrentBoard),
+        new("关掉这块板", "Ctrl+W", "换板子", CloseCurrentBoard, Sheet: false),
         new("下一块板", "Ctrl+PageDown", "换板子", () => StepBoard(1)),
         new("上一块板", "Ctrl+PageUp", "换板子", () => StepBoard(-1)),
 

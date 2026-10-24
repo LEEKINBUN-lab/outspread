@@ -178,11 +178,14 @@ public sealed partial class MainWindow
 
         // 分节字样删了（他 10-12 点名）："排布 / 组织 / 板子"是我给这张表起的分类名，
         // 不是他按下键时要找的东西。清单里只该有一种行：这一发按键干什么。
+        // 清单只放"猜不到的键"：复制/粘贴、Esc、方向键微调、双击空白新建、关板子这几行
+        // 他 10-24 点名为噪音（见 Command.Sheet）。菜单与键盘仍走同一张表。
         var rows = Sections().SelectMany(section => section)
+            .Where(command => command.Sheet)
             .Select(command => PanelKit.Row(command.Label, command.Chord, keys: true))
             .ToList();
 
-        // 两栏、每栏 15 行：760 是一张页面而不是一条横幅，单栏 ≈336 让"名字｜键帽"各自有地方。
+        // 两栏、栏内尽量均分：760 是一张页面而不是一条横幅，单栏 ≈336 让"名字｜键帽"各自有地方。
         // 窗口比 760 窄时整张页跟着收，两栏一起收，不把字裁在右缘外。
         const int columns = 2;
         const double pageMinWidth = 420;

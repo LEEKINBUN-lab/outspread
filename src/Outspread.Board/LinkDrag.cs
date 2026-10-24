@@ -85,7 +85,6 @@ public sealed partial class MainWindow
         GuideLayer.Children.Add(_pullHead);
         GuideLayer.Children.Add(_pullDot);
 
-        SetRailLinkActive(true);
 
         Say($"拉线中：起点是这格的{SideWord(side)} · 点另一格就接上（先点＝起点），点空白或 Esc＝没画过");
     }
@@ -244,7 +243,6 @@ public sealed partial class MainWindow
         _pulling = null;
 
         ClearPullGhost();
-        SetRailLinkActive(false);
     }
 
     private void ClearPullGhost()

@@ -782,7 +782,16 @@ public sealed partial class MainWindow
 
         // × 与标题同格：覆盖层压在字上面，不占一格宽度。标签宽只由标题决定，
         // 悬停时只换它的 Opacity/命中，所以宽度不会跳，也不会闪。
-        var header = new Grid { VerticalAlignment = VerticalAlignment.Center };
+        //
+        // 表头自己至少要撑到"最短那一档标签去掉左右内缩"：标签被 MinWidth 钉在 82 时，
+        // 表头若只按文字那么宽，× 就停在"测试"后面、右边空出一条——他 10-24 点的
+        // "关闭按钮的位置不对，应该在最右侧，哪怕名字很短"就是这一格。
+        var header = new Grid
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            MinWidth = item.IsClosable ? TabStrip.TabMinWidth - TabStrip.PadLeft - TabStrip.PadRight : 0,
+        };
+
         header.Children.Add(text);
         header.Children.Add(BuildHeaderClose(item, name));
 
@@ -2391,6 +2400,53 @@ public sealed partial class MainWindow
             if (selectedClose.Content is not FontIcon)
             {
                 problems.Add("关闭覆盖层的内容不是那枚 × 字形");
+            }
+
+            // × 要钉在标签最右侧，哪怕名字很短（他 10-24 点的）。两档都量：长名字那一档本来就贴着
+            // 右缘，只量它等于没量（第一版就是这么假绿过一次）；短名字那一档才是他说的那一格。
+            var header = selected.Header as Grid;
+            var title = header?.Children.OfType<TextBlock>().FirstOrDefault();
+            var savedTitle = title?.Text;
+
+            BoardTabs.UpdateLayout();
+
+            var longBox = selectedClose.TransformToVisual(selected)
+                .TransformBounds(new Rect(0, 0, selectedClose.ActualWidth, selectedClose.ActualHeight));
+            var longGap = selected.ActualWidth - longBox.Right;
+            var longWidth = selected.ActualWidth;
+
+            if (title is not null)
+            {
+                title.Text = "测";
+                BoardTabs.UpdateLayout();
+            }
+
+            // 变换要重新取：旧的 TransformToVisual 把上一版的布局矩阵缓存住了（第一发就量出过
+            // "× 跑到标签外面 36.8 像素"那种不可能的数）。
+            var shortBox = selectedClose.TransformToVisual(selected)
+                .TransformBounds(new Rect(0, 0, selectedClose.ActualWidth, selectedClose.ActualHeight));
+            var shortGap = selected.ActualWidth - shortBox.Right;
+            var shortWidth = selected.ActualWidth;
+            var headerWidth = header?.ActualWidth ?? 0;
+
+            if (title is not null)
+            {
+                title.Text = savedTitle;
+                BoardTabs.UpdateLayout();
+            }
+
+            Diagnostics.Write(
+                $"selftest 标签 ×: 长名字 {longWidth:0.#} 宽、× 离右缘 {longGap:0.#}；" +
+                $"短名字 {shortWidth:0.#} 宽、表头 {headerWidth:0.#}、× 离右缘 {shortGap:0.#}（内缩 {TabStrip.PadRight:0}）");
+
+            // 判据：× 右边不许再留出**半枚命中区**以上的空——留出那一空，读起来就是"× 停在字后面"
+            // （他截图那一档实测 18px，是命中区 24 的四分之三）。两档都报数：长名字那一档贴着右缘
+            // 只留 4（模板内缩），短名字那一档留 8——那 4px 的差在模板把标签钉在最短那一档时
+            // 另有四处内缩，属于皮上的账，不是这一格要判的事，先记在这里。
+            if (shortGap > TabStrip.CloseHitPx / 2)
+            {
+                problems.Add(
+                    $"× 没贴在标签最右：短名字那一档右边还空 {shortGap:0.#}px（半枚命中区 {TabStrip.CloseHitPx / 2:0}）");
             }
         }
 

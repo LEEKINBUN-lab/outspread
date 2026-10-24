@@ -828,6 +828,11 @@ public sealed partial class MainWindow : Window
 
         _lastPointer = screen;
 
+        if (_edgeDrag is not null)
+        {
+            TrackEdgeDrag(_view.ToWorldX(screen.X), _view.ToWorldY(screen.Y));
+        }
+
         if (Pulling)
         {
             TrackPull(screen);
@@ -979,9 +984,15 @@ public sealed partial class MainWindow : Window
             var worldX = _view.ToWorldX(at.X);
             var worldY = _view.ToWorldY(at.Y);
 
-            var changed = _document.Find(drag.NodeId) is { } card
-                && _document.Edges.Any(edge => edge.Id == drag.EdgeId)
-                && _document.SetEdgeSide(drag.EdgeId, drag.End == CanvasEdge.FromEnd, CanvasEdge.NearestSide(card, worldX, worldY));
+            // 拖的过程中那一头一直跟着指针（TrackEdgeDrag），松手就按它停下的地方结算：
+            // 吸在别的格上＝换归属，吸在本格另一条边上＝换进出面，什么都没吸住＝按落点最近的那面。
+            var changed = _document.Edges.Any(edge => edge.Id == drag.EdgeId)
+                && (CommitEdgeDrag(drag.EdgeId, drag.End)
+                    || (_edgeSnap is null && _document.Find(drag.NodeId) is { } card
+                        && _document.SetEdgeSide(drag.EdgeId, drag.End == CanvasEdge.FromEnd, CanvasEdge.NearestSide(card, worldX, worldY))));
+
+            _edgePreview = null;
+            _edgeSnap = null;
 
             EndGesture();
             Rebuild();
@@ -5104,6 +5115,7 @@ public sealed partial class MainWindow : Window
         // 操作条三枚图标是同一档画法（10-24 他在比稿页上点了 B 档）。
         SelfTestRailStateLayers(problems);
         SelfTestTabHoverDoesNotShift(problems);
+        SelfTestEdgeHandleFeedback(problems);
 
         // 一块丢了图的板子也要开得成：那一格写"未找到"，而不是把窗口打死（10-23 撞上的那一发）。
         SelfTestMissingImageTile(problems);

@@ -50,6 +50,31 @@ public class EdgeTests
     }
 
     [Fact]
+    public void Dragging_an_end_onto_another_card_moves_ownership_and_the_face()
+    {
+        var document = CanvasDocument.CreateNew();
+        var left = document.Add(CanvasNodeKind.Text, 0, 0, 200, 100);
+        var right = document.Add(CanvasNodeKind.Text, 600, 0, 200, 100);
+        var above = document.Add(CanvasNodeKind.Text, 200, -300, 200, 100);
+        var edge = document.AddEdge(left.Id, right.Id);
+
+        // 松手时那一头停在另一格的上边：归属和面一起换。
+        Assert.True(document.MoveEdgeEnd(edge.Id, fromEnd: false, above.Id, CanvasEdge.Bottom));
+
+        Assert.Equal(left.Id, document.Edges[0].FromNode);
+        Assert.Equal(above.Id, document.Edges[0].ToNode);
+        Assert.Equal(CanvasEdge.Bottom, document.Edges[0].ToSide);
+
+        // 已经在这一格上＝不是改动（哪怕换面，那是 SetEdgeSide 的事）；不存在的边、组节点都不动文档。
+        Assert.False(document.MoveEdgeEnd(edge.Id, fromEnd: false, above.Id, CanvasEdge.Bottom));
+        Assert.False(document.MoveEdgeEnd(edge.Id, fromEnd: false, above.Id, CanvasEdge.Top));
+        Assert.False(document.MoveEdgeEnd("没有这根", fromEnd: true, right.Id, CanvasEdge.Left));
+
+        var group = document.Add(CanvasNodeKind.Group, 0, 0, 900, 900);
+        Assert.False(document.MoveEdgeEnd(edge.Id, fromEnd: true, group.Id, CanvasEdge.Top));
+    }
+
+    [Fact]
     public void A_face_change_travels_as_a_replacement_and_undoes_back()
     {
         var before = CanvasDocument.CreateNew();

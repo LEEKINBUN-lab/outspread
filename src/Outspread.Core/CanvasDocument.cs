@@ -171,6 +171,32 @@ public sealed class CanvasDocument
 
     /// <summary>Records which face one end attaches to — the field the spec has for it. False when it
     /// already said that, so a drag that changed nothing does not become a step in the undo stack.</summary>
+    /// <summary>
+    /// 把一根线的某一头挪到<b>另一格</b>上（拖端点拖到别的便签＝换归属），同时写下它进出的那一面。
+    /// 目标不是便签、或本来就是那一格，都返回 false——不改文档就不进撤销栈。
+    /// </summary>
+    public bool MoveEdgeEnd(string edgeId, bool fromEnd, string nodeId, string side)
+    {
+        var edge = Edges.FirstOrDefault(item => item.Id == edgeId);
+
+        if (edge is null || Find(nodeId) is not { } target || target.Kind == CanvasNodeKind.Group)
+        {
+            return false;
+        }
+
+        var current = fromEnd ? edge.FromNode : edge.ToNode;
+
+        if (current == nodeId)
+        {
+            return false;
+        }
+
+        edge.Raw[fromEnd ? "fromNode" : "toNode"] = nodeId;
+        edge.Raw[fromEnd ? "fromSide" : "toSide"] = side;
+
+        return true;
+    }
+
     public bool SetEdgeSide(string edgeId, bool fromEnd, string side)
     {
         var edge = Edges.FirstOrDefault(item => item.Id == edgeId);

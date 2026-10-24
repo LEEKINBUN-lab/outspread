@@ -290,12 +290,9 @@ public sealed partial class MainWindow
 
         _railSurfaceDark = NoteStyling.IsDark;
 
-        foreach (var button in new[] { _railGroup, _railColor, _railDelete })
+        foreach (var button in RailButtons())
         {
-            if (button is { } hit)
-            {
-                PaintRailButton(hit);
-            }
+            PaintRailButton(button);
         }
     }
 
@@ -342,6 +339,14 @@ public sealed partial class MainWindow
             LayerTo(layers.Press, down ? 1 : 0, down ? ControlKit.PressMs : ControlKit.HoverOutMs);
         }
     }
+
+    /// <summary>
+    /// 操作条上有几枚钮，以那条 StackPanel 的孩子们为准——不另写一份名单。
+    /// 10-24 他报"按钮直接消失了"：第四枚建出来了，但入场动画与重画各自拿一份写死的三枚名单，
+    /// 于是它既没淡进画面（停在 Opacity 0）、也没刷过纸面色（连底圈都没有），看着就是凭空少一枚。
+    /// </summary>
+    private Border[] RailButtons()
+        => (_rail?.Child as StackPanel)?.Children.OfType<Border>().ToArray() ?? [];
 
     /// <summary>连线钮的激活环：拉线态进行中，那枚钮一直戴着环（他要知道"现在点便签是落点不是选中"）。</summary>
     private void SetRailLinkActive(bool active)
@@ -576,7 +581,32 @@ public sealed partial class MainWindow
     /// </remarks>
     private void SelfTestRailStateLayers(List<string> problems)
     {
-        var buttons = new[] { (_railGroup, "组"), (_railColor, "色"), (_railDelete, "删") };
+        var buttons = new[] { (_railGroup, "组"), (_railColor, "色"), (_railLink, "连线"), (_railDelete, "删") };
+
+        // 第四枚建出来却看不见＝屏幕上凭空少一枚（他 10-24 报的那一发）。病根是入场与重画各自
+        // 拿一份写死的名单，名单漏了谁，谁就停在透明度 0、连纸面底圈都没刷过。
+        // 这里先把每枚按回"刚建好"那一档，再强制走一遍落定那一帧——断言就与动画跑到第几毫秒无关。
+        var live = RailButtons();
+        var wasCapturing = _capturingShot;
+
+        foreach (var entry in live)
+        {
+            entry.Opacity = 0;
+        }
+
+        _capturingShot = true;
+        AnimateRailIn();
+        _capturingShot = wasCapturing;
+
+        foreach (var entry in live.Where(button => button.Opacity < 0.99))
+        {
+            problems.Add($"自检状态层: {entry.Name} 落定以后还在透明度 {entry.Opacity:0.##}——入场名单漏了它，屏幕上看不见这枚");
+        }
+
+        if (live.Length != buttons.Length)
+        {
+            problems.Add($"自检状态层: 操作条上有 {live.Length} 枚钮，自检认的是 {buttons.Length} 枚——两份名单不同步");
+        }
 
         if (buttons.Any(candidate => candidate.Item1 is null))
         {
@@ -670,7 +700,7 @@ public sealed partial class MainWindow
         host.Opacity = 1;
         _rail.Opacity = 1;
 
-        var buttons = new[] { _railGroup!, _railColor!, _railDelete! };
+        var buttons = RailButtons();
 
         // 取证要的是落定那一帧：入场是 120ms 错峰，照片在 0ms 拍下去只会得到三枚透明圆。
         if (_capturingShot)

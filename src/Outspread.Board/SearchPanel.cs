@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Outspread.Core;
 using Windows.Foundation;
 
@@ -199,18 +200,95 @@ public sealed partial class MainWindow
 
         Rebuild();
         ProjectSelection();
+        PulseArrival(node);
         SaveSoon();
 
         Say($"第 {_searchCursor + 1}/{_searchHits.Count} 处命中 · 跳到了那一格（Enter 下一处，Shift＋Enter 上一处）");
     }
 
-    /// <summary>把相机挪到那一格正中间，缩放不动——"看到它在哪"不等于"把它放大"。</summary>
+    /// <summary>
+    /// 把相机挪到那一格正中间，缩放不动——"看到它在哪"不等于"把它放大"。
+    /// 查找面板开着时"正中"要让开它：原来按整块板面居中，目标正好藏在面板背后，
+    /// 点了行屏幕上一点变化都看不到（他 10-24 报的"搜索不好用"就是这个）。
+    /// </summary>
     private void CenterOn(CanvasNode node)
     {
+        var top = 0d;
+
+        if (_searchOpen)
+        {
+            top = SearchPanel.Margin.Top + Math.Max(0, SearchPanel.ActualHeight) + 12;
+        }
+
+        var band = Math.Max(80, BoardArea.ActualHeight - top);
+
         _view.PanX = BoardArea.ActualWidth / 2 - (node.X + node.Width / 2) * _view.Zoom;
-        _view.PanY = BoardArea.ActualHeight / 2 - (node.Y + node.Height / 2) * _view.Zoom;
+        _view.PanY = (top + (band / 2)) - (node.Y + node.Height / 2) * _view.Zoom;
 
         ArrangeAll();
+    }
+
+    /// <summary>落地环只亮 420ms：它说的是"东西在这儿"，不是一种新状态，所以不进选择模型。</summary>
+    private const double ArrivalPulseMs = 420;
+
+    /// <summary>
+    /// 跳过去以后给那一格一圈轻轻扩开、随即淡掉的环。用独立的浮层而不是改卡片本身：
+    /// 卡片的 RenderTransform 是折叠用的那条，借它做抖动会和折叠打架。
+    /// </summary>
+    private void PulseArrival(CanvasNode node)
+    {
+        var left = _view.ToScreenX(node.X);
+        var top = _view.ToScreenY(node.Y);
+        var width = Math.Max(2, node.Width * _view.Zoom);
+        var height = Math.Max(2, node.Height * _view.Zoom);
+
+        const double outset = 5;
+
+        var scale = new ScaleTransform { ScaleX = 1, ScaleY = 1 };
+
+        var ring = new Microsoft.UI.Xaml.Shapes.Rectangle
+        {
+            Width = width + (2 * outset),
+            Height = height + (2 * outset),
+            Stroke = ChromeStyling.Ring,
+            StrokeThickness = 2,
+            RadiusX = 6,
+            RadiusY = 6,
+            IsHitTestVisible = false,
+            Opacity = 0.55,
+            RenderTransformOrigin = new Point(0.5, 0.5),
+            RenderTransform = scale,
+        };
+
+        Canvas.SetLeft(ring, left - outset);
+        Canvas.SetTop(ring, top - outset);
+        HandleLayer.Children.Add(ring);
+
+        var board = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
+        board.Children.Add(ScaleTo(scale, 1.05, ArrivalPulseMs, "ScaleX"));
+        board.Children.Add(ScaleTo(scale, 1.05, ArrivalPulseMs, "ScaleY"));
+        board.Children.Add(FadeTo(ring, 0, ArrivalPulseMs));
+
+        board.Completed += (_, _) => HandleLayer.Children.Remove(ring);
+        board.Begin();
+    }
+
+    private static Microsoft.UI.Xaml.Media.Animation.DoubleAnimation ScaleTo(ScaleTransform scale, double to, double ms, string property)
+    {
+        var grow = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+        {
+            To = to,
+            Duration = TimeSpan.FromMilliseconds(ms),
+            EasingFunction = new Microsoft.UI.Xaml.Media.Animation.CubicEase
+            {
+                EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut,
+            },
+        };
+
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(grow, scale);
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(grow, property);
+
+        return grow;
     }
 
     /// <summary>右列那一个词：命中来自哪一型格子。<see cref="CanvasNode.NameOfKind"/> 给的是

@@ -12,9 +12,10 @@ namespace Outspread.Core;
 /// <see cref="DueState.Malformed"/>.
 /// </para>
 /// <para>
-/// The two bar colours are the prototype's published tokens: <c>--due-late #d13415</c> /
-/// <c>--due-today #ab6400</c> light, <c>#ff977d</c> / <c>#ffca16</c> dark (Radix tomato11 and
-/// amber11 in both themes).
+/// The bar colours are the prototype's published tokens, except "today": <c>--due-late #d13415</c>
+/// light / <c>#ff977d</c> dark (Radix tomato11), and today is now Radix <b>blue11</b>
+/// (<c>#0d74ce</c> / <c>#70b8ff</c>). Amber11 (<c>#ab6400</c>) sat too close to tomato11 to tell
+/// apart at two pixels — he asked for blue on 10-24.
 /// </para>
 /// </remarks>
 public static class NoteMarks
@@ -61,7 +62,7 @@ public static class NoteMarks
     public static Rgb? BarFor(DueState state, bool dark) => state switch
     {
         DueState.Late => dark ? new Rgb(255, 151, 125) : new Rgb(209, 52, 21),
-        DueState.Today => dark ? new Rgb(255, 202, 22) : new Rgb(171, 100, 0),
+        DueState.Today => dark ? new Rgb(112, 184, 255) : new Rgb(13, 116, 206),
 
         // A due marker nobody could read still gets an edge — in the snap-line red, because it is
         // an error on the board rather than a date. Silence here is the failure mode the whole

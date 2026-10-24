@@ -1,3 +1,4 @@
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
@@ -25,6 +26,10 @@ public sealed partial class MainWindow
 {
     /// <summary>哪根线的哪一头正被拖（松手时换成离指针最近的那一面）。</summary>
     private (string EdgeId, string End, string NodeId)? _edgeDrag;
+
+    /// <summary>单独选中了哪根线。10-24 他点的：点线体就该选中线、两端一起出把手，
+    /// 而不是先选中两端的便签才摸得到线头。线和格子不同时选：选中线＝清掉格子。</summary>
+    private string? _selectedEdgeId;
 
     /// <summary>
     /// 拖端点那一发的实时反馈：自由端现在指到哪、吸住了谁的哪一面。
@@ -150,6 +155,158 @@ public sealed partial class MainWindow
         Diagnostics.Write("selftest 线头: 拖端点时那一头跟指针走（虚线预览）、吸住离得最近的那条边、松手换归属，撤销回原样");
     }
 
+    /// <summary>
+    /// 线体自己可选中：屏幕上离曲线 6px 以内的左键落点判给这根线，不是框选。
+    /// 判定按几何最短距离算，不用 Shape 命中测试——LinkLayer 里的 Path 布局盒是 0×0
+    /// （它们画在布局盒之外），10-24 实测连填色箭头都不进 FindElementsInHostCoordinates。
+    /// 选中以后两端各长一枚把手、线本身加粗到 2.5px；清空后两样都收回去。
+    /// </summary>
+    private void SelfTestEdgeCanBeSelectedByItsWire(List<string> problems)
+    {
+        var pair = BoardNotes().Take(2).ToList();
+
+        if (pair.Count < 2)
+        {
+            problems.Add("自检选线: 板上不足两格，这一发不适用");
+
+            return;
+        }
+
+        var before = _document.ToJson();
+
+        BeginGesture("自检选线");
+
+        var edge = _document.AddEdge(pair[0].Id, pair[1].Id);
+
+        ArrangeAll();
+
+        // 用屏幕上真正画出来的那条线自己的几何取中点，不另算一遍账。
+        var wire = LinkLayer.Children.OfType<Microsoft.UI.Xaml.Shapes.Path>()
+            .FirstOrDefault(path => path.Data is PathGeometry { Figures.Count: 1 });
+
+        if (wire?.Data is PathGeometry geometry
+            && geometry.Figures[0].Segments.OfType<BezierSegment>().FirstOrDefault() is { } bezier)
+        {
+            var start = geometry.Figures[0].StartPoint;
+            var midX = (start.X + (3 * bezier.Point1.X) + (3 * bezier.Point2.X) + bezier.Point3.X) / 8;
+            var midY = (start.Y + (3 * bezier.Point1.Y) + (3 * bezier.Point2.Y) + bezier.Point3.Y) / 8;
+            var onWire = EdgeUnder(midX, midY);
+
+            // 负对照取"这根线外接盒再向外 40px"：曲线自己可能拐回来，单纯上下偏 18px 未必真的离线远。
+            var farX = new[] { start.X, bezier.Point1.X, bezier.Point2.X, bezier.Point3.X }.Max() + 40;
+            var farY = new[] { start.Y, bezier.Point1.Y, bezier.Point2.Y, bezier.Point3.Y }.Max() + 40;
+            var offWire = EdgeUnder(farX, farY);
+
+            if (onWire != edge.Id)
+            {
+                problems.Add($"自检选线: 线中点 ({midX:0.#},{midY:0.#}) 判成了 {onWire ?? "谁都不是"}，应选中这根线");
+            }
+
+            // 带内也要够宽：离曲线 4px 的落点一定在 6px 带里（到曲线的距离不可能大于竖向偏移），
+            // 不然手一抖就点空——这一发同时把"命中带的宽度"钉住。
+            if (EdgeUnder(midX, midY - 4) != edge.Id)
+            {
+                problems.Add($"自检选线: 中线旁 4px 的落点没判成线——命中带窄得像没有");
+            }
+
+            if (offWire == edge.Id)
+            {
+                problems.Add($"自检选线: 线外接盒外 40px 的落点 ({farX:0.#},{farY:0.#}) 也算这根线——命中判定跑偏了");
+            }
+        }
+        else
+        {
+            problems.Add("自检选线: 读不到线的几何，没法验线体点不点得中");
+        }
+
+        SelectEdge(edge.Id);
+
+        var handles = LinkHandleLayer.Children.OfType<Ellipse>()
+            .Count(ellipse => Math.Abs(ellipse.Width - (2 * EdgeGeometry.HandleHitRadiusPx)) < 0.01);
+
+        if (handles != 2)
+        {
+            problems.Add($"自检选线: 选中一根线以后读到 {handles} 枚端点把手，要两端各一枚");
+        }
+
+        var thick = LinkLayer.Children.OfType<Microsoft.UI.Xaml.Shapes.Path>()
+            .Any(path => !path.IsHitTestVisible && Math.Abs(path.StrokeThickness - EdgeGeometry.SelectedStrokePx) < 0.01);
+
+        if (!thick)
+        {
+            problems.Add($"自检选线: 选中的线没有加粗到 {EdgeGeometry.SelectedStrokePx:0.#}px——屏幕上认不出哪根被选中");
+        }
+
+        ClearSelection();
+
+        handles = LinkHandleLayer.Children.OfType<Ellipse>()
+            .Count(ellipse => Math.Abs(ellipse.Width - (2 * EdgeGeometry.HandleHitRadiusPx)) < 0.01);
+
+        if (handles != 0)
+        {
+            problems.Add($"自检选线: 清空选中以后还剩 {handles} 枚端点把手");
+        }
+
+        EndGesture();
+
+        Undo();
+        Rebuild();
+
+        if (_document.ToJson() != before)
+        {
+            problems.Add("自检选线: 撤销一发以后文档没回到原样");
+        }
+        else
+        {
+            Diagnostics.Write(
+                "selftest 选线: 线中点在 6px 命中带内判给这根线、远处不误判；选中后两端各一枚把手、线加粗到 2.5px；清空全收回、撤销回原样");
+        }
+    }
+
+    /// <summary>
+    /// 指针落点属于哪根线：6px 以内的最近一根，没有就 null。和绘制读同一套边点与控制点，
+    /// 所以"屏幕上看见的那条线"与"点得中的那条线"是同一个东西。
+    /// </summary>
+    private string? EdgeUnder(double screenX, double screenY)
+    {
+        string? best = null;
+        var bestDistance = EdgeGeometry.HitReachPx;
+
+        foreach (var edge in _document.Edges)
+        {
+            if (_document.Find(edge.FromNode) is not { } from
+                || _document.Find(edge.ToNode) is not { } to
+                || !_realized.ContainsKey(from.Id)
+                || !_realized.ContainsKey(to.Id))
+            {
+                continue;
+            }
+
+            var auto = CanvasEdge.AutoSides(from, to);
+            var fromSide = edge.FromSide ?? auto.From;
+            var toSide = edge.ToSide ?? auto.To;
+            var p1 = CanvasEdge.SidePoint(from, fromSide);
+            var p2 = CanvasEdge.SidePoint(to, toSide);
+            var x1 = _view.ToScreenX(p1.X);
+            var y1 = _view.ToScreenY(p1.Y);
+            var x2 = _view.ToScreenX(p2.X);
+            var y2 = _view.ToScreenY(p2.Y);
+            var (c1x, c1y, c2x, c2y) = EdgeGeometry.Controls(
+                x1, y1, CanvasEdge.VectorOf(fromSide), x2, y2, CanvasEdge.VectorOf(toSide));
+
+            var distance = EdgeGeometry.DistanceToCurve(screenX, screenY, x1, y1, c1x, c1y, c2x, c2y, x2, y2);
+
+            // <=：同样近时后画的（在上层的）赢，和眼睛看到的一致。
+            if (distance <= bestDistance)
+            {
+                best = edge.Id;
+                bestDistance = distance;
+            }
+        }
+
+        return best;
+    }
+
     private void PaintLinks()
     {
         LinkLayer.Children.Clear();
@@ -220,16 +377,13 @@ public sealed partial class MainWindow
             var (c1x, c1y, c2x, c2y) = EdgeGeometry.Controls(
                 x1, y1, CanvasEdge.VectorOf(fromSide), x2, y2, CanvasEdge.VectorOf(toSide));
 
-            var on = _selection.Contains(from.Id) || _selection.Contains(to.Id);
+            var selected = _selectedEdgeId == edge.Id;
+            var on = selected || _selection.Contains(from.Id) || _selection.Contains(to.Id);
             var brush = on ? accent : wire;
 
-            LinkLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
-            {
-                Stroke = brush,
-                StrokeThickness = EdgeGeometry.StrokePx,
-                StrokeDashArray = draggingFrom || draggingTo ? [4, 3] : null,
-                Opacity = draggingFrom || draggingTo ? 0.72 : 1,
-                Data = new PathGeometry
+            // 命中线也画一份自己的几何：Geometry 是依赖对象，不要两枚 Path 共用一个实例。
+            PathGeometry Wire()
+                => new()
                 {
                     Figures =
                     {
@@ -247,7 +401,16 @@ public sealed partial class MainWindow
                             },
                         },
                     },
-                },
+                };
+
+            LinkLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
+            {
+                Stroke = brush,
+                StrokeThickness = selected ? EdgeGeometry.SelectedStrokePx : EdgeGeometry.StrokePx,
+                StrokeDashArray = draggingFrom || draggingTo ? [4, 3] : null,
+                Opacity = draggingFrom || draggingTo ? 0.72 : 1,
+                IsHitTestVisible = false,
+                Data = Wire(),
             });
 
             var (tipX, tipY, leftX, leftY, rightX, rightY) = EdgeGeometry.ArrowHead(x2, y2, c2x, c2y);
@@ -255,6 +418,7 @@ public sealed partial class MainWindow
             LinkLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
             {
                 Fill = brush,
+                IsHitTestVisible = false,
                 Data = new PathGeometry
                 {
                     Figures =
@@ -278,14 +442,46 @@ public sealed partial class MainWindow
         }
     }
 
+    /// <summary>线被别的选中物顶掉：收起两端的把手，线回到普通粗细。</summary>
+    private void ClearEdgeSelection()
+    {
+        if (_selectedEdgeId is null)
+        {
+            return;
+        }
+
+        _selectedEdgeId = null;
+        PaintLinks();
+    }
+
     /// <summary>
-    /// The dot on an end whose own card is selected — drag it and the line changes which face it
-    /// leaves or enters. Same rule as the prototype: the dot exists only once that end is selected, so
-    /// a board full of lines is not a field of grabbable dots. Hit circle is 26px across (WCAG 2.5.8).
+    /// 点线体：这根线成为选中物，格子全部退出（选择是单一的，不混着放）。
+    /// 选中之后两端各长出一枚把手，拖哪一端就改哪一端——不再要求先点两端的便签。
+    /// </summary>
+    private void SelectEdge(string edgeId)
+    {
+        if (_document.Edges.All(edge => edge.Id != edgeId))
+        {
+            return;
+        }
+
+        ClearSelection();
+        _selectedEdgeId = edgeId;
+
+        ProjectSelection();
+        PaintLinks();
+
+        Say("选中了一根连线 · 拖两端的圆点换进出面或归属，Esc 取消");
+    }
+
+    /// <summary>
+    /// 端点的把手：那一端的便签被选中、或这根线自己被选中时出现。
+    /// 同一个规矩的另一半：别的线的另一端没有把手，板上就不会是一片抓不住的小圆点。
+    /// 命中圈 26px（WCAG 2.5.8），可见点 4.5px。
     /// </summary>
     private void AddHandle(double screenX, double screenY, string edgeId, string end, string nodeId, bool dragging = false)
     {
-        if (!_selection.Contains(nodeId))
+        if (!_selection.Contains(nodeId) && _selectedEdgeId != edgeId)
         {
             return;
         }

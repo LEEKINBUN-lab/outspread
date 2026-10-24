@@ -85,6 +85,60 @@ public static class EdgeGeometry
     /// not scale with zoom — a hairline that thickens to 6px at 400% is a bar, not a line.</summary>
     public const double StrokePx = 1.5;
 
+    /// <summary>A selected wire goes to the accent and to 2.5px: at 1.5px the accent alone still
+    /// reads as "this line touches a selected card" rather than "this line is the selection".</summary>
+    public const double SelectedStrokePx = 2.5;
+
+    /// <summary>The invisible reach a click may land in, measured from the curve itself. 1.5px of
+    /// stroke is not a target; 6px each side makes a 12px band — about a fingertip, and still
+    /// narrower than the gap between two cards.</summary>
+    public const double HitReachPx = 6;
+
+    /// <summary>
+    /// Distance from a point to the wire, approximated by 24 chords. Hit testing cannot use the
+    /// <c>Path</c> itself: those paths are arranged at 0×0 (they draw outside their layout box),
+    /// so a click never reaches them — measured on 10-24, even an opaque filled arrowhead was
+    /// invisible to <c>FindElementsInHostCoordinates</c>. Geometry is what a click is really asking.
+    /// </summary>
+    public static double DistanceToCurve(
+        double px, double py,
+        double x1, double y1, double c1x, double c1y,
+        double c2x, double c2y, double x2, double y2,
+        int steps = 24)
+    {
+        var best = double.MaxValue;
+        var lastX = x1;
+        var lastY = y1;
+
+        for (var i = 1; i <= steps; i++)
+        {
+            var t = (double)i / steps;
+            var u = 1 - t;
+            var bx = (u * u * u * x1) + (3 * u * u * t * c1x) + (3 * u * t * t * c2x) + (t * t * t * x2);
+            var by = (u * u * u * y1) + (3 * u * u * t * c1y) + (3 * u * t * t * c2y) + (t * t * t * y2);
+
+            best = Math.Min(best, SegmentDistance(px, py, lastX, lastY, bx, by));
+            lastX = bx;
+            lastY = by;
+        }
+
+        return best;
+    }
+
+    private static double SegmentDistance(double px, double py, double ax, double ay, double bx, double by)
+    {
+        var dx = bx - ax;
+        var dy = by - ay;
+        var lengthSquared = (dx * dx) + (dy * dy);
+        var t = lengthSquared <= 0
+            ? 0
+            : Math.Clamp((((px - ax) * dx) + ((py - ay) * dy)) / lengthSquared, 0, 1);
+        var qx = ax + (t * dx);
+        var qy = ay + (t * dy);
+
+        return Math.Sqrt(((px - qx) * (px - qx)) + ((py - qy) * (py - qy)));
+    }
+
     /// <summary>Control-arm length: <c>max(28, min(180, distance × 0.45))</c> in screen pixels.</summary>
     public static double ControlArm(double distancePx) => Math.Max(28, Math.Min(180, distancePx * 0.45));
 

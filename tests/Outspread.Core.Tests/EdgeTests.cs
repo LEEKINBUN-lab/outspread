@@ -181,4 +181,24 @@ public class EdgeTests
         Assert.Equal(CanvasEdge.Left, picked.FromSide);
         Assert.Equal(CanvasEdge.Right, picked.ToSide);
     }
+
+    [Fact]
+    public void A_click_near_the_drawn_curve_is_close_and_a_click_off_it_is_far()
+    {
+        // 一条从 (0,0) 到 (200,0)、控制点把它拱到 y≈60 的曲线。
+        const double x1 = 0, y1 = 0, c1x = 60, c1y = 80, c2x = 140, c2y = 80, x2 = 200, y2 = 0;
+
+        // t=0.5 处曲线自己在 (100,60)；正中那一点到曲线的距离应当≈0。
+        var onCurve = EdgeGeometry.DistanceToCurve(100, 60, x1, y1, c1x, c1y, c2x, c2y, x2, y2);
+
+        Assert.True(onCurve < 0.2, $"曲线中点量到 {onCurve:0.###}，应≈0");
+
+        // 往下 20px 的那一点离曲线也应该≈20（采样误差容许 0.5）。
+        var beside = EdgeGeometry.DistanceToCurve(100, 80, x1, y1, c1x, c1y, c2x, c2y, x2, y2);
+
+        Assert.InRange(beside, 19.5, 20.5);
+
+        // 端点附近：曲线之外 10px 的落点也有距离读数，不会被判成"在线上"。
+        Assert.True(EdgeGeometry.DistanceToCurve(-10, 0, x1, y1, c1x, c1y, c2x, c2y, x2, y2) > 9.5);
+    }
 }

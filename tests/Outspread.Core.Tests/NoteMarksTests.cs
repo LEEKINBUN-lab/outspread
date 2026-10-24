@@ -47,6 +47,25 @@ public class NoteMarksTests
     }
 
     [Fact]
+    public void Today_and_late_are_far_enough_apart_to_read_at_two_pixels()
+    {
+        // 10-24 他点的：琥珀11（171,100,0）与番茄11（209,52,21）在 2px 条上分不出，
+        // 今天改成蓝11。锁的是"两档的 RGB 距离"，不是某一个色号——色号还能再调，糊成一档不许。
+        static double Distance(Rgb a, Rgb b)
+            => System.Math.Sqrt(System.Math.Pow(a.R - b.R, 2) + System.Math.Pow(a.G - b.G, 2) + System.Math.Pow(a.B - b.B, 2));
+
+        foreach (var dark in new[] { false, true })
+        {
+            var late = NoteMarks.BarFor(NoteMarks.DueState.Late, dark)!.Value;
+            var today = NoteMarks.BarFor(NoteMarks.DueState.Today, dark)!.Value;
+
+            Assert.True(
+                Distance(late, today) >= 120,
+                $"{(dark ? "深" : "浅")}档今天与逾期只差 {Distance(late, today):0.#}——两条 2px 色条会被看成同一种");
+        }
+    }
+
+    [Fact]
     public void The_edge_bar_is_two_screen_pixels_and_does_not_scale()
     {
         Assert.Equal(2, NoteMarks.BarWidthPx);

@@ -215,6 +215,12 @@ internal static class PanelKit
 
         row.PointerEntered += (_, _) => row.Background = hover;
         row.PointerExited += (_, _) => row.Background = new SolidColorBrush(Colors.Transparent);
+
+        // 按下这一发由行自己吃掉：浮层的皮上"按到空白＝收起"，若让按下穿到面板，
+        // 行会在抬起之前被 Collapsed——Tapped 就没地方落，点了结果什么都不会发生
+        // （10-24 他报的"搜索不好用"就是这个）。注上这一句，点击落定后浮层仍开着。
+        row.PointerPressed += (_, e) => e.Handled = true;
+
         row.Tapped += (_, e) =>
         {
             e.Handled = true;

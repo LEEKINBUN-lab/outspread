@@ -55,8 +55,14 @@ public sealed class NodeVisual : ContentControl
     private readonly Microsoft.UI.Xaml.Shapes.Rectangle _dueBar = new()
     {
         HorizontalAlignment = HorizontalAlignment.Left,
+        VerticalAlignment = VerticalAlignment.Top,
         IsHitTestVisible = false,
     };
+
+    /// <summary>自检读回：色条这一帧的高度与它的竖向对齐方式（对齐不是 Top 就会被 Grid 居中，上下各缺一角）。</summary>
+    internal double DueBarHeight => _dueBar.Height;
+
+    internal VerticalAlignment DueBarAlignment => _dueBar.VerticalAlignment;
 
     /// <summary>
     /// A group is a container, not a card: it gets a dashed frame and its label, and no fill and
@@ -565,18 +571,6 @@ public sealed class NodeVisual : ContentControl
         var marks = Tags.Read(node.Text);
         var due = NoteMarks.StateOf(marks, view.Today);
 
-        if (NoteMarks.BarFor(due, NoteStyling.IsDark) is { } tint && !isGroup)
-        {
-            _dueBar.Width = NoteMarks.BarWidthPx;
-            _dueBar.Height = Height;
-            _dueBar.Fill = new SolidColorBrush(NoteStyling.ToColor(tint));
-            _dueBar.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            _dueBar.Visibility = Visibility.Collapsed;
-        }
-
         // 筛选是视图层的事：被滤掉的格子压暗但仍在原处，绝不移动、也不改文档（所以不进撤销栈）。
         // 组里那些没命中的是唯一的例外——它们被**折进**命中的那一格背后，但那也只是这一枚变换。
         var shows = display.Revealed || !view.Filtering || NoteMarks.Shows(due, marks.Tags, view.TagFilter, view.DueFilter);
@@ -591,6 +585,20 @@ public sealed class NodeVisual : ContentControl
         Canvas.SetTop(this, view.ToScreenY(shown.Y));
         Width = Math.Max(2, shown.Width * view.Zoom);
         Height = Math.Max(2, shown.Height * view.Zoom);
+
+        // 色条的高度必须取**这一帧**的 Height。原来它排在 Width/Height 之前，缩放后拿到的是上一帧的
+        // 高度，于是 2px 条短一截、又被 Grid 居中——上下各缺一块（他 10-24 报的"左缘没盖满"）。
+        if (NoteMarks.BarFor(due, NoteStyling.IsDark) is { } tint && !isGroup)
+        {
+            _dueBar.Width = NoteMarks.BarWidthPx;
+            _dueBar.Height = Height;
+            _dueBar.Fill = new SolidColorBrush(NoteStyling.ToColor(tint));
+            _dueBar.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            _dueBar.Visibility = Visibility.Collapsed;
+        }
 
         if (display.FoldDX is { } foldX && display.FoldDY is { } foldY)
         {

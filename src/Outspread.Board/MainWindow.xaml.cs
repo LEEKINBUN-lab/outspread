@@ -589,7 +589,20 @@ public sealed partial class MainWindow : Window
         // 读数行和格子是同一次重建的产物：文字一改，逾期/标签的计数与横幅就得跟着变，
         // 否则它变成另一份"只在打开时算一次"的说明书。
         RebuildFilterPanel();
+
+        // 选中一根线以后拖端点，收尾走的是 Rebuild（它开头会清选中）。线还在就把它留回来，
+        // 否则"拖一下端点，把手就没了"——改一头要再点一次线才能改另一头。
+        var keptEdge = _selectedEdgeId;
+
         ClearSelection();
+
+        if (keptEdge is not null
+            && _document.Edges.FirstOrDefault(edge => edge.Id == keptEdge) is { } kept
+            && _document.Find(kept.FromNode) is not null
+            && _document.Find(kept.ToNode) is not null)
+        {
+            _selectedEdgeId = keptEdge;
+        }
 
         foreach (var node in _document.Nodes)
         {
@@ -772,6 +785,15 @@ public sealed partial class MainWindow : Window
         // 拉线中按到空白＝这根线没画过（一个字节都没动，所以也不需要撤销）。
         if (Pulling && FinishPull(point.Position))
         {
+            e.Handled = true;
+            return;
+        }
+
+        // 左键落在连线体上（离曲线 6px 以内）＝选中那根线，不进框选。
+        // 判定是几何距离而不是 Shape 命中测试：LinkLayer 里的 Path 布局盒是 0×0，点不到（见 EdgeUnder）。
+        if (point.Properties.IsLeftButtonPressed && EdgeUnder(point.Position.X, point.Position.Y) is { } edgeId)
+        {
+            SelectEdge(edgeId);
             e.Handled = true;
             return;
         }
@@ -1477,6 +1499,9 @@ public sealed partial class MainWindow : Window
 
         var id = visual.NodeId;
 
+        // 点格子＝选中物换成了格子：线的选中与两端把手一起收起。
+        ClearEdgeSelection();
+
         // 同一条规矩：按在另一格上也是"这一格改完了"。先提交，再决定这一发是选中还是拖动。
         if (_editingId is not null)
         {
@@ -1655,6 +1680,9 @@ public sealed partial class MainWindow : Window
 
     private void SelectInside(Rect worldRect, bool append)
     {
+        // 框选换的是格子这一种选中物：线让位（加选也一样，两者不混着放）。
+        ClearEdgeSelection();
+
         if (!append)
         {
             ClearSelection();
@@ -1827,6 +1855,12 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void ProjectSelection()
     {
+        // 选择是单一的：只要有格子在选中，线就必须让位——不管它是从哪条路被选进来的。
+        if (_selection.Count > 0)
+        {
+            ClearEdgeSelection();
+        }
+
         // 删除那一发会把描边与内对比线一起淡到 0（见 SelectionChromeVisuals）：这两枚是常驻元素、
         // 不是每次新建的，所以每一次投影都要先抬回满不透明——不然"套子"再也回不来。
         SelectionOutline.Opacity = 1;
@@ -3043,6 +3077,30 @@ public sealed partial class MainWindow : Window
 
     private void RemoveSelection()
     {
+        // 选中的是一根线：Delete 删这根线，而不是说"没选中任何格子"。
+        if (_selectedEdgeId is { } edgeId && _selection.Count == 0)
+        {
+            if (_document.Edges.All(edge => edge.Id != edgeId))
+            {
+                _selectedEdgeId = null;
+                PaintLinks();
+
+                return;
+            }
+
+            BeginGesture("删掉一根连线");
+            _document.RemoveEdge(edgeId);
+            _selectedEdgeId = null;
+            EndGesture();
+
+            Rebuild();
+            SaveSoon();
+
+            Say("删掉了那根连线（Ctrl＋Z 可回退）");
+
+            return;
+        }
+
         if (_selection.Count == 0)
         {
             Say("没有选中任何格子");
@@ -4940,6 +4998,37 @@ public sealed partial class MainWindow : Window
                         problems.Add($"命中『{hit.Snippet}』的强调区间 {hit.MatchStart}+{hit.MatchLength} 落在摘要外——界面一染色就越界");
                     }
                 }
+
+                // 跳过去那一格必须落在面板**下面**：面板挡着的话，点了行屏幕上什么变化都没有
+                // （10-24 他报的"搜索不好用"）。这一发把面板开着、真跳一次再量盒子。
+                var panX = _view.PanX;
+                var panY = _view.PanY;
+
+                if (_searchHits.Count > 0)
+                {
+                    JumpToHit(0);
+                }
+
+                if (_searchHits.Count > 0 && _searchHits[0].NodeId is { } landedId && _realized.TryGetValue(landedId, out var landed))
+                {
+                    var box = landed.TransformToVisual(BoardArea)
+                        .TransformBounds(new Rect(0, 0, landed.ActualWidth, landed.ActualHeight));
+                    var panel = SearchPanel.TransformToVisual(BoardArea)
+                        .TransformBounds(new Rect(0, 0, SearchPanel.ActualWidth, SearchPanel.ActualHeight));
+
+                    if (box.Top < panel.Bottom + 4 && box.Bottom > panel.Top)
+                    {
+                        problems.Add(
+                            $"查找跳转: 目标 ({box.X:0.#},{box.Y:0.#})–({box.Right:0.#},{box.Bottom:0.#}) 与面板（底 {panel.Bottom:0.#}）重叠——点了行看不出跳到了哪");
+                    }
+                }
+
+                _view.PanX = panX;
+                _view.PanY = panY;
+
+                ClearSelection();
+                ArrangeAll();
+                ProjectSelection();
             }
 
             // 输入框是浮层里唯一一条不是 SheetRow 的行。它必须和行同高，否则"只是换了一下文字"
@@ -5116,6 +5205,10 @@ public sealed partial class MainWindow : Window
         SelfTestRailStateLayers(problems);
         SelfTestTabHoverDoesNotShift(problems);
         SelfTestEdgeHandleFeedback(problems);
+        SelfTestEdgeCanBeSelectedByItsWire(problems);
+
+        // 缩放后左缘那条色条要盖满整条边（10-24 他报"有时候没完整覆盖"）。
+        SelfTestDueBarFollowsZoom(problems);
 
         // 一块丢了图的板子也要开得成：那一格写"未找到"，而不是把窗口打死（10-23 撞上的那一发）。
         SelfTestMissingImageTile(problems);
@@ -5442,6 +5535,51 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 左缘那条 2px 色条必须盖满整条左边：高度取的是**这一帧**的卡高，而且顶端对齐。
+    /// 10-24 他报"有时候缩放后左缘的线没完整覆盖"——色条原来排在 Width/Height 更新之前，
+    /// 缩放后拿到的是上一帧的高度，短一截之后又被 Grid 居中，上下各缺一块。
+    /// 这里按缩放那一拍真的走一次 Update：只要高度不是从这一帧拿的，立刻能读出来。
+    /// </summary>
+    private void SelfTestDueBarFollowsZoom(List<string> problems)
+    {
+        var target = BoardNotes().FirstOrDefault(node => NoteMarks.StateOf(Tags.Read(node.Text), _view.Today) != NoteMarks.DueState.None);
+
+        if (target is null || !_realized.TryGetValue(target.Id, out var visual))
+        {
+            problems.Add("自检色条: 板上没有带日期的格子，这一发不适用");
+
+            return;
+        }
+
+        var zoom = _view.Zoom;
+        var scale = BoardArea.XamlRoot?.RasterizationScale ?? 1;
+
+        try
+        {
+            _view.Zoom = Math.Clamp(zoom * 1.37, MinZoom, MaxZoom);
+            visual.Update(target, _view, scale);
+
+            if (visual.DueBarAlignment != VerticalAlignment.Top)
+            {
+                problems.Add($"自检色条: 顶端对齐是 {visual.DueBarAlignment}——不是 Top 就会被 Grid 居中，上下各缺一角");
+            }
+
+            if (visual.DueBarHeight < visual.Height - 0.5)
+            {
+                problems.Add($"自检色条: 缩放 {Percent()} 后色条 {visual.DueBarHeight:0.##} 比卡 {visual.Height:0.##} 短——左缘会缺一截");
+            }
+        }
+        finally
+        {
+            // 只借这一拍量高度：相机与卡盒都按原缩放重算回去，不留 sidecar。
+            _view.Zoom = zoom;
+            visual.Update(target, _view, scale);
+        }
+
+        Diagnostics.Write("selftest 色条: 缩放那一拍色条高度取本帧卡高、顶端对齐——左缘盖满");
+    }
+
+    /// <summary>
     /// 被视口剔除的格子必须整件 Collapsed。只把 Width/Height 置零不够：三枚纸影是
     /// 卡盒子外的独立矩形，会留在旧位置——他 10-22 截图里那排"只剩阴影"的空白条。
     /// </summary>
@@ -5719,7 +5857,15 @@ public sealed partial class MainWindow : Window
                 {
                     if (NodeOf(id) is null)
                     {
-                        return new ShotReply(false, null, Error: $"板上没有 id \"{id}\"，select 只认已经在板上的格子");
+                        // 连线也是可选中物：给它一个取证通道，否则"选中的线长什么样"永远只能靠嘴说。
+                        if (_document.Edges.Any(edge => edge.Id == id))
+                        {
+                            SelectEdge(id);
+
+                            continue;
+                        }
+
+                        return new ShotReply(false, null, Error: $"板上没有 id \"{id}\"，select 只认已经在板上的格子和连线");
                     }
 
                     _selection.Add(id);

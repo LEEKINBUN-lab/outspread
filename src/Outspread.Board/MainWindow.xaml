@@ -155,7 +155,9 @@
                 </Canvas.RenderTransform>
 
                 <!-- 便签之间的箭头。必须排在 ItemLayer **之前**（XAML 后写的在上层）：
-                     网页那版 #links 也在 #items 之前——线是两张格子的关系，压在纸上就会挡住字。 -->
+                     网页那版 #links 也在 #items 之前——线是两张格子的关系，压在纸上就会挡住字。
+                     这一层不吃指针：点线体改由 BoardArea 按"离曲线 6px 以内"的几何判定来接
+                     （这些 Path 的布局盒是 0×0，Shape 命中测试点不到它们，见 Links.EdgeUnder）。 -->
                 <Canvas x:Name="LinkLayer" IsHitTestVisible="False" />
 
                 <!-- Realised nodes, positioned in screen coordinates. -->

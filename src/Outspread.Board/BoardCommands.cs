@@ -162,6 +162,9 @@ public sealed partial class MainWindow
     {
         _selection.Clear();
         _groupFocus = null;
+
+        // 线是另一种选中物，但同一时刻只选一样：清格子也清线。
+        ClearEdgeSelection();
     }
 
     private void GroupSelection()

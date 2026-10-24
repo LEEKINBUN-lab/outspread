@@ -31,7 +31,20 @@ partial class MainWindow
     private bool? _floorIsDark;
     private bool? _vignetteIsDark;
 
-    private void UpdateAtmosphere()
+    private void UpdateAtmosphere() => UpdateAtmosphereAt(_view.Zoom, _view.PanX, _view.PanY, forensics: true);
+
+    /// <summary>
+    /// 按"相机在这一帧的样子"画底下那两层。
+    /// </summary>
+    /// <param name="zoom">点阵该按哪一档缩放。</param>
+    /// <param name="panX">与 <paramref name="panX"/> 一起决定相位：点阵跟着相机走。</param>
+    /// <param name="forensics">要不要顺手数一遍墨（那一发要 3–6ms，只有落定那一拍值这个钱）。</param>
+    /// <remarks>
+    /// 为什么参数化而不是直接读 <see cref="_view"/>：滚轮预览那一长串帧里，相机还没落到
+    /// <c>_view</c> 上（它走的是合成变换），点阵却必须跟着走——10-24 他报"缩放时点阵忽然放大
+    /// 缩小"就是这一层被冻在旧缩放档上、停手才啪地补上。中间那些帧不吃数墨那一发。
+    /// </remarks>
+    private void UpdateAtmosphereAt(double zoom, double panX, double panY, bool forensics)
     {
         var width = BoardArea.ActualWidth;
         var height = BoardArea.ActualHeight;
@@ -42,7 +55,7 @@ partial class MainWindow
         }
 
         var scale = PixelScale();
-        var period = BoardGrid.PeriodFor(_view.Zoom);
+        var period = BoardGrid.PeriodFor(zoom);
 
         // The board's own bounds, not the union of what's inside it: the grid tile is deliberately
         // a period larger than the viewport so panning needs no repaint, and without a clip that
@@ -73,17 +86,17 @@ partial class MainWindow
         // Whole layout pixels, or the Image gets resampled and a 2px dot smears into a grey smear.
         var tileWidth = Math.Ceiling(width + period);
         var tileHeight = Math.Ceiling(height + period);
-        var key = $"{_view.Zoom:0.####}|{width:0}|{height:0}|{scale:0.###}|{NoteStyling.IsDark}";
+        var key = $"{zoom:0.####}|{width:0}|{height:0}|{scale:0.###}|{NoteStyling.IsDark}";
 
         if (key != _gridKey)
         {
             _gridKey = key;
-            PaintGrid(tileWidth, tileHeight, scale);
+            PaintGrid(tileWidth, tileHeight, scale, zoom, forensics);
         }
 
         // 平移只改这一处：点阵跟着相位走，位图不重画。
-        GridOffset.X = BoardGrid.Phase(_view.PanX, period) - period;
-        GridOffset.Y = BoardGrid.Phase(_view.PanY, period) - period;
+        GridOffset.X = BoardGrid.Phase(panX, period) - period;
+        GridOffset.Y = BoardGrid.Phase(panY, period) - period;
     }
 
     private void ApplyBoardFloor()
@@ -129,8 +142,9 @@ partial class MainWindow
         VignetteLayer.Fill = brush;
     }
 
-    private void PaintGrid(double tileWidth, double tileHeight, double scale)
+    private void PaintGrid(double tileWidth, double tileHeight, double scale, double zoom, bool forensics)
     {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         var pixelsW = (int)Math.Ceiling(tileWidth * scale);
         var pixelsH = (int)Math.Ceiling(tileHeight * scale);
 
@@ -139,9 +153,9 @@ partial class MainWindow
 
         var ink = BoardGrid.Ink(NoteStyling.IsDark);
 
-        foreach (var (step, levelAlpha) in BoardGrid.LevelsFor(_view.Zoom))
+        foreach (var (step, levelAlpha) in BoardGrid.LevelsFor(zoom))
         {
-            var spacing = step * _view.Zoom * scale;
+            var spacing = step * zoom * scale;
             var alpha = levelAlpha * BoardGrid.PeakAlpha;
 
             for (var x = 0.0; x < pixelsW; x += spacing)
@@ -168,6 +182,15 @@ partial class MainWindow
         GridLayer.Stretch = Stretch.Fill;
 
         // 取证：位图自己有没有墨点。没有就是 PaintGrid 的数学问题，有就是合成/显示的问题。
+        // 这一发要 3–6ms，所以只有落定那一拍跑它；滚轮中间那些帧只想知道"画完没有"。
+        if (!forensics)
+        {
+            Diagnostics.Write($"grid painted {pixelsW}×{pixelsH} at {zoom:0.###} in {clock.Elapsed.TotalMilliseconds:0.#}ms（预览，不数墨）");
+
+            return;
+        }
+
+        var paintedAt = clock.Elapsed.TotalMilliseconds;
         var inked = 0;
         var peak = 0;
         double mass = 0;
@@ -184,9 +207,11 @@ partial class MainWindow
             peak = Math.Max(peak, buffer[i]);
         }
 
-        var levels = string.Join(" ", BoardGrid.LevelsFor(_view.Zoom).Select(level => level.Step + "@" + level.Alpha.ToString("0.###")));
+        var levels = string.Join(" ", BoardGrid.LevelsFor(zoom).Select(level => level.Step + "@" + level.Alpha.ToString("0.###")));
 
-        Diagnostics.Write($"grid painted {pixelsW}×{pixelsH} levels [{levels}] inked {inked} px mass {mass / 255:0.###} peak {peak}/255 buffer {buffer.Length}/expected {pixelsW * pixelsH * 4}");
+        // 这一发要带毫秒：2026-10-24 他要"缩放丝滑"，而"能不能逐帧重画点阵"整个决定压在
+        // 一次重画的代价上——没有这个数就只能猜。停手提交那 103ms 里有多少是这里，也读这一行。
+        Diagnostics.Write($"grid painted {pixelsW}×{pixelsH} levels [{levels}] inked {inked} px mass {mass / 255:0.###} peak {peak}/255 buffer {buffer.Length}/expected {pixelsW * pixelsH * 4} in {clock.Elapsed.TotalMilliseconds:0.#}ms（画 {paintedAt:0.#} ＋ 数墨 {clock.Elapsed.TotalMilliseconds - paintedAt:0.#}ms）");
     }
 
     /// <summary>Device pixels per layout pixel — the WinUI 3 route is XamlRoot.RasterizationScale

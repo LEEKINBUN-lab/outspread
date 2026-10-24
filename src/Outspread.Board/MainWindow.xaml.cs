@@ -31,6 +31,11 @@ public sealed partial class MainWindow : Window
     /// （正文一行 21 像素），手感归他判；几何本身在 <see cref="EditorScroll.Reveal"/>。</summary>
     private const double EditorScrollPxPerNotch = 48;
 
+    /// <summary>缩放缓动期间点阵重画的最小间隔（毫秒）＝一帧（60Hz）。这一档是量出来的：
+    /// 预览那一发（1360×842、不数墨）现读 4.6–6.8ms，占一帧预算（16.7ms）的三成上下，
+    /// 所以点阵可以跟卡片同帧；数墨那一发（3.7–14.5ms）只在提交时跑。</summary>
+    private const long GridTweenMinIntervalMs = 15;
+
     /// <summary>How far outside the visible area nodes are still kept realised.</summary>
     private const double CullMargin = 400;
 
@@ -1169,7 +1174,7 @@ public sealed partial class MainWindow : Window
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// 手势期间的缩放预览：只缩放整层，不重排、不重画网格、不存盘。
+    /// 手势期间的缩放预览：卡片走一枚合成变换、点阵按缓动中那一档重画，都不重排、不存盘。
     /// </summary>
     /// <remarks>
     /// 2026-10-23 他报"快速滚轮卡顿"。现读：每一发 zoom+arrange 是 64–83ms（其中节点重排 31–44ms、
@@ -1177,9 +1182,15 @@ public sealed partial class MainWindow : Window
     /// 靠的不是把同一件事做快，而是手势期间只动合成变换、停手再落一次真布局。
     /// <para>
     /// 所以：滚轮期间 <see cref="PanLayer"/> 套一枚以指针为圆心的 <see cref="ScaleTransform"/>，
-    /// 每一发只改 ScaleX/Y（合成层，不动文字），120ms 没有新滚轮才提交——相机走一次
-    /// <see cref="BoardViewState.ZoomAt"/>、重排一次、网格重绘一次。落定后的画面仍是原来的
-    /// 清晰文字（那条"不用 render transform 缩放"的规矩针对的是落定态，这里是手势预览）。
+    /// 每一发只改 <see cref="_wheelTargetZoom"/>；把画面推上去的是 <see cref="OnWheelFrame"/>
+    /// ——每帧朝目标走一小步（<see cref="ZoomTween"/>），120ms 没有新滚轮才提交：相机走一次
+    /// <see cref="BoardViewState.ZoomAt"/>、重排一次、网格按真相机重画一张清晰的。
+    /// </para>
+    /// <para>
+    /// 10-24 这一档改了两件事，都是他点的"缩放突兀"：① 台阶→缓动（原来每一发滚轮把缩放**立刻**
+    /// 推到 ×1.12，快速滚就是一截一截）；② 点阵不再冻在旧缩放档上（原来它整个手势期间不动、
+    /// 提交才啪地补一张，卡片在走而点不走的错位最显眼）。现读的代价：预览那一发点阵 4.6–6.8ms
+    /// （不数墨），一帧预算 16.7ms ⇒ 点阵与卡片同帧；数墨那一发（3.7–14.5ms）只在提交时跑。
     /// </para>
     /// <para>
     /// 代价说清楚：手势中文字会暂时被合成缩放（略糊）；缩小预览时，视口外原本被剔除的格子
@@ -1193,6 +1204,16 @@ public sealed partial class MainWindow : Window
     private double _wheelTargetZoom;
     private ScaleTransform? _wheelPanScale;
     private DispatcherQueueTimer? _wheelSettle;
+
+    /// <summary>预览现在显示到哪一档缩放——缓动走的就是它，不等于 <see cref="_wheelTargetZoom"/>。</summary>
+    private double _wheelShownZoom;
+
+    private bool _wheelTweening;
+
+    /// <summary>点阵上次按哪一档重画的，以及那一发落在哪一毫秒（节流用）。</summary>
+    private double _wheelGridZoom = -1;
+
+    private long _wheelGridPaintedAt;
 
     private void ApplyWheel(Point position, int delta)
     {
@@ -1214,9 +1235,11 @@ public sealed partial class MainWindow : Window
             _wheelAnchor = position;
             _wheelStartZoom = _view.Zoom;
             _wheelTargetZoom = _view.Zoom;
+            _wheelShownZoom = _view.Zoom;
+            _wheelGridZoom = _view.Zoom;
 
-            // 只缩放界面层；网格留在原位，提交那一拍才按新缩放重画（缩放中不让点阵去缩，
-            // 那张位图不铺满缩小后的视口，缩了会在边上露出没有点阵的地板）。
+            // 只缩放界面层；网格由 <see cref="RepaintGridAt"/> 跟着缓动那一档重画——10-24 之前
+            // 它是冻在旧档上、提交才补一张，那一下"忽然放大缩小"就是这里来的。
             _wheelPanScale = new ScaleTransform
             {
                 CenterX = position.X,
@@ -1229,16 +1252,8 @@ public sealed partial class MainWindow : Window
         _wheelTargetZoom = Math.Clamp(
             _wheelTargetZoom * (delta > 0 ? WheelStep : 1 / WheelStep), MinZoom, MaxZoom);
 
-        var scale = _wheelTargetZoom / _wheelStartZoom;
-
-        if (_wheelPanScale is { } preview)
-        {
-            preview.ScaleX = scale;
-            preview.ScaleY = scale;
-        }
-
-        // 比例那一格跟着手势走；提交后 ArrangeAll 会按真相再刷一次。
-        ZoomLevelText.Text = $"{Math.Round(_wheelTargetZoom * 100)}%";
+        // 这一发只改目标；把画面推上去的是 <see cref="OnWheelFrame"/>（每帧一小步，不是一发一档台阶）。
+        EnsureWheelTween();
 
         _wheelSettle!.Stop();
         _wheelSettle.Start();
@@ -1257,6 +1272,90 @@ public sealed partial class MainWindow : Window
         _wheelSettle.Tick += (_, _) => CommitWheelPreview();
     }
 
+    /// <summary>挂上每帧那一小步（已经在走就不重复挂）。</summary>
+    private void EnsureWheelTween()
+    {
+        if (_wheelTweening)
+        {
+            return;
+        }
+
+        _wheelTweening = true;
+        Microsoft.UI.Xaml.Media.CompositionTarget.Rendering += OnWheelFrame;
+    }
+
+    private void StopWheelTween()
+    {
+        if (!_wheelTweening)
+        {
+            return;
+        }
+
+        _wheelTweening = false;
+        Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= OnWheelFrame;
+    }
+
+    /// <summary>
+    /// 一帧：把预览比例朝目标推一小步，并让点阵按这一帧那一档重画。
+    /// </summary>
+    private void OnWheelFrame(object? sender, object args)
+    {
+        if (!_wheelPreview)
+        {
+            StopWheelTween();
+
+            return;
+        }
+
+        _wheelShownZoom = ZoomTween.Step(_wheelShownZoom, _wheelTargetZoom);
+
+        if (_wheelPanScale is { } preview)
+        {
+            preview.ScaleX = preview.ScaleY = _wheelShownZoom / _wheelStartZoom;
+        }
+
+        // 比例那一格跟着缓动走；提交后 ArrangeAll 会按真相再刷一次。
+        ZoomLevelText.Text = $"{Math.Round(_wheelShownZoom * 100)}%";
+
+        RepaintGridAt(_wheelShownZoom);
+
+        if (_wheelShownZoom == _wheelTargetZoom)
+        {
+            StopWheelTween();
+        }
+    }
+
+    /// <summary>
+    /// 点阵跟着缓动那一档走。两重节流：缩放差不到 3% 不重画，且一帧预算最多 33ms 一发。
+    /// </summary>
+    /// <remarks>
+    /// 代价现读（1360×842 那张）：预览那一发 4.6–6.8ms（不数墨），提交那一发 8.7–21.5ms。
+    /// 相机以指针为不动点，所以这一帧的 pan 由锚点反解：点阵与卡片必须走同一条几何，
+    /// 不然缓动中点与字会各滑各的。
+    /// </remarks>
+    private void RepaintGridAt(double zoom)
+    {
+        var now = Environment.TickCount64;
+
+        if (_wheelGridZoom > 0 && Math.Abs((zoom / _wheelGridZoom) - 1) < 0.03)
+        {
+            return;
+        }
+
+        if (now - _wheelGridPaintedAt < GridTweenMinIntervalMs)
+        {
+            return;
+        }
+
+        _wheelGridZoom = zoom;
+        _wheelGridPaintedAt = now;
+
+        var worldX = _view.ToWorldX(_wheelAnchor.X);
+        var worldY = _view.ToWorldY(_wheelAnchor.Y);
+
+        UpdateAtmosphereAt(zoom, _wheelAnchor.X - (worldX * zoom), _wheelAnchor.Y - (worldY * zoom), forensics: false);
+    }
+
     /// <summary>停手 120ms 后落一次真布局；进拍图、切板、失焦、指针按下时也先落到这里。</summary>
     private void CommitWheelPreview()
     {
@@ -1267,6 +1366,7 @@ public sealed partial class MainWindow : Window
 
         _wheelPreview = false;
         _wheelSettle?.Stop();
+        StopWheelTween();
 
         PanLayer.RenderTransform = PanShift;
         _wheelPanScale = null;
@@ -1279,6 +1379,9 @@ public sealed partial class MainWindow : Window
         }
 
         _view.ZoomAt(_wheelAnchor.X, _wheelAnchor.Y, factor, MinZoom, MaxZoom);
+
+        // 缓动中途点阵可能停在离目标 3% 以内的那一档；提交这一拍按真相机重画一张清晰的。
+        _gridKey = string.Empty;
 
         ArrangeAll();
         ProjectSelection();
@@ -4884,7 +4987,7 @@ public sealed partial class MainWindow : Window
 
         // 滚轮的一发值多少毫秒：他 10-23 报"快速滚轮卡顿"，先把用户真走的那条路量成一条读数，
         // 再决定是合并事件、还是把网格/投影的重活挪出每一发。
-        SelfTestWheelBurst();
+        SelfTestWheelBurst(problems);
 
         Diagnostics.Write(
             $"selftest: zoom now {Percent()}, realised {_realized.Count}/{_document.Nodes.Count}, " +
@@ -4902,10 +5005,16 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 滚轮 burst：同一锚点上来回 12 发，量总耗时与每发均值，跑完把相机交回去。
-    /// 这是"手感"的装置读数——它不判过不过，只让"卡不卡"有一枚可复算的数。
+    /// 滚轮 burst：同一锚点上来回 8 发，量"每一发多贵、缓动几帧收敛、点阵重画一发多贵、
+    /// 停手提交多贵"，跑完把相机交回去。
     /// </summary>
-    private void SelfTestWheelBurst()
+    /// <remarks>
+    /// 这是"手感"的装置读数——它不判"好不好看"（那归他的眼睛），只让"卡不卡／缓不缓"有可复算的数。
+    /// 两格判据是设计决定，不是装饰：缓动超过 24 帧（≈400ms）＝停手以后画面还在自己走，读作"不跟手"；
+    /// 点阵重画一发超过两拍间隔（66ms）＝"缓动中重画点阵"这个选择本身站不住，该退回只在提交时画。
+    /// 两个数都是 10-24 为"缩放丝滑"那一刀立的尺，不是拿现测值反推的门槛（现测：收敛 17 帧、重画 9–24ms）。
+    /// </remarks>
+    private void SelfTestWheelBurst(List<string> problems)
     {
         var savedX = _view.PanX;
         var savedY = _view.PanY;
@@ -4921,6 +5030,34 @@ public sealed partial class MainWindow : Window
         }
 
         var previewMs = (Stopwatch.GetTimestamp() - started) * 1000.0 / Stopwatch.Frequency;
+
+        // 一帧一帧喂给缓动，数它几帧收敛、最慢一帧多久（第一帧含一次真重画）。
+        var frames = 0;
+        var worstFrameMs = 0d;
+
+        while (frames < 60)
+        {
+            var frameStart = Stopwatch.GetTimestamp();
+
+            OnWheelFrame(null, new object());
+
+            var frameMs = (Stopwatch.GetTimestamp() - frameStart) * 1000.0 / Stopwatch.Frequency;
+
+            frames++;
+            worstFrameMs = Math.Max(worstFrameMs, frameMs);
+
+            if (_wheelShownZoom == _wheelTargetZoom)
+            {
+                break;
+            }
+        }
+
+        // 点阵那一发单独量：同步循环里 33ms 的节流只会让头一帧真重画，量不到第二发的代价。
+        var paintStart = Stopwatch.GetTimestamp();
+
+        UpdateAtmosphereAt(_wheelTargetZoom, _view.PanX, _view.PanY, forensics: false);
+
+        var paintMs = (Stopwatch.GetTimestamp() - paintStart) * 1000.0 / Stopwatch.Frequency;
         var committed = Stopwatch.GetTimestamp();
 
         CommitWheelPreview();
@@ -4935,8 +5072,19 @@ public sealed partial class MainWindow : Window
         ProjectSelection();
 
         Diagnostics.Write(
-            $"selftest 滚轮: {steps} 发预览共 {previewMs:0.0}ms（均 {previewMs / steps:0.00}ms/发，只改合成缩放）、" +
+            $"selftest 滚轮: {steps} 发预览共 {previewMs:0.0}ms（均 {previewMs / steps:0.00}ms/发，只推目标）、" +
+            $"缓动 {frames} 帧收敛（最慢一帧 {worstFrameMs:0.0}ms）、点阵重画一发 {paintMs:0.0}ms、" +
             $"停手提交 {commitMs:0.0}ms（一次 ArrangeAll + 网格重绘）");
+
+        if (frames > 24)
+        {
+            problems.Add($"缩放缓动 {frames} 帧才收敛：停手以后画面还在走，读起来就是不跟手（上限 24 帧≈400ms）");
+        }
+
+        if (paintMs > GridTweenMinIntervalMs * 2)
+        {
+            problems.Add($"点阵重画一发 {paintMs:0.0}ms，比两拍间隔（{GridTweenMinIntervalMs * 2}ms）还长：缓动中逐发重画这个选择不成立，该退回提交时画一张");
+        }
     }
 
     /// <summary>

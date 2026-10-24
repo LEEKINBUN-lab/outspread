@@ -2468,35 +2468,17 @@ public sealed partial class MainWindow : Window
         PaintEditorChips();
     }
 
+    /// <summary>
+    /// 编辑框自己的按键。这里只剩 Esc——**回车不能指望这一层**：10-24 查"Ctrl+Enter 不收笔"量的，
+    /// 同一发回车在 <c>Root.PreviewKeyDown</c> 里看得见、在这里一次都没到过（换行却照样插进去），
+    /// 所以"Ctrl+Enter 收笔"与"回车收下标记行"都挪到了 <c>OnCheatPreviewKeyDown</c>（Cheatsheet.cs）。
+    /// </summary>
     private void OnEditorKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        var control = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
-            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-
         if (e.Key == Windows.System.VirtualKey.Escape)
         {
             CloseEditor(commit: false);
             e.Handled = true;
-            return;
-        }
-
-        if (e.Key == Windows.System.VirtualKey.Enter && !control && AbsorbPropertyLine())
-        {
-            // 这一发回车是"收下这枚标记"，不是换行。
-            e.Handled = true;
-            return;
-        }
-
-        if (e.Key == Windows.System.VirtualKey.Enter && control)
-        {
-            CloseEditor(commit: true);
-            e.Handled = true;
-        }
-
-        if (e.Key == Windows.System.VirtualKey.Enter)
-        {
-            // TextBox 的 TextChanged 不在这一次键事件里同步到；换行插进去之后再量一次。
-            DispatcherQueue.TryEnqueue(GrowEditorToFit);
         }
     }
 

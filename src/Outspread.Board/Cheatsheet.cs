@@ -36,6 +36,33 @@ public sealed partial class MainWindow
 
     private void OnCheatPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
+        // 编辑中的一发回车只能在这一层接。10-24 查"Ctrl+Enter 不收笔"量的：同一发键在 preview
+        // 记到了、在编辑框自己的 KeyDown 上一次都没到（换行照样插进去了）——所以把提交挂在控件上
+        // 是死的，中文输入法在场时他按多少次都不收笔。"回车收下标记行"那条也是同一条路。
+        if (e.Key == Windows.System.VirtualKey.Enter && _editingId is not null)
+        {
+            if (KeyDownIs(Windows.System.VirtualKey.Control))
+            {
+                CloseEditor(commit: true);
+                e.Handled = true;
+
+                return;
+            }
+
+            if (AbsorbPropertyLine())
+            {
+                // 这一发回车是"收下这枚标记"，不是换行。
+                e.Handled = true;
+
+                return;
+            }
+
+            // 换行照插（不吃这一发，交给输入框自己），但排版要等 TextChanged 落定之后再量一次。
+            DispatcherQueue.TryEnqueue(GrowEditorToFit);
+
+            return;
+        }
+
         // Tab 归板子的条件是"现在没有在写字、也没有面板在收键"，不是"焦点恰好在 BoardArea"。
         // 10-23 他报"第一下 Tab 没反应、要按第二下"：第一下被当成了焦点导航，焦点落到板面，
         // 第二下才满足旧守卫。现在那第一下就把焦点交给板面并直接开清单——在标签条/按钮上按
@@ -96,12 +123,14 @@ public sealed partial class MainWindow
 
     /// <summary>空格只单独算一件事：不带 Ctrl/Alt/Shift 的那一发才是"复位视图"。</summary>
     private static bool BareSpace()
-    {
-        static bool Down(Windows.System.VirtualKey key) => Microsoft.UI.Input.InputKeyboardSource
-            .GetKeyStateForCurrentThread(key).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        => !KeyDownIs(Windows.System.VirtualKey.Control)
+            && !KeyDownIs(Windows.System.VirtualKey.Menu)
+            && !KeyDownIs(Windows.System.VirtualKey.Shift);
 
-        return !Down(Windows.System.VirtualKey.Control) && !Down(Windows.System.VirtualKey.Menu) && !Down(Windows.System.VirtualKey.Shift);
-    }
+    /// <summary>那一枚修饰键此刻按没按下（读的是线程的键盘状态，不走事件）。</summary>
+    private static bool KeyDownIs(Windows.System.VirtualKey key)
+        => Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(key)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
 
     /// <summary>
     /// 松手那一下＝"按一下复位"。以前还要分"按住拖过就是平移"（10-24 那条撤了），所以现在

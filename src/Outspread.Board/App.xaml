@@ -8,6 +8,13 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+                <!-- 控件主题资源要在这一层覆盖：设在某个控件自己的 Resources 上，
+                     模板里的 {ThemeResource …} 取不到（10-24 实测：标签表头左内缩读到的仍是主题默认 8，
+                     不是我们给的那一档）。标签的 × 显／藏两档内缩必须相等，否则标签宽度跟着鼠标变。 -->
+                <ResourceDictionary>
+                    <Thickness x:Key="TabViewItemHeaderPaddingWithCloseButton">12,0,4,0</Thickness>
+                    <Thickness x:Key="TabViewItemHeaderPaddingWithoutCloseButton">12,0,4,0</Thickness>
+                </ResourceDictionary>
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>

@@ -114,10 +114,11 @@ public sealed partial class MainWindow
             ["TabViewItemHeaderFontSize"] = TabStrip.FontPx,
             ["TabViewItemHeaderPadding"] = new Thickness(TabStrip.PadLeft, 0, TabStrip.PadRight, 0),
 
-            // 没关闭键的那一档把 × 的整格（24 命中 + 2 边距 + 4 内缩）留空：非活动标签的 ×
-            // 是 Collapsed 的，若两档内缩不一样，鼠标移上去整枚标签会横向长一截。
+            // 有 × 与没 × 这两档内缩**必须一模一样**：模板按"× 显／× 藏"两组视觉状态换这两档，
+            // 只要两档不等，标签宽度就跟着鼠标变（他 10-24 报的那一发）。× 的那一格由表头自己的
+            // 文字右边距留（见 BuildHeader 那段），不再靠内缩去顶。
             ["TabViewItemHeaderPaddingWithCloseButton"] = new Thickness(TabStrip.PadLeft, 0, TabStrip.PadRight, 0),
-            ["TabViewItemHeaderPaddingWithoutCloseButton"] = new Thickness(TabStrip.PadLeft, 0, TabStrip.CloseReservePx, 0),
+            ["TabViewItemHeaderPaddingWithoutCloseButton"] = new Thickness(TabStrip.PadLeft, 0, TabStrip.PadRight, 0),
             // 原生关闭键整格归零：× 改由表头里的覆盖层画（不参与布局，悬停只切透明度）。
             // 这样"有/没有 ×"不再改变标签宽度，也就没有悬停时宽度抖动带来的闪烁。
             ["TabViewItemHeaderCloseButtonWidth"] = 0,
@@ -905,24 +906,98 @@ public sealed partial class MainWindow
             return;
         }
 
-        (double HeaderX, double HeaderY, double ItemX, double ItemW) Read(TabViewItem item)
+        (double HeaderX, double HeaderY, double ItemX, double ItemW, double HeaderW) Read(TabViewItem item)
         {
             var onStrip = item.TransformToVisual(BoardTabs).TransformPoint(new Point(0, 0));
 
-            if (item.Header is not UIElement header)
+            if (item.Header is not FrameworkElement head)
             {
-                return (0, 0, onStrip.X, item.ActualWidth);
+                return (0, 0, onStrip.X, item.ActualWidth, 0);
             }
 
-            var inItem = header.TransformToVisual(item).TransformPoint(new Point(0, 0));
+            var inItem = head.TransformToVisual(item).TransformPoint(new Point(0, 0));
 
-            return (inItem.X, inItem.Y, onStrip.X, item.ActualWidth);
+            return (inItem.X, inItem.Y, onStrip.X, item.ActualWidth, head.ActualWidth);
         }
 
         var normal = items.Select(Read).ToList();
 
-        // 两把尺分开量：先只走平台的视觉状态，再只走我们那发 PaintHeader，
-        // 才知道那半像素该怪模板还是怪我们自己。
+        // 原生 × 的显隐是**另一组视觉状态**（CloseButtonVisible / CloseButtonCollapsed），
+        // 只按 PointerOver 那组量不到它——他 10-24 报"鼠标是否移到标签上会影响宽度"，
+        // 而模板正是用这两组去换 With/WithoutCloseButton 那两档内缩的。
+        //
+        // 正对照：两枚标签都停在 82 的下限上时，内缩换档会被下限挡住量不出来
+        // （第一次跑就是这样，三档都报 82）。所以先把表头换成一句足够长的名字，
+        // 让宽度真的由内容决定，再各量一次。名字只改界面，不落盘。
+        var texts = items.Select(item => (item.Header as Grid)?.Children.OfType<TextBlock>().FirstOrDefault()).ToList();
+        var saved = texts.Select(text => text?.Text).ToList();
+
+        for (var index = 0; index < texts.Count; index++)
+        {
+            if (texts[index] is { } label)
+            {
+                label.Text = $"长名字标签{index}快速入门与测试";
+            }
+        }
+
+        BoardTabs.UpdateLayout();
+
+        var wideNormal = items.Select(Read).ToList();
+
+        foreach (var item in items)
+        {
+            VisualStateManager.GoToState(item, "CloseButtonVisible", true);
+        }
+
+        BoardTabs.UpdateLayout();
+
+        var withClose = items.Select(Read).ToList();
+
+        foreach (var item in items)
+        {
+            VisualStateManager.GoToState(item, "CloseButtonCollapsed", true);
+        }
+
+        BoardTabs.UpdateLayout();
+
+        var withoutClose = items.Select(Read).ToList();
+
+        for (var index = 0; index < texts.Count; index++)
+        {
+            if (texts[index] is { } label && saved[index] is { } original)
+            {
+                label.Text = original;
+            }
+        }
+
+        BoardTabs.UpdateLayout();
+
+        Diagnostics.Write(
+            "selftest 标签宽度: " + string.Join("；", items.Select((item, index) =>
+                $"第 {index + 1} 枚 长名常态 {wideNormal[index].ItemW:0.#}／×显 {withClose[index].ItemW:0.#}／×藏 {withoutClose[index].ItemW:0.#}"
+                + $"（表头 {withClose[index].HeaderW:0.#} vs {withoutClose[index].HeaderW:0.#}、表头左缘 {withClose[index].HeaderX:0.#} vs {withoutClose[index].HeaderX:0.#}）")));
+
+        var widened = new List<string>();
+
+        for (var index = 0; index < items.Count; index++)
+        {
+            if (Math.Abs(withClose[index].ItemW - withoutClose[index].ItemW) > 0.01)
+            {
+                widened.Add($"第 {index + 1} 枚 ×显 {withClose[index].ItemW:0.#} vs ×藏 {withoutClose[index].ItemW:0.#}"
+                    + $"（表头 {withClose[index].HeaderW:0.#} vs {withoutClose[index].HeaderW:0.#}）");
+            }
+        }
+
+        if (widened.Count > 0)
+        {
+            problems.Add("自检标签宽度: 原生 × 的显隐改变了标签宽度（宽度该一定，不该跟着鼠标变）：" + string.Join("；", widened));
+        }
+
+        if (wideNormal.Count > 0 && wideNormal.All(reading => reading.ItemW <= TabStrip.TabMinWidth + 0.01))
+        {
+            problems.Add("自检标签宽度: 长名字仍然贴着 82 的下限——这一发量不到换档，正对照没成立");
+        }
+
         foreach (var item in items)
         {
             VisualStateManager.GoToState(item, "PointerOver", true);

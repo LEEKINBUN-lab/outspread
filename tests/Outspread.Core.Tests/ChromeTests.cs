@@ -146,9 +146,10 @@ public class ChromeTests
         Assert.Equal(30, TabStrip.SettingsPx);
         Assert.Equal(6, TabStrip.SettingsRadius);
 
-        // 没有关闭键的那一档必须把整格留空；否则悬停长出 × 时整枚标签会变宽、邻居跟着跳。
-        Assert.Equal(TabStrip.CloseHitPx + TabStrip.CloseMarginPx + TabStrip.PadRight, TabStrip.CloseReservePx);
-        Assert.True(TabStrip.CloseReservePx > TabStrip.CloseHitPx);
+        // × 的那一格由表头文字自己的右边距留（CloseHitPx），所以"有 ×／没 ×"两档内缩不再分开——
+        // 两档一旦不等，模板换状态时标签宽度就跟着鼠标变。这一条由界面自检拿长名字正对照量
+        // （`selftest 标签宽度`：×显 与 ×藏 两个宽度必须相等，且长名必须越过 82 的下限），
+        // 常量表在这里量不到，故不再在此断言。
 
         // 悬停要有一档可看的差：非活动墨在浅底上要暗于条底，深底上要亮于条底。
         Assert.True(TabStrip.InactiveInk(false).R < TabStrip.StripBackground(false).R);

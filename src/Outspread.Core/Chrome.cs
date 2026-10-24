@@ -293,13 +293,7 @@ public static class TabStrip
 
     public const double CloseRadius = 12;
 
-    /// <summary>关闭键左缘与标签右内缩：没有关闭键的那一档要把这 30 留空，
-    /// 否则鼠标一停上去 × 长出来，整枚标签和邻居会横向跳一格。</summary>
-    public const double CloseMarginPx = 2;
-
     public const double PadRight = 4;
-
-    public const double CloseReservePx = CloseHitPx + CloseMarginPx + PadRight;
 
     /// <summary>加号那一枚：30×30、圆形悬停（Chrome 式），紧跟最后一枚标签，不再漂到标题条右边。
     /// 2026-10-23 他看过原型后把 28 的方角换成 30 的圆，并把全角 "＋" 换成系统 Add 字形——

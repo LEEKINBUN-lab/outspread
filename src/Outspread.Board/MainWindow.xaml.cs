@@ -5646,6 +5646,7 @@ public sealed partial class MainWindow : Window
 
         // 相机：幽灵格不许拉远"看到全部"；"回到 100%"以后屏幕上必须有内容。
         SelfTestCameraFraming(problems);
+        SelfTestTwoLineNoteAtFractionalZoom(problems);
 
         // 双击组名＝改名（不是空白新建）。
         SelfTestGroupLabelHit(problems);

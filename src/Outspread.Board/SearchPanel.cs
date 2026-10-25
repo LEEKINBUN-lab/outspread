@@ -351,6 +351,63 @@ public sealed partial class MainWindow
 
 
     /// <summary>
+    /// 两行便签在 160% 这样的小数缩放下也必须显示两行：所有尺寸都乘过 zoom，floor 之前若不留
+    /// epsilon，42/21 会算成 1.9999999999999998，第二行整行消失、渐隐却亮着（10-25 他报的）。
+    /// </summary>
+    private void SelfTestTwoLineNoteAtFractionalZoom(List<string> problems)
+    {
+        var saved = (_view.PanX, _view.PanY, _view.Zoom);
+        var note = _document.Add(CanvasNodeKind.Text, 40000, 40000, 260, 76);
+        note.Text = "快速\n所有";
+
+        try
+        {
+            _view.Zoom = 1.6;
+            _view.PanX = 24 - (note.X * 1.6);
+            _view.PanY = 16 - (note.Y * 1.6);
+
+            Rebuild();
+            ArrangeAll();
+            BoardArea.UpdateLayout();
+
+            if (!_realized.TryGetValue(note.Id, out var card))
+            {
+                problems.Add("自检两行缩放: 160% 下没有画出那枚便签");
+            }
+            else
+            {
+                var state = card.WindowState();
+                var fade = FindDescendant<Microsoft.UI.Xaml.Shapes.Rectangle>(card, "OverflowFadeBelow");
+
+                if (state.Visible < 2 || state.Total < 2)
+                {
+                    problems.Add(
+                        $"自检两行缩放: 160% 下两行便签只显示 {state.Visible}/{state.Total} 行（浮点取整把第二行吃掉）");
+                }
+
+                if (fade?.Visibility == Visibility.Visible)
+                {
+                    problems.Add("自检两行缩放: 放得下的便签在 160% 下仍压着底部渐隐");
+                }
+                else if (state.Visible >= 2)
+                {
+                    Diagnostics.Write($"selftest 两行缩放: 160% 下 76 高便签显示 {state.Visible}/{state.Total} 行、底部渐隐收着");
+                }
+            }
+        }
+        finally
+        {
+            _document.Remove(note.Id);
+            _view.PanX = saved.PanX;
+            _view.PanY = saved.PanY;
+            _view.Zoom = saved.Zoom;
+
+            Rebuild();
+            ArrangeAll();
+        }
+    }
+
+    /// <summary>
     /// 相机三问：0 尺寸的幽灵格与空组拉不拉远"看到全部"；fit 有没有把内容摆在正中；
     /// "回到 100%"以后屏幕上有没有内容、左上角是不是贴着内容。
     /// </summary>

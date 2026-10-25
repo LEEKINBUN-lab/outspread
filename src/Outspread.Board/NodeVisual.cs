@@ -712,7 +712,13 @@ public sealed class NodeVisual : ContentControl
             // 微软雅黑下会比 Chrome 多占一行；也可能被手柄压小。两种情况下都只允许整行截断，
             // 并用省略号说明"后面还有"，而不是让最后一行露出半截。
             var room = Math.Max(0, Height - (inset * 2));
-            var withChips = (int)Math.Floor((room - band) / leading);
+
+            // 行数按**世界尺寸**取整，或至少给浮点留一个 epsilon：所有量都乘过 zoom，
+            // 76 高、17 内距、21 行高在 160% 时得到 2.0000000000000004 还是 1.9999999999999998
+            // 全看这一发的乘除顺序——后者 floor 成 1，第二行整行消失，屏幕上看不出还有内容。
+            // 他 10-25 报的"编辑完不长大、渐隐也没提示"就是这一格（同样 42/21 在别的缩放是 2）。
+            const double lineEpsilon = 1e-6;
+            var withChips = (int)Math.Floor(((room - band) / leading) + lineEpsilon);
 
             IReadOnlyList<NoteMarks.Mark> chips = isGroup ? Array.Empty<NoteMarks.Mark>() : NoteMarks.Chips(marks, view.Today);
 
@@ -730,7 +736,7 @@ public sealed class NodeVisual : ContentControl
             // under them, so it comes off before anything asks how many lines fit.
             var roomText = Math.Max(0, showChips ? room - band : room);
 
-            _visibleLines = Math.Max(1, showChips ? withChips : (int)Math.Floor(room / leading));
+            _visibleLines = Math.Max(1, showChips ? withChips : (int)Math.Floor((room / leading) + lineEpsilon));
 
             var sourceLines = body.Split('\n');
 
@@ -818,7 +824,7 @@ public sealed class NodeVisual : ContentControl
             }
             else
             {
-                _label.MaxLines = Math.Max(1, showChips ? withChips : (int)Math.Floor(room / leading));
+                _label.MaxLines = _visibleLines;
                 _label.TextTrimming = TextTrimming.WordEllipsis;
             }
         }

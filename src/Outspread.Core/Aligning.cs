@@ -68,6 +68,14 @@ public static class Aligning
             _ => new Move(item.Id, item.X, bounds.Bottom - item.Height),
         }).ToList();
 
+        // 不齐的格子也可能在"另一轴"上本来就几乎同一条线：同高两枚、x 不同，左对齐后
+        // 就被搬到同一点上了。量的是**结果**的重合，不是"两条线贴没贴"——只要任何一对
+        // 压住对方 80% 以上，就按堆叠错开（10-25 他：重合度超过 80% 的就要自动规避）。
+        if (items.Count >= 2 && HeavilyOverlaps(items, moves))
+        {
+            return Stack(items);
+        }
+
         return new Outcome(items.Count >= 2, moves, Needed: 2, Have: items.Count);
     }
 
@@ -106,6 +114,41 @@ public static class Aligning
         return new Outcome(true, moves, Needed: 3, Have: items.Count);
     }
 
+    /// <summary>一对格子重合到"小的那一格被盖住八成以上"就算摞在一起了。</summary>
+    public const double OverlapLimit = 0.8;
+
+    private static bool HeavilyOverlaps(IReadOnlyList<Placed> items, IReadOnlyList<Move> moves)
+    {
+        for (var i = 0; i < items.Count; i++)
+        {
+            for (var j = i + 1; j < items.Count; j++)
+            {
+                if (OverlapShare(items[i], moves[i], items[j], moves[j]) >= OverlapLimit - 1e-9)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>两格按给定位置落下后，交集面积占**较小那一格**的比例（0–1）。</summary>
+    private static double OverlapShare(Placed a, Move ma, Placed b, Move mb)
+    {
+        var width = Math.Min(ma.X + a.Width, mb.X + b.Width) - Math.Max(ma.X, mb.X);
+        var height = Math.Min(ma.Y + a.Height, mb.Y + b.Height) - Math.Max(ma.Y, mb.Y);
+
+        if (width <= 0 || height <= 0)
+        {
+            return 0;
+        }
+
+        var smaller = Math.Min(a.Width * a.Height, b.Width * b.Height);
+
+        return smaller <= 0 ? 0 : (width * height) / smaller;
+    }
+
     /// <summary>这一轴是不是已经贴在同一条线上了（0.5px 以内算同一条）。</summary>
     private static bool FlushOnAxis(IReadOnlyList<Placed> items, Side side)
     {
@@ -127,7 +170,9 @@ public static class Aligning
     /// </summary>
     /// <remarks>
     /// NOT FOUND in any shipped product — tldraw's <c>stackShapes</c> lays a row, not a pile — so
-    /// 24 is our own value, chosen as "enough to see the edge of the one behind".
+    /// 24 is our own value, chosen as "enough to see the edge of the one behind". 大格子在 24px 的
+    /// 错位下仍会压住九成（10-25 他定的线是"重合不许超过 80%"），所以步长至少取短边的两成：
+    /// 竖向错开这么多，交集高度就不超过那短边的八成，面积比自然也在八成以内。
     /// </remarks>
     public static Outcome Stack(IReadOnlyList<Placed> items)
     {
@@ -137,12 +182,15 @@ public static class Aligning
         }
 
         var bounds = Bounds(items);
+        var step = Math.Ceiling(Math.Max(
+            MinGapPx,
+            (1 - OverlapLimit) * items.Max(item => Math.Min(item.Width, item.Height))));
 
         // The order is z-order as given: whoever wrote the list owns what ends up on top.
         var moves = items.Select((item, index) => new Move(
             item.Id,
-            bounds.X + (index * MinGapPx),
-            bounds.Y + (index * MinGapPx))).ToList();
+            bounds.X + (index * step),
+            bounds.Y + (index * step))).ToList();
 
         return new Outcome(true, moves, Needed: 2, Have: items.Count);
     }

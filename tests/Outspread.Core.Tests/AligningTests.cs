@@ -12,11 +12,13 @@ public class AligningTests
     private static Aligning.Placed Note(string id, double x, double y, double w = 100, double h = 60)
         => new(id, x, y, w, h);
 
+    // 三枚的竖向间距都大于"较小格的两成"——不对齐时它们互不重叠，对齐后也不该触发
+    // 80% 重合的堆叠兜底（那条走 Aligning_notes_that_would_land_on_top_of_each_other...）。
     private static readonly Aligning.Placed[] Row =
     [
         Note("a", 0, 0),
         Note("b", 200, 40),
-        Note("c", 500, 10),
+        Note("c", 500, 140),
     ];
 
     [Fact]
@@ -162,5 +164,57 @@ public class AligningTests
         };
 
         Assert.Equal(10, Aligning.Align(loose, Aligning.Side.Left).Moves[1].X);
+    }
+
+    [Fact]
+    public void Stacking_keeps_even_large_notes_under_the_eighty_percent_line()
+    {
+        var items = new[]
+        {
+            new Aligning.Placed("a", 0, 0, 400, 260),
+            new Aligning.Placed("b", 0, 0, 400, 260),
+        };
+
+        var moves = Aligning.Stack(items).Moves;
+        var dx = moves[1].X - moves[0].X;
+        var dy = moves[1].Y - moves[0].Y;
+        var share = ((400 - dx) * (260 - dy)) / (400 * 260);
+
+        Assert.True(share <= Aligning.OverlapLimit + 1e-9, $"重合度 {share:0.##} 超过了 80%");
+
+        // 小格子仍按 24px 的步长，不被这条放大。
+        Assert.Equal(Aligning.MinGapPx, Aligning.Stack(new[] { Note("a", 0, 0), Note("b", 0, 0) }).Moves[1].X);
+    }
+
+    [Fact]
+    public void Aligning_notes_that_would_land_on_top_of_each_other_falls_back_to_the_stagger()
+    {
+        // 同高、x 不同：只看"x 贴没贴线"看不出问题，左对齐会把两枚搬到完全同一点（100% 重合）。
+        var sameHeight = new[]
+        {
+            new Aligning.Placed("a", 10, 10, 200, 100),
+            new Aligning.Placed("b", 60, 12, 200, 100),
+        };
+
+        Assert.Equal(Aligning.Stack(sameHeight).Moves, Aligning.Align(sameHeight, Aligning.Side.Left).Moves);
+
+        // 同列、y 不同，上对齐同理。
+        var sameColumn = new[]
+        {
+            new Aligning.Placed("a", 10, 10, 200, 100),
+            new Aligning.Placed("b", 14, 110, 200, 100),
+        };
+
+        Assert.Equal(Aligning.Stack(sameColumn).Moves, Aligning.Align(sameColumn, Aligning.Side.Top).Moves);
+
+        // 正好 80% 以下（竖着只压住一半）照旧排成一条线，不该被当成摞在一起。
+        var slight = new[]
+        {
+            new Aligning.Placed("a", 10, 10, 200, 100),
+            new Aligning.Placed("b", 60, 60, 200, 100),
+        };
+
+        Assert.Equal(10, Aligning.Align(slight, Aligning.Side.Left).Moves[1].X);
+        Assert.Equal(60, Aligning.Align(slight, Aligning.Side.Left).Moves[1].Y);
     }
 }

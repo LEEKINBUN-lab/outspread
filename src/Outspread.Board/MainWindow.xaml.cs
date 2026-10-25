@@ -209,6 +209,14 @@ public sealed partial class MainWindow : Window
         BoardArea.DragOver += OnDragOver;
         BoardArea.Drop += OnDrop;
         BoardArea.DoubleTapped += OnSurfaceDoubleTapped;
+
+        // 组名输入框只有 LostFocus 收笔是不够的：这一版按一块不持焦点的区域不会把焦点从
+        // TextBox 拿走（板面编辑器与标签改名的注释里都记过同一条）。窗口级按下收笔，
+        // handledEventsToo 才能听见被标签/按钮吃掉的那一发。
+        Root.AddHandler(
+            UIElement.PointerPressedEvent,
+            new PointerEventHandler(CommitGroupRenameOnPress),
+            handledEventsToo: true);
         // Right-click is handled in the pointer paths rather than through
         // ContextRequested: this projection gives no pointer position on that event, and a
         // menu that opens at the wrong place is worse than no keyboard-menu shortcut.
@@ -765,6 +773,13 @@ public sealed partial class MainWindow : Window
 
     private void OnSurfacePressed(object sender, PointerRoutedEventArgs e)
     {
+        // 组名也是一样：这一发按在板子上＝名字到此为止，而且要在下面改选中之前收笔
+        // （CommitRename 里的 Rebuild 会清选中）。落在框里（例如右键要文本框菜单）不算。
+        if (_groupRenameBox is not null)
+        {
+            CommitGroupRenameIfOutside(e.OriginalSource as DependencyObject);
+        }
+
         if (e.Handled || _nodeGesture is not null || _resizeGesture is not null)
         {
             return;
@@ -1511,6 +1526,11 @@ public sealed partial class MainWindow : Window
         ClearEdgeSelection();
 
         // 同一条规矩：按在另一格上也是"这一格改完了"。先提交，再决定这一发是选中还是拖动。
+        if (_groupRenameBox is not null)
+        {
+            CommitGroupRenameIfOutside(e.OriginalSource as DependencyObject);
+        }
+
         if (_editingId is not null)
         {
             CloseEditor(commit: true);
@@ -2980,6 +3000,45 @@ public sealed partial class MainWindow : Window
         _groupRenameId = null;
     }
 
+    /// <summary>窗口里按下的那一发是不是落在改名框之外（落在框里＝还在编辑，不该收笔）。</summary>
+    private bool GroupRenamePressOutside(DependencyObject? source)
+    {
+        if (_groupRenameBox is not { } box)
+        {
+            return false;
+        }
+
+        while (source is not null)
+        {
+            if (ReferenceEquals(source, box))
+            {
+                return false;
+            }
+
+            source = VisualTreeHelper.GetParent(source);
+        }
+
+        return true;
+    }
+
+    /// <summary>点到标签条、工具栏、板面任何别处＝按"定名"收笔（Esc 才是"不改"）。</summary>
+    private void CommitGroupRenameOnPress(object sender, PointerRoutedEventArgs e)
+    {
+        CommitGroupRenameIfOutside(e.OriginalSource as DependencyObject);
+    }
+
+    /// <summary>落下点不在改名框里就收笔；返回是否收了（自检直接问这一条）。</summary>
+    private bool CommitGroupRenameIfOutside(DependencyObject? source)
+    {
+        if (!GroupRenamePressOutside(source))
+        {
+            return false;
+        }
+
+        CommitRename();
+        return true;
+    }
+
     private void SelectOnly(string id)
     {
         ClearSelection();
@@ -3584,13 +3643,26 @@ public sealed partial class MainWindow : Window
             var originalX = arrangePair.ConvertAll(node => node.X);
             var originalY = arrangePair.ConvertAll(node => node.Y);
 
+            // 对齐的结果不一定还是"同一条 x"：两枚在另一轴上本来就差不到 20% 时，Core 会退成
+            // 堆叠错开（10-25 他：重合超 80% 要自动规避）。这里量的是"界面照 Core 的账搬了"，
+            // 纯算术另由 Core 测试钉住。
+            var expectedMoves = Aligning.Align(
+                arrangePair.ConvertAll(node => new Aligning.Placed(node.Id, node.X, node.Y, node.Width, node.Height)),
+                Aligning.Side.Left).Moves;
+
             _selection.Add(arrangePair[1].Id);
             Arrange("左对齐", items => Aligning.Align(items, Aligning.Side.Left));
 
-            if (Math.Abs(NodeOf(arrangePair[0].Id)!.X - NodeOf(arrangePair[1].Id)!.X) > 0.001)
+            foreach (var move in expectedMoves)
             {
-                problems.Add(
-                    $"两格左对齐后还差 {Math.Abs(NodeOf(arrangePair[0].Id)!.X - NodeOf(arrangePair[1].Id)!.X):0.###} px");
+                var landed = NodeOf(move.Id)!;
+
+                if (Math.Abs(landed.X - move.X) > 0.001 || Math.Abs(landed.Y - move.Y) > 0.001)
+                {
+                    problems.Add(
+                        $"两格左对齐没落到 Core 算的位置：{landed.Id} 在 ({landed.X:0.###},{landed.Y:0.###})，" +
+                        $"应在 ({move.X:0.###},{move.Y:0.###})");
+                }
             }
 
             if (_history.UndoCount != undoBefore + 1)
@@ -3644,14 +3716,28 @@ public sealed partial class MainWindow : Window
                     _selection.Add(member.Id);
                 }
 
+                // 和上面那一发同理：同高的两枚左对齐会触发"重合超 80% 退成堆叠"，
+                // 落点不一定再是同一条 x。这里量"界面照 Core 的账搬了"，框跟随另算。
+                var placedBefore = members.Take(2)
+                    .Select(member => new Aligning.Placed(member.Id, member.X, member.Y, member.Width, member.Height))
+                    .ToList();
+                var expected = Aligning.Align(placedBefore, Aligning.Side.Left).Moves;
+
                 Arrange("左对齐", items => Aligning.Align(items, Aligning.Side.Left));
 
-                var alignedX = NodeOf(members[0].Id)!.X;
-
-                if (Math.Abs(alignedX - NodeOf(members[1].Id)!.X) > 0.001)
+                foreach (var move in expected)
                 {
-                    problems.Add($"排组内那两枚没对齐：还差 {Math.Abs(alignedX - NodeOf(members[1].Id)!.X):0.###} px");
+                    var landed = NodeOf(move.Id)!;
+
+                    if (Math.Abs(landed.X - move.X) > 0.001 || Math.Abs(landed.Y - move.Y) > 0.001)
+                    {
+                        problems.Add(
+                            $"排组内没落到 Core 算的位置：{landed.Id} 在 ({landed.X:0.#},{landed.Y:0.#})，" +
+                            $"应在 ({move.X:0.#},{move.Y:0.#})");
+                    }
                 }
+
+                var alignedX = NodeOf(members[0].Id)!.X;
 
                 var frameNow = RectOf(NodeOf(groupId)!);
                 var hug = DerivedFrames()[groupId];
@@ -3676,7 +3762,7 @@ public sealed partial class MainWindow : Window
                 else
                 {
                     Diagnostics.Write(
-                        $"selftest 排组内: {groupId} 里两枚对齐到 X={alignedX:0.#}，框跟着全组 {members.Count} 格重算，撤销一发框和格子一起回去");
+                        $"selftest 排组内: {groupId} 里两枚按 Core 的账落位（首格 X={alignedX:0.#}），框跟着全组 {members.Count} 格重算，撤销一发框和格子一起回去");
                 }
 
                 Rebuild();

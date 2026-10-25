@@ -892,6 +892,16 @@ public sealed partial class MainWindow
             }
         }
 
+        // 改名要在"组还活着"的时候试：造出来的那组等这一发过了再撤。
+        var renamed = SelfTestGroupRenameByOutsidePress(problems, group);
+
+        // 收尾：先撤改名那一条手势，再撤造组那一条。
+        if (renamed)
+        {
+            Undo();
+            Rebuild();
+        }
+
         if (created)
         {
             Undo();
@@ -901,9 +911,58 @@ public sealed partial class MainWindow
             {
                 problems.Add("自检组名: 造组测试收尾时撤销没回到原样");
             }
-
-            ClearSelection();
-            ProjectSelection();
         }
+
+        ClearSelection();
+        ProjectSelection();
+    }
+
+    /// <summary>
+    /// 输入新名字后点到别处＝定名。只挂 LostFocus 是不够的：这一版按不持焦点的区域不会把
+    /// 焦点从 TextBox 拿走（10-25 他报的"输入新名字后点击其他地方不会自动应用"）。
+    /// </summary>
+    private bool SelfTestGroupRenameByOutsidePress(List<string> problems, CanvasNode group)
+    {
+        var originalLabel = group.Label;
+
+        // 名字一定要和原值不同，否则 CommitRename 不动手，收尾那一发 Undo 会撤掉别的东西。
+        var wanted = originalLabel == "自检组名" ? "自检组名·二" : "自检组名";
+
+        BeginRenameGroup(group);
+
+        if (_groupRenameBox is null)
+        {
+            problems.Add("自检组名: 双击组名后没出现改名框");
+
+            return false;
+        }
+
+        if (GroupRenamePressOutside(_groupRenameBox))
+        {
+            problems.Add("自检组名: 按在改名框里也被当成点了别处");
+            CloseRename();
+
+            return false;
+        }
+
+        _groupRenameBox.Text = wanted;
+
+        if (!CommitGroupRenameIfOutside(BoardArea))
+        {
+            problems.Add("自检组名: 按在板面上没收笔画名");
+
+            return false;
+        }
+
+        if (NodeOf(group.Id)?.Label != wanted)
+        {
+            problems.Add($"自检组名: 点到别处后新名字没应用（读回 {NodeOf(group.Id)?.Label ?? "空"}，原来 {originalLabel ?? "空"}）");
+
+            return false;
+        }
+
+        Diagnostics.Write($"selftest 组名: 输入“{wanted}”后点板面＝定名（原 {originalLabel ?? "空"}）");
+
+        return true;
     }
 }

@@ -82,10 +82,19 @@ public static class BoardSearch
 
         var nodes = document.Nodes;
         var scored = new List<Scored>(nodes.Count);
+        var liveNotes = nodes.Where(node => node.Kind != CanvasNodeKind.Group).ToList();
+        var liveIds = new HashSet<string>(liveNotes.Select(node => node.Id), StringComparer.Ordinal);
 
         for (var index = 0; index < nodes.Count; index++)
         {
             var node = nodes[index];
+
+            // 空组（成员全删光了、渲染层也藏起来了）不参与检索：它顶着旧名字出现在结果里，
+            // 点了却什么也看不见——他 10-25 报的"测试/分组不在了还搜得到"。
+            if (node.Kind == CanvasNodeKind.Group && !GroupHasLiveMember(node, liveNotes, liveIds))
+            {
+                continue;
+            }
 
             if (TryScore(node, terms, out var position, out var length, out var snippet, out var start))
             {
@@ -342,4 +351,20 @@ public static class BoardSearch
         => string.IsNullOrWhiteSpace(query)
             ? []
             : query!.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+
+    /// <summary>
+    /// 这个框还有没有活着的成员：有名单就按名单（指针指向已删格子的不复存在）；
+    /// 没有名单的老框按几何收人。空组在画布上是隐形的，检索里也不该出现。
+    /// </summary>
+    private static bool GroupHasLiveMember(CanvasNode group, IReadOnlyList<CanvasNode> notes, HashSet<string> liveIds)
+    {
+        if (group.GroupMemberIds is { } roster)
+        {
+            return roster.Any(liveIds.Contains);
+        }
+
+        return notes.Any(note =>
+            note.X >= group.X && note.X <= group.X + group.Width
+            && note.Y >= group.Y && note.Y <= group.Y + group.Height);
+    }
 }

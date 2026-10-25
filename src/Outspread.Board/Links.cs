@@ -143,10 +143,6 @@ public sealed partial class MainWindow
         {
             SaveSoon();
         }
-        else
-        {
-            Say("这一头本来就在那一面");
-        }
 
         return changed;
     }

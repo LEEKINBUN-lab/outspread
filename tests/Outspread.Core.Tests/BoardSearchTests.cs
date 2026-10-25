@@ -91,8 +91,11 @@ public class BoardSearchTests
     [Fact]
     public void A_term_that_only_lives_in_the_label_still_lands_on_the_group()
     {
-        // 分组没有正文，只有名字；搜名字要能落在这块框上。
+        // 分组没有正文，只有名字；搜名字要能落在这块框上——前提是框里还有成员（空组是隐形的）。
         var document = Board("group", label: "周会记录", kind: CanvasNodeKind.Group);
+        var member = document.Add(CanvasNodeKind.Text, 20, 20, 120, 40, id: "n1");
+        member.Text = "成员";
+        document.Find("group")!.SetGroupMembers(["n1"]);
 
         var hit = Assert.Single(BoardSearch.Find(document, "周会"));
 
@@ -105,10 +108,32 @@ public class BoardSearchTests
     public void When_both_the_body_and_the_label_carry_the_word_the_body_is_what_shows()
     {
         var document = Board("n1", text: "正文里的接口说明", label: "接口", kind: CanvasNodeKind.Group);
+        var member = document.Add(CanvasNodeKind.Text, 20, 20, 120, 40, id: "n2");
+        member.Text = "成员";
+        document.Find("n1")!.SetGroupMembers(["n2"]);
 
         var hit = Assert.Single(BoardSearch.Find(document, "接口"));
 
         Assert.Equal("正文里的接口说明", hit.Snippet);   // Text 优先，片段从正文来
+    }
+
+    [Fact]
+    public void An_empty_group_is_invisible_on_the_board_and_absent_from_search()
+    {
+        // 他 10-25 报的：名叫 测试 / 分组 的框成员删光了，画布上早就不见，搜索还能搜到。
+        var document = Board("ghost", label: "测试 分组", kind: CanvasNodeKind.Group);
+        document.Find("ghost")!.SetGroupMembers([]);
+
+        Assert.Empty(BoardSearch.Find(document, "测试"));
+        Assert.Empty(BoardSearch.Find(document, "分组"));
+
+        // 有成员的框名字仍可搜：只在"空壳"这一档上拦。
+        var visible = Board("visible", label: "分组", kind: CanvasNodeKind.Group);
+        var member = visible.Add(CanvasNodeKind.Text, 20, 20, 120, 40, id: "n1");
+        member.Text = "正文";
+        visible.Find("visible")!.SetGroupMembers(["n1"]);
+
+        Assert.Single(BoardSearch.Find(visible, "分组"));
     }
 
     [Fact]

@@ -159,7 +159,11 @@ internal static class ChromeStyling
     /// transparent stroke the same way.
     /// </para>
     /// </summary>
-    public static Border Chip(NoteMarks.Mark mark, double size, Color ink, Action onDelete)
+    /// <summary>
+    /// 卡片/编辑器上的一枚标记牌。点牌身＝编辑这枚标记，只有右侧的 × 才删它——他不是要
+    /// "点哪儿都删"：× 显示出来却点不到，等于没有。
+    /// </summary>
+    public static Border Chip(NoteMarks.Mark mark, double size, Color ink, Action onDelete, Action onEdit)
     {
         var scale = size / NoteType.ChipFontPx;
         var self = new Rgb(ink.R, ink.G, ink.B);
@@ -206,11 +210,19 @@ internal static class ChromeStyling
             FontFamily = NoteStyling.NoteFont,
             FontSize = size,
             Foreground = new SolidColorBrush(body),
+        };
+
+        // × 自己一块命中区：点它才删，点牌身是编辑；不悬停时整块不接鼠标。
+        var crossHost = new Border
+        {
+            Child = cross,
+            Padding = new Thickness(4 * scale, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
             Visibility = Visibility.Collapsed,
         };
 
         inner.Children.Add(label);
-        inner.Children.Add(cross);
+        inner.Children.Add(crossHost);
 
         var border = new Border
         {
@@ -222,21 +234,29 @@ internal static class ChromeStyling
             Height = NoteType.ChipBandPx * scale,
         };
 
-        ToolTipService.SetToolTip(border, mark.IsDate ? "移上来点一下＝去掉这个日期" : "移上来点一下＝去掉这个标签");
+        ToolTipService.SetToolTip(border, mark.IsDate ? "点一下＝改这个日期；点 × 去掉" : "点一下＝改这个标签；点 × 去掉");
 
         border.PointerEntered += (_, _) =>
         {
             border.Background = new SolidColorBrush(hover);
-            cross.Visibility = Visibility.Visible;
+            crossHost.Visibility = Visibility.Visible;
         };
         border.PointerExited += (_, _) =>
         {
             border.Background = new SolidColorBrush(rest);
-            cross.Visibility = Visibility.Collapsed;
+            crossHost.Visibility = Visibility.Collapsed;
         };
         border.PointerPressed += (_, args) =>
         {
             // 这一发不归拖动：牌子是卡片上的控件，按到它就是要点它。
+            args.Handled = true;
+
+            onEdit();
+        };
+
+        crossHost.PointerPressed += (_, args) =>
+        {
+            // 吃掉这一发，牌身那一层不能再收到：点 × 只删，不进编辑。
             args.Handled = true;
 
             onDelete();

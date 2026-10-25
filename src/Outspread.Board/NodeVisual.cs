@@ -200,6 +200,9 @@ public sealed class NodeVisual : ContentControl
     /// <summary>Set by the window: (node id, the exact span in the text) → remove it, undoably.</summary>
     internal Action<string, string>? RemoveMark;
 
+    /// <summary>Set by the window: (node id, the exact span) → open the editor with that mark selected.</summary>
+    internal Action<string, string>? EditMark;
+
     /// <summary>The chips are rebuilt only when their content changed: re-making them every frame of a
     /// pan would drop the hover state the × depends on.</summary>
     private string _chipKey = string.Empty;
@@ -1113,7 +1116,12 @@ public sealed class NodeVisual : ContentControl
         {
             var source = chip.Source;
 
-            _chips.Children.Add(ChromeStyling.Chip(chip, NoteType.ChipFont(zoom), ink, () => RemoveMark?.Invoke(NodeId, source)));
+            _chips.Children.Add(ChromeStyling.Chip(
+                chip,
+                NoteType.ChipFont(zoom),
+                ink,
+                () => RemoveMark?.Invoke(NodeId, source),
+                () => EditMark?.Invoke(NodeId, source)));
         }
     }
 

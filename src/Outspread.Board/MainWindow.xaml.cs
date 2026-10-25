@@ -411,6 +411,16 @@ public sealed partial class MainWindow : Window
             _document = document;
             _baseJson = text;
 
+            // 打开时把只剩空壳的组收掉：它们不可见、不可点，只在搜索/同步里顶着旧名字。
+            // 删的是文档里已经死掉的框架，下一次保存会把它从文件里带走。
+            var shells = PurgeEmptyGroups();
+
+            if (shells > 0)
+            {
+                Diagnostics.Write($"打开时收掉 {shells} 个空组");
+                SaveSoon();
+            }
+
             // 先把上一次开着的那一排**读进局部量**：`RememberLastBoard` 现在两样一起写，而它必须写在
             // 恢复**之后**——写在前面就会把这一排按"此刻只剩这一块"覆盖掉，于是每开一次软件少一块板
             // （真机两发都红过：第一发 restore 空手而归，第二发只剩 2 枚标签）。
@@ -664,6 +674,7 @@ public sealed partial class MainWindow : Window
         // 卡片左下角那排牌子的删除路径走这里：它删的是正文里那一枚 token，所以是一步可撤销的文档改动，
         // 不是视图状态。
         visual.RemoveMark = RemoveMarkFrom;
+        visual.EditMark = EditMarkFrom;
 
         return visual;
     }
@@ -3293,6 +3304,14 @@ public sealed partial class MainWindow : Window
             _document.Remove(id);
         }
 
+        // 删完成员后没成员的组一起收掉：否则它们只是被藏起来，搜索里还能搜到。
+        var purged = PurgeEmptyGroups();
+
+        if (purged > 0)
+        {
+            Diagnostics.Write($"删除时收掉 {purged} 个空组");
+        }
+
         ClearSelection();
 
         EndGesture();
@@ -3583,6 +3602,7 @@ public sealed partial class MainWindow : Window
 
         // 组框与空组的读数要取在这一拍：后面的排布/拖拽会真的改动成员。
         SelfTestGroups(problems);
+        SelfTestMarkChipEdits(problems);
         SelfTestCulledVisuals(problems);
         SelfTestFreshNoteIsFree(problems);
 

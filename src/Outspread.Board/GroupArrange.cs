@@ -164,6 +164,27 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
+    /// 把成员已经一个不剩的组从文档里真正删掉。删完成员的组框既看不见也点不到（EmptyGroupIds
+    /// 会藏它），留在文件里只剩搜索和同步里的一个鬼名——他 10-25 的"测试/分组不在了还搜得到"
+    /// 就是这种空壳。返回删了几个，调用方负责把它包在同一个撤销步里。
+    /// </summary>
+    private int PurgeEmptyGroups()
+    {
+        var map = Groups();
+        var dead = GroupRects()
+            .Where(frame => map.Members(frame.Id).Count == 0)
+            .Select(frame => frame.Id)
+            .ToList();
+
+        foreach (var id in dead)
+        {
+            _document.Remove(id);
+        }
+
+        return dead.Count;
+    }
+
+    /// <summary>
     /// 自检：有成员的组框必须已经等于成员包围盒；空组必须不可见、不可点。
     /// 这是对 10-22 截图里"虚线框切过便签、旁边还有一个空的大框"那两格的回归锁。
     /// </summary>

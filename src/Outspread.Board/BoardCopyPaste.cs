@@ -95,6 +95,14 @@ public sealed partial class MainWindow
             _document.Remove(node.Id);
         }
 
+        // 和删除同一条：名单空了的组连框一起收掉，别留下搜得到的空壳。
+        var purged = PurgeEmptyGroups();
+
+        if (purged > 0)
+        {
+            Diagnostics.Write($"剪切时收掉 {purged} 个空组");
+        }
+
         ClearSelection();
         EndGesture();
         Rebuild();

@@ -308,6 +308,59 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
+    /// 卡片上的牌子被点了一下＝编辑这一枚标记：打开这一格的编辑器，把 token 从隐藏块挪进正文
+    /// 并选中，直接打新值就行。删除只留给牌子右侧的 ×。
+    /// </summary>
+    private void EditMarkFrom(string nodeId, string token)
+    {
+        if (NodeOf(nodeId) is not { Kind: CanvasNodeKind.Text })
+        {
+            return;
+        }
+
+        BeginEdit(nodeId);
+        BeginMarkEdit(token);
+    }
+
+    /// <summary>
+    /// 把一枚标记从隐藏属性块挪进编辑器正文（单独一行）并选中它，等用户改写。
+    /// 日期/标签/序号都只是 token，改法一致；提交时解析器会把它重新认成标记。
+    /// </summary>
+    private void BeginMarkEdit(string token)
+    {
+        if (_editor is null || string.IsNullOrEmpty(token))
+        {
+            return;
+        }
+
+        var lines = _editorProps
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+
+        if (!lines.Any(line => line.Contains(token, StringComparison.Ordinal)))
+        {
+            // 已经在正文里（或者标记已经不在了）：编辑器开着，让用户自己改。
+            _editor.Focus(FocusState.Programmatic);
+
+            return;
+        }
+
+        _editorProps = string.Join('\n', lines
+            .Select(line => line.Replace(token, string.Empty, StringComparison.Ordinal).Trim())
+            .Where(line => line.Length > 0));
+
+        var body = _editor.Text;
+        var lead = body.Length > 0 && !body.EndsWith('\n') ? "\n" : string.Empty;
+
+        _editor.Text = body + lead + token;
+        _editor.Focus(FocusState.Programmatic);
+        _editor.SelectionStart = body.Length + lead.Length;
+        _editor.SelectionLength = token.Length;
+
+        PaintEditorChips();
+    }
+
+    /// <summary>
     /// The chips inside the editor. He asked for this specifically: pressing Enter on a tag must make
     /// it leave the text field <b>then</b>, not after the edit finishes — so the strip that will end up
     /// on the card is shown in the editor too, and deleting one there edits the same pending block.
@@ -330,12 +383,17 @@ public sealed partial class MainWindow
         {
             var source = chip.Source;
 
-            _editorChips.Children.Add(ChromeStyling.Chip(chip, size, NoteStyling.InkFor(null, NoteStyling.SurfaceFor(null)), () =>
-            {
-                _editorProps = Tags.Without(_editorProps, source);
+            _editorChips.Children.Add(ChromeStyling.Chip(
+                chip,
+                size,
+                NoteStyling.InkFor(null, NoteStyling.SurfaceFor(null)),
+                () =>
+                {
+                    _editorProps = Tags.Without(_editorProps, source);
 
-                PaintEditorChips();
-            }));
+                    PaintEditorChips();
+                },
+                () => BeginMarkEdit(source)));
         }
 
         _editorChips.Visibility = _editorChips.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -353,6 +411,59 @@ public sealed partial class MainWindow
         _view.DueFilter = null;
 
         Rebuild();
+    }
+
+    /// <summary>
+    /// 牌子的两扇门：点牌身＝编辑（token 挪进正文并选中），只有 × 才是删除。
+    /// 只打开来编辑、不提交，文档必须一个字节都不动。
+    /// </summary>
+    private void SelfTestMarkChipEdits(List<string> problems)
+    {
+        var target = BoardNotes()
+            .Where(node => node.Kind == CanvasNodeKind.Text)
+            .Select(node => (Node: node, Chips: NoteMarks.Chips(Tags.Read(node.Text), _view.Today)))
+            .FirstOrDefault(pair => pair.Chips.Count > 0);
+
+        if (target.Node is null)
+        {
+            Diagnostics.Write("selftest 标记牌: 板上没有带标记的格子，这一发不适用");
+
+            return;
+        }
+
+        var before = _document.ToJson();
+        var token = target.Chips[0].Source;
+
+        EditMarkFrom(target.Node.Id, token);
+
+        if (_editor is null)
+        {
+            problems.Add("自检标记牌: 点牌身没打开编辑器");
+
+            return;
+        }
+
+        if (!_editor.Text.Contains(token, StringComparison.Ordinal) || _editor.SelectionLength != token.Length)
+        {
+            problems.Add(
+                $"自检标记牌: 点牌身没把 {token} 挪进正文并选中（框里『{_editor.Text}』，选中 {_editor.SelectionLength} 字）");
+        }
+
+        if (Tags.Read(_editorProps).Props.Contains(token, StringComparison.Ordinal))
+        {
+            problems.Add("自检标记牌: 编辑时 token 还留在隐藏块里，提交会多出一枚");
+        }
+
+        CloseEditor(commit: false);
+
+        if (_document.ToJson() != before)
+        {
+            problems.Add("自检标记牌: 只是打开来编辑，取消却改了文档");
+        }
+        else
+        {
+            Diagnostics.Write($"selftest 标记牌: 点牌身打开编辑器、{token} 已选中且隐藏块不重复；取消不写文档");
+        }
     }
 
     private void SetTagFilter(string? tag)

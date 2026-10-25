@@ -174,6 +174,7 @@ public sealed class NodeVisual : ContentControl
     /// <summary>自检读的第三个数：实际允许画几行（有溢出时会比可见行多一行半行）。</summary>
     internal int RenderedMaxLines => _label.MaxLines;
 
+
     private int _totalLines = 1;
 
     /* "还有没有藏起来的行"必须按**视觉行**算：一段长句子在窄格子里会绕成三四行，
@@ -275,6 +276,7 @@ public sealed class NodeVisual : ContentControl
         {
             TextWrapping = TextWrapping.Wrap,
             FontFamily = NoteStyling.NoteFont,
+            VerticalAlignment = VerticalAlignment.Top,
         };
 
         _textHost.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -721,6 +723,10 @@ public sealed class NodeVisual : ContentControl
             // 全看这一发的乘除顺序——后者 floor 成 1，第二行整行消失，屏幕上看不出还有内容。
             // 他 10-25 报的"编辑完不长大、渐隐也没提示"就是这一格（同样 42/21 在别的缩放是 2）。
             const double lineEpsilon = 1e-6;
+
+            // 正文能用到卡片下沿（下内距被下一行的半行借走），所以"完整行数"只扣上内距；
+            // 用两倍内距算会把本可以显示的下一行提前判成溢出，于是只能整行显示/整行消失。
+            var lineRoom = Math.Max(0, Height - inset);
             var withChips = (int)Math.Floor(((room - band) / leading) + lineEpsilon);
 
             IReadOnlyList<NoteMarks.Mark> chips = isGroup ? Array.Empty<NoteMarks.Mark>() : NoteMarks.Chips(marks, view.Today);
@@ -739,7 +745,7 @@ public sealed class NodeVisual : ContentControl
             // under them, so it comes off before anything asks how many lines fit.
             var roomText = Math.Max(0, showChips ? room - band : room);
 
-            _visibleLines = Math.Max(1, showChips ? withChips : (int)Math.Floor((room / leading) + lineEpsilon));
+            _visibleLines = Math.Max(1, showChips ? withChips : (int)Math.Floor((lineRoom / leading) + lineEpsilon));
 
             var sourceLines = body.Split('\n');
 
@@ -830,7 +836,20 @@ public sealed class NodeVisual : ContentControl
                 // 还有内容时多放一行在卡底外面：卡自己会裁掉大半行，渐隐再压上去，
                 // 屏幕上就露出"半行正在淡出"，而不是一行都不剩、只剩一片空白。
                 _label.MaxLines = _hasMore ? _visibleLines + 1 : _visibleLines;
-                _label.TextTrimming = TextTrimming.WordEllipsis;
+
+                // 有溢出时不加省略号：WordEllipsis 会把放不下的下一行整行换成"…"，
+                // 于是永远看不到半行；None 才允许它被卡片的 Clip 从中间裁断。
+                _label.TextTrimming = _hasMore ? TextTrimming.None : TextTrimming.WordEllipsis;
+
+                // 文字宿主本来只到下内距的上沿；溢出时把下内距让给它，半行才能真的画出来，
+                // 再由卡片外沿裁断。没有溢出、或有牌子时恢复上下对称的内距。
+                _surface.Padding = _hasMore && !showChips
+                    ? new Thickness(inset, inset, inset, 0)
+                    : new Thickness(inset);
+
+                // 多出的那一行不额外限高：标签照常排到卡底，由卡片自己的 Clip 从中间裁断，
+                // 底部渐隐再把它吃掉——这才是"半行"。限成正文区高度反而会让整行消失。
+                _label.ClearValue(FrameworkElement.HeightProperty);
             }
         }
         else if (Kind == CanvasNodeKind.File)
@@ -949,7 +968,18 @@ public sealed class NodeVisual : ContentControl
         var surface = NoteStyling.SurfaceFor(node.Color);
         var solid = Color.FromArgb(255, surface.R, surface.G, surface.B);
         var clear = Color.FromArgb(0, surface.R, surface.G, surface.B);
-        var height = Math.Clamp(22 * view.Zoom, 12, 34);
+
+        // 渐隐贴着**正文区**的上下边，而不是卡片外沿：卡片还有一圈内距，压在外沿上的
+        // 那道只会盖住空白，文字一点都没被淡到（他 10-25 的第二张截图就是这一格）。
+        var type = NoteTypography.For(view.FontSizeFor(node.Id));
+        var inset = Math.Clamp(type.Padding * view.Zoom, 0, 60);
+
+        // 从"最后一个完整行所在的顶边"一直盖到卡片外沿：内距那段也算进去，否则文字被允许
+        // 溢进内距时，渐隐会在内距上沿就结束，下面又露出一截实字（硬切边）。
+        var height = Math.Clamp(inset + (type.Leading * view.Zoom), 12, 80);
+
+        _fadeAbove.Margin = default;
+        _fadeBelow.Margin = default;
 
         if (above)
         {

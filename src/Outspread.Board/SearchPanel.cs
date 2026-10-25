@@ -353,6 +353,74 @@ public sealed partial class MainWindow
     /// <summary>
     /// 只差几像素的手动尺寸按误触修正；断头线（一端便签已删）在打开/删除时真正清掉。
     /// </summary>
+    /// <summary>
+    /// 内容确实放不下时：底部渐隐要亮，而且卡里要真的多画半行，否则渐隐压在空白上，
+    /// 屏幕上还是"看不出有没有显示完"（他 10-25 报的第二条）。
+    /// </summary>
+    private void SelfTestOverflowCue(List<string> problems)
+    {
+        var saved = (_view.PanX, _view.PanY, _view.Zoom);
+        var note = _document.Add(CanvasNodeKind.Text, 40000, 40000, 260, 68);
+        note.Text = "快速\n所有\n再看";
+        _view.MarkManualSize(note.Id);
+
+        try
+        {
+            _view.Zoom = 1.4;
+            _view.PanX = 24 - (note.X * 1.4);
+            _view.PanY = 16 - (note.Y * 1.4);
+
+            Rebuild();
+            ArrangeAll();
+            BoardArea.UpdateLayout();
+
+            if (!_realized.TryGetValue(note.Id, out var card))
+            {
+                problems.Add("自检溢出处: 140% 下没有画出那枚便签");
+
+                return;
+            }
+
+            var state = card.WindowState();
+            var fade = FindDescendant<Microsoft.UI.Xaml.Shapes.Rectangle>(card, "OverflowFadeBelow");
+
+            if (!state.HasMore)
+            {
+                problems.Add("自检溢出处: 68 高的三行便签没被判定为还有内容");
+            }
+
+            if (fade?.Visibility != Visibility.Visible)
+            {
+                problems.Add("自检溢出处: 内容放不下时底部渐隐没有亮");
+            }
+
+            if (card.RenderedMaxLines <= state.Visible)
+            {
+                problems.Add(
+                    $"自检溢出处: 渐隐亮着但只画了 {card.RenderedMaxLines} 行（可见 {state.Visible}）——渐隐压在空白上");
+            }
+            else
+            {
+                Diagnostics.Write(
+                    $"selftest 溢出处: 68 高便签可见 {state.Visible} 行、多画 {card.RenderedMaxLines - state.Visible} 行半行，底部渐隐亮");
+            }
+        }
+        finally
+        {
+            _view.UnmarkManualSize(note.Id);
+            _document.Remove(note.Id);
+            _view.PanX = saved.PanX;
+            _view.PanY = saved.PanY;
+            _view.Zoom = saved.Zoom;
+
+            Rebuild();
+            ArrangeAll();
+        }
+    }
+
+    /// <summary>
+    /// 只差几像素的手动尺寸按误触修正；断头线（一端便签已删）在打开/删除时真正清掉。
+    /// </summary>
     private void SelfTestRepairs(List<string> problems)
     {
         var note = _document.Add(CanvasNodeKind.Text, 40000, 40000, 260, 60);
@@ -391,71 +459,6 @@ public sealed partial class MainWindow
         if (problems.Count == 0)
         {
             Diagnostics.Write("selftest 修复: 5px 误触尺寸回到自动高度；断头线在删除后清掉");
-        }
-    }
-
-    /// <summary>
-    /// 内容确实放不下时：底部渐隐要亮，而且卡里要真的多画半行，否则渐隐压在空白上，
-    /// 屏幕上还是"看不出有没有显示完"（他 10-25 报的第二条）。
-    /// </summary>
-    private void SelfTestOverflowCue(List<string> problems)
-    {
-        var saved = (_view.PanX, _view.PanY, _view.Zoom);
-        var note = _document.Add(CanvasNodeKind.Text, 40000, 40000, 260, 60);
-        note.Text = "快速\n所有";
-        _view.MarkManualSize(note.Id);
-
-        try
-        {
-            _view.Zoom = 1.4;
-            _view.PanX = 24 - (note.X * 1.4);
-            _view.PanY = 16 - (note.Y * 1.4);
-
-            Rebuild();
-            ArrangeAll();
-            BoardArea.UpdateLayout();
-
-            if (!_realized.TryGetValue(note.Id, out var card))
-            {
-                problems.Add("自检溢出处: 140% 下没有画出那枚便签");
-
-                return;
-            }
-
-            var state = card.WindowState();
-            var fade = FindDescendant<Microsoft.UI.Xaml.Shapes.Rectangle>(card, "OverflowFadeBelow");
-
-            if (!state.HasMore)
-            {
-                problems.Add("自检溢出处: 60 高的两行便签没被判定为还有内容");
-            }
-
-            if (fade?.Visibility != Visibility.Visible)
-            {
-                problems.Add("自检溢出处: 内容放不下时底部渐隐没有亮");
-            }
-
-            if (card.RenderedMaxLines <= state.Visible)
-            {
-                problems.Add(
-                    $"自检溢出处: 渐隐亮着但只画了 {card.RenderedMaxLines} 行（可见 {state.Visible}）——渐隐压在空白上");
-            }
-            else
-            {
-                Diagnostics.Write(
-                    $"selftest 溢出处: 60 高便签可见 {state.Visible} 行、多画 {card.RenderedMaxLines - state.Visible} 行半行，底部渐隐亮");
-            }
-        }
-        finally
-        {
-            _view.UnmarkManualSize(note.Id);
-            _document.Remove(note.Id);
-            _view.PanX = saved.PanX;
-            _view.PanY = saved.PanY;
-            _view.Zoom = saved.Zoom;
-
-            Rebuild();
-            ArrangeAll();
         }
     }
 

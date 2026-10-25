@@ -56,6 +56,9 @@ public sealed partial class MainWindow
 
     private TextBox? _renameBox;
 
+    /// <summary>改名冲突的选择框开着时不再叠第二个。</summary>
+    private bool _renameConflictBusy;
+
     /// <summary>提交/取消已经在走时，LostFocus 不许再进一次——它会对着已经被换掉的头再提交一遍。</summary>
     private bool _renameBusy;
 
@@ -1307,7 +1310,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Say($"切走之前那一份相机没存上：{ex.Message}");
+            Say($"切换前的视图状态未能保存：{ex.Message}");
         }
 
         SaveNow();
@@ -1372,7 +1375,7 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             Diagnostics.Write($"delete confirm failed: {ex}");
-            Say("没能弹出确认框，这块板先不删");
+            Say("无法显示确认框，已取消删除");
 
             return false;
         }
@@ -1387,13 +1390,13 @@ public sealed partial class MainWindow
 
         if (IsAllNotes(_boardPath))
         {
-            Say("『所有便签』是固定的总览页，关不掉");
+            Say("“所有便签”是固定总览页，无法关闭");
             return;
         }
 
         if (RealBoardCount <= 1)
         {
-            Say("最后一块板不给关：先按 Ctrl+N 起一块，再关它——关掉一块＝从本机删掉这块板");
+            Say("无法关闭最后一块板：请先按 Ctrl+N 新建一块；关闭板将从本机删除该板");
 
             return;
         }
@@ -1406,7 +1409,7 @@ public sealed partial class MainWindow
 
         if (!await ConfirmBoardDeleteAsync([closingPath]))
         {
-            Say($"没关，{closedName} 还在");
+            Say($"已取消关闭，{closedName} 仍保留");
 
             return;
         }
@@ -1425,7 +1428,7 @@ public sealed partial class MainWindow
 
         if (error is not null)
         {
-            Say($"没删掉 {closedName}：{error}；板子还开着");
+            Say($"未能删除 {closedName}：{error}；板仍保持打开");
 
             return;
         }
@@ -1433,15 +1436,15 @@ public sealed partial class MainWindow
         _openBoards.RemoveAt(closing);
         RebuildTabs();
         Say(
-            $"删掉了 {closedName}（本机文件与历史已删{(syncWasOn ? "；远端仓库那份不在这一下里" : "")}），" +
-            $"回到 {BoardName(neighbour)}");
+            $"已删除 {closedName}（本机文件与历史已删除{(syncWasOn ? "；远端仓库中的副本不在本次范围内" : "")}），" +
+            $"已切换到 {BoardName(neighbour)}");
     }
 
     private async void CloseTab(string path)
     {
         if (IsAllNotes(path))
         {
-            Say("『所有便签』是固定的总览页，关不掉");
+            Say("“所有便签”是固定总览页，无法关闭");
             return;
         }
 
@@ -1452,7 +1455,7 @@ public sealed partial class MainWindow
 
         if (RealBoardCount <= 1)
         {
-            Say("最后一块板不给关：先按 Ctrl+N 起一块，再关它——关掉一块＝从本机删掉这块板");
+            Say("无法关闭最后一块板：请先按 Ctrl+N 新建一块；关闭板将从本机删除该板");
 
             return;
         }
@@ -1470,7 +1473,7 @@ public sealed partial class MainWindow
 
         if (!await ConfirmBoardDeleteAsync([path]))
         {
-            Say($"没关，{closedName} 还在");
+            Say($"已取消关闭，{closedName} 仍保留");
 
             return;
         }
@@ -1480,21 +1483,21 @@ public sealed partial class MainWindow
 
         if (error is not null)
         {
-            Say($"没删掉 {closedName}：{error}");
+            Say($"未能删除 {closedName}：{error}");
 
             return;
         }
 
         _openBoards.RemoveAll(open => SameBoard(open, path));
         RebuildTabs();
-        Say($"删掉了 {closedName}（本机文件与历史已删{(syncWasOn ? "；远端仓库那份不在这一下里" : "")}）");
+        Say($"已删除 {closedName}（本机文件与历史已删除{(syncWasOn ? "；远端仓库中的副本不在本次范围内" : "")}）");
     }
 
     private async void CloseOtherBoards(string path)
     {
         if (RealBoardCount <= 1)
         {
-            Say("只开着这一块板，没有别的可关");
+            Say("当前仅打开一块板，没有其他板可关闭");
 
             return;
         }
@@ -1515,14 +1518,14 @@ public sealed partial class MainWindow
 
         if (closedPaths.Count == 0)
         {
-            Say("没有别的可关");
+            Say("没有其他板可关闭");
 
             return;
         }
 
         if (!await ConfirmBoardDeleteAsync(closedPaths))
         {
-            Say("没关，其余板子还在");
+            Say("已取消，其他板仍保留");
 
             return;
         }
@@ -1549,11 +1552,11 @@ public sealed partial class MainWindow
         _openBoards.RemoveAll(open => deleted.Exists(gone => SameBoard(gone, open)));
         RebuildTabs();
 
-        var suffix = syncWasOn ? "；远端仓库那几份不在这一下里" : string.Empty;
+        var suffix = syncWasOn ? "；远端仓库中的副本不在本次范围内" : string.Empty;
 
         Say(failures.Count == 0
-            ? $"删掉了 {deleted.Count} 块板（本机文件与历史已删{suffix}），留着 {BoardName(path)}"
-            : $"删掉了 {deleted.Count} 块板，{failures.Count} 块没删掉：{string.Join("；", failures)}；留着 {BoardName(path)}");
+            ? $"已删除 {deleted.Count} 块板（本机文件与历史已删除{suffix}），保留 {BoardName(path)}"
+            : $"已删除 {deleted.Count} 块板，{failures.Count} 块未能删除：{string.Join("；", failures)}；保留 {BoardName(path)}");
     }
 
     /// <summary>
@@ -1609,7 +1612,7 @@ public sealed partial class MainWindow
     {
         if (_openBoards.Count < 2)
         {
-            Say("只开着这一块板：Ctrl+N 再起一块");
+            Say("当前仅打开一块板：按 Ctrl+N 新建");
 
             return;
         }
@@ -1657,7 +1660,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Say($"这块板没建出来：{ex.Message}");
+            Say($"新建板失败：{ex.Message}");
 
             return;
         }
@@ -1695,7 +1698,7 @@ public sealed partial class MainWindow
     {
         if (IsAllNotes(path))
         {
-            Say("『所有便签』是固定的总览页，没有名字可改");
+            Say("“所有便签”是固定总览页，无法改名");
             return;
         }
 
@@ -2001,7 +2004,7 @@ public sealed partial class MainWindow
 
             if (problem is not null)
             {
-                Say($"改名没成：{problem}");
+                Say($"改名失败：{problem}");
 
                 if (item is not null)
                 {
@@ -2039,7 +2042,6 @@ public sealed partial class MainWindow
     private string? ApplyBoardRename(string oldPath, string newPath, bool publishMarker = true)
     {
         var current = SameBoard(oldPath, _boardPath ?? string.Empty);
-        var syncWasOn = _sync?.Enabled == true;
         var item = TabItemFor(oldPath);
 
         if (current)
@@ -2101,11 +2103,9 @@ public sealed partial class MainWindow
             StartBoardServicesAfterRename();
         }
 
-        Say(syncWasOn
-            ? ledgerProblem is null
-                ? $"改名为 {BoardName(newPath)}｜下一轮同步把改名发到远端，仓里旧名那两份跟着删（同伴那一台会自己搬过来）"
-                : $"改名为 {BoardName(newPath)}｜远端还没跟上：{ledgerProblem}"
-            : $"改名为 {BoardName(newPath)}");
+        Say(ledgerProblem is null
+            ? $"{BoardName(oldPath)}已被修改为 {BoardName(newPath)}"
+            : $"{BoardName(oldPath)}已被修改为 {BoardName(newPath)}，同步失败：{ledgerProblem}");
 
         // 账本没搬成不是"改名失败"：文件已经搬了、本机改名已经成了，只是同步这一轮跟不上——
         // 那句话已经写进日志与回执，这里不把它升级成回滚（回滚会把一块已经改好的板子搬回旧名）。
@@ -2113,9 +2113,91 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
+    /// 本机已有同名板时的选择：把本机那块让开（加“（本机）”后缀）并跟随远端，或保留现状。
+    /// 自检里不弹框，按“保留现状”处理。
+    /// </summary>
+    private async void AskRenameConflict(string oldPath, string oldName, string newStem, string newPath)
+    {
+        if (_renameConflictBusy)
+        {
+            return;
+        }
+
+        _renameConflictBusy = true;
+
+        try
+        {
+            if (App.SelfTest || Root.XamlRoot is null)
+            {
+                Diagnostics.Write("改名冲突: 无法显示选择框，保留现状");
+
+                return;
+            }
+
+            var folder = Path.GetDirectoryName(newPath) ?? ".";
+            var uniqueStem = UniqueBoardStem(folder, newStem);
+
+            var dialog = new ContentDialog
+            {
+                XamlRoot = Root.XamlRoot,
+                Title = "名称冲突",
+                Content = $"“{newStem}”已存在。将本机同名板改名为“{uniqueStem}”，并让“{oldName}”跟随远端改名为“{newStem}”？",
+                PrimaryButtonText = "改名并跟随",
+                SecondaryButtonText = "保留现状",
+                CloseButtonText = "稍后处理",
+                DefaultButton = ContentDialogButton.Secondary,
+            };
+
+            var result = await dialog.ShowAsync();
+
+            if (result == ContentDialogResult.Primary)
+            {
+                var uniquePath = Path.Combine(folder, uniqueStem + CanvasStore.Extension);
+                var occupied = ApplyBoardRename(newPath, uniquePath);
+
+                if (occupied is not null)
+                {
+                    Say($"无法腾出名称“{newStem}”：{occupied}");
+
+                    return;
+                }
+
+                var follow = ApplyBoardRename(oldPath, newPath, publishMarker: false);
+                Say(follow is null
+                    ? $"{oldName}已被修改为 {newStem}"
+                    : $"{oldName}已被修改为 {newStem}，同步失败：{follow}");
+            }
+            else if (result == ContentDialogResult.Secondary)
+            {
+                Say($"{oldName}保持原名");
+            }
+        }
+        catch (Exception ex)
+        {
+            Say($"无法显示选择框，已保留现状：{ex.Message}");
+        }
+        finally
+        {
+            _renameConflictBusy = false;
+        }
+    }
+
+    /// <summary>给本机同名板找一个可用名字：名字本身、加“（本机）”、再加编号。</summary>
+    private static string UniqueBoardStem(string folder, string stem)
+    {
+        var candidate = $"{stem}（本机）";
+
+        for (var index = 2; File.Exists(Path.Combine(folder, candidate + CanvasStore.Extension)); index++)
+        {
+            candidate = $"{stem}（本机 {index}）";
+        }
+
+        return candidate;
+    }
+
+    /// <summary>
     /// 同步发现这块板在别处被改了名（契约第 4 条"跟的人先搬自己的盘，再走正常一轮"）。
-    /// 两种情况**不搬**，因为都不可逆：本机已经有一块同名板（覆盖它等于删掉一块板），
-    /// 或者你正在改名框里打字（那一发的手归你）。
+    /// 本机已有同名板时弹出选择；你正在改名框里打字时先不动（那一发的手归你）。
     /// </summary>
     private void FollowRemoteRename(string newStem)
     {
@@ -2126,9 +2208,11 @@ public sealed partial class MainWindow
             return;
         }
 
+        var oldName = BoardName(oldPath);
+
         if (_renameBusy || _renamingPath is not null)
         {
-            Say($"远端把这块板改名为 {newStem}｜你正在改名，先不动，下一轮再跟");
+            Say($"{oldName}已被修改为 {newStem}");
 
             return;
         }
@@ -2138,7 +2222,8 @@ public sealed partial class MainWindow
 
         if (File.Exists(newPath) || SameBoard(newPath, oldPath))
         {
-            Say($"远端把这块板改名为 {newStem}，但本机已经有同名的一块：没动，两块都还在，你自己挑");
+            // 覆盖本机同名板不可逆，不能替用户决定：弹出选择。
+            AskRenameConflict(oldPath, oldName, newStem, newPath);
 
             return;
         }
@@ -2146,8 +2231,8 @@ public sealed partial class MainWindow
         var problem = ApplyBoardRename(oldPath, newPath, publishMarker: false);
 
         Say(problem is null
-            ? $"这块板在别处被改名为 {newStem}，本机跟着搬好了"
-            : $"远端把这块板改名为 {newStem}，本机没跟上：{problem}");
+            ? $"{oldName}已被修改为 {newStem}"
+            : $"{oldName}已被修改为 {newStem}，同步失败：{problem}");
 
         // 搬完了按新名字立刻再来一轮：这一发要把本地那份带上新名字发上去，不该等下一次轮询。
         _sync?.NotifyChanged();
@@ -2647,7 +2732,7 @@ public sealed partial class MainWindow
             }
         }
 
-        if (!_sayRow.Text.Contains("删掉了", StringComparison.Ordinal))
+        if (!_sayRow.Text.Contains("已删除", StringComparison.Ordinal))
         {
             problems.Add($"关板子没说删：回执『{_sayRow.Text}』");
         }
@@ -2659,7 +2744,7 @@ public sealed partial class MainWindow
             problems.Add($"最后一块板被关掉了/文件被删了：标签 {BoardTabs.TabItems.Count} 枚、文件 {File.Exists(firstPath)}");
         }
 
-        if (!_sayRow.Text.Contains("不给关", StringComparison.Ordinal))
+        if (!_sayRow.Text.Contains("无法关闭", StringComparison.Ordinal))
         {
             problems.Add($"拒掉那一发没说为什么：回执『{_sayRow.Text}』");
         }
@@ -3190,7 +3275,7 @@ public sealed partial class MainWindow
                 problems.Add("重名那一发没有被拦住，或者把当前路径改走了");
             }
 
-            if (!_sayRow.Text.Contains("已经在了", StringComparison.Ordinal))
+            if (!_sayRow.Text.Contains("已存在", StringComparison.Ordinal))
             {
                 problems.Add($"重名那一发没说为什么：回执『{_sayRow.Text}』");
             }
@@ -3314,7 +3399,7 @@ public sealed partial class MainWindow
             problems.Add("关掉板子没删相机 sidecar");
         }
 
-        if (!_sayRow.Text.Contains("删掉了", StringComparison.Ordinal))
+        if (!_sayRow.Text.Contains("已删除", StringComparison.Ordinal))
         {
             problems.Add($"关掉板子没删掉：回执『{_sayRow.Text}』");
         }

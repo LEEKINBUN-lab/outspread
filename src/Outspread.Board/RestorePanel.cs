@@ -31,7 +31,7 @@ public sealed partial class MainWindow
             // 这一层是"这块板子的历史"，没有板子路径就没有历史可列——不说清就等于给了一个空面板。
             if (_boardPath is not { } path)
             {
-                Say("还没有板子文件，没有可恢复的版本");
+                Say("尚无板文件，没有可恢复的版本");
 
                 return;
             }
@@ -118,7 +118,7 @@ public sealed partial class MainWindow
             SaveSoon();
             ProjectSelection();
 
-            Say($"已恢复到 {entry.TakenAt.ToLocalTime():MM-dd HH:mm}（再恢复一次可回到刚才）");
+            Say($"已恢复到 {entry.TakenAt.ToLocalTime():MM-dd HH:mm}（再次恢复可返回上一版本）");
 
             // 行现在会自己吃掉按下那一发（浮层不再在按下时收），所以"选完就收起"要这层自己说。
             CloseRestorePanel();
@@ -127,7 +127,7 @@ public sealed partial class MainWindow
                                    or InvalidOperationException or JsonException or CanvasDocumentException)
         {
             // 说清是读不回还是写不进：这两种情况下用户要做的下一件事完全不同。
-            Say($"没能恢复：{ex.Message}");
+            Say($"恢复失败：{ex.Message}");
             Diagnostics.Write($"restore failed for {entry.Path}: {ex}");
         }
     }

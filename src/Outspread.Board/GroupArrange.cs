@@ -466,7 +466,7 @@ public sealed partial class MainWindow
     {
         if (!outcome.Ok)
         {
-            Say($"『{label}』要至少 {outcome.Needed} 件（一格或一组算一件），现在能排的有 {outcome.Have} 件");
+            Say($"“{label}”至少需要 {outcome.Needed} 件（一格或一组计一件），当前可选 {outcome.Have} 件");
 
             return;
         }
@@ -514,6 +514,6 @@ public sealed partial class MainWindow
         Rebuild();
         SaveSoon();
 
-        Say($"已{label}");
+        Say($"已应用{label}");
     }
 }

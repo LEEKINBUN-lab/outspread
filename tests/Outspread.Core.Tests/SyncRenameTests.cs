@@ -286,7 +286,7 @@ public class SyncRenameTests
             var problem = SyncLayout.RenameLedger(oldPath, newPath, root);
 
             Assert.NotNull(problem);
-            Assert.Contains("已经在了", problem);
+            Assert.Contains("已存在", problem);
             Assert.True(Directory.Exists(SyncLayout.LedgerFolder(oldPath, root)), "撞名那一发一个字都不许搬");
         }
         finally

@@ -346,7 +346,7 @@ internal sealed class SyncHost
                 break;
 
             case SyncOutcome.GaveUpConflict:
-                _say($"远端一直在变，三轮没挤进去 · 本地没动，要传的那份整份留在 {Path.GetFileName(report.ConflictCopy)}");
+                _say($"远端持续更新，三轮合并未完成 · 本地未修改，待上传副本保留在 {Path.GetFileName(report.ConflictCopy)}");
 
                 break;
 
@@ -354,7 +354,7 @@ internal sealed class SyncHost
             case SyncOutcome.RateLimited:
                 if (report.PendingNodes > 0)
                 {
-                    _say($"还没传上去 · 本地 {report.PendingNodes} 处等着");
+                    _say($"未能上传 · 本地有 {report.PendingNodes} 处待同步");
                 }
 
                 break;
@@ -363,7 +363,7 @@ internal sealed class SyncHost
                 // The raw exception can be a long path; keep it in the log and say the one
                 // actionable sentence on screen. A deleted board is handled by the stop guard above.
                 Diagnostics.Write($"sync local unreadable: {report.Detail}");
-                _say("同步未执行：本地文件不可读（详情见日志）");
+                _say("同步未执行：本地文件不可读（详见日志）");
 
                 break;
 
@@ -396,7 +396,7 @@ internal sealed class SyncHost
             {
                 // A picture the board no longer names and this round could not take away is a
                 // deletion that has not finished. Said nothing, it looks like the app kept it.
-                _say($"那张图没清掉，下次同步再试：{path}｜{reason}");
+                _say($"图片未能删除，将在下次同步重试：{path}｜{reason}");
             }
         }
 

@@ -227,7 +227,7 @@ public static class BoardLocator
             }
         }
 
-        return NewBoardResult.Refuse("未命名板已经编到 999 了：目录里腾一个名字再用");
+        return NewBoardResult.Refuse("未命名板编号已达上限 999：请先腾出一个名称");
     }
 
     private static NewBoardResult CheckName(string directory, string name, string? ignorePath)
@@ -236,7 +236,7 @@ public static class BoardLocator
 
         if (trimmed.Length == 0)
         {
-            return NewBoardResult.Refuse("名字是空的：给这块板写一件事，比如「周会」");
+            return NewBoardResult.Refuse("名称不能为空：请填写板名称，例如“周会”");
         }
 
         if (trimmed.EndsWith(CanvasStore.Extension, StringComparison.OrdinalIgnoreCase))
@@ -245,43 +245,43 @@ public static class BoardLocator
 
             if (trimmed.Trim().Length == 0)
             {
-                return NewBoardResult.Refuse("只写了扩展名，名字还是空的");
+                return NewBoardResult.Refuse("名称为空：仅提供了扩展名");
             }
         }
 
         if (trimmed.Length > MaxBoardNameChars)
         {
             return NewBoardResult.Refuse(
-                $"名字 {trimmed.Length} 个字符，上限 {MaxBoardNameChars}：标签条上放不下，也说不清一件要做的事");
+                $"名称长度为 {trimmed.Length} 个字符，超过上限 {MaxBoardNameChars}");
         }
 
         if (trimmed.StartsWith('.'))
         {
-            return NewBoardResult.Refuse("名字不许以句点开头（那是给 .sync 这类目录留的）");
+            return NewBoardResult.Refuse("名称不能以句点开头（该前缀保留给 .sync 等目录）");
         }
 
         if (trimmed.EndsWith('.'))
         {
-            return NewBoardResult.Refuse("名字不许以句点结尾（Windows 会把它吃掉，落盘的就是另一个名字）");
+            return NewBoardResult.Refuse("名称不能以句点结尾（Windows 会忽略该字符）");
         }
 
         var badIndex = trimmed.IndexOfAny(InvalidNameCharacters);
 
         if (badIndex >= 0)
         {
-            return NewBoardResult.Refuse($"名字里有不能当文件名的字符「{trimmed[badIndex]}」");
+            return NewBoardResult.Refuse($"名称包含不能用于文件名的字符“{trimmed[badIndex]}”");
         }
 
         if (trimmed.Contains("..", StringComparison.Ordinal))
         {
-            return NewBoardResult.Refuse("名字里不许有 ..（板子只能建在这块板旁边的目录里）");
+            return NewBoardResult.Refuse("名称不能包含“..”（板只能创建在当前板目录内）");
         }
 
         var path = Path.Combine(directory, trimmed + CanvasStore.Extension);
 
         if (!string.Equals(path, ignorePath, StringComparison.OrdinalIgnoreCase) && File.Exists(path))
         {
-            return NewBoardResult.Refuse($"这块板已经在了：{trimmed}");
+            return NewBoardResult.Refuse($"板“{trimmed}”已存在");
         }
 
         return new NewBoardResult(path, null);

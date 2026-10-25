@@ -122,7 +122,7 @@ public sealed partial class MainWindow
             EndGesture();
             Rebuild();
             SaveSoon();
-            Say("已删除这根线 · Ctrl＋Z 可回退");
+            Say("已删除连线 · 可按 Ctrl＋Z 撤销");
 
             return true;
         }
@@ -624,7 +624,7 @@ public sealed partial class MainWindow
         ProjectSelection();
         PaintLinks();
 
-        Say("选中了一根连线 · 拖两端的圆点换进出面或归属，Esc 取消");
+        Say("已选中连线 · 拖动两端圆点可调整连接面或归属，按 Esc 取消");
     }
 
     /// <summary>
@@ -697,7 +697,7 @@ public sealed partial class MainWindow
 
         if (list.Count < 2)
         {
-            Say("连线要至少 2 格（按叠放次序串成一条链）");
+            Say("连线至少需要 2 格（按叠放次序连接为链）");
 
             return;
         }
@@ -739,7 +739,7 @@ public sealed partial class MainWindow
         SaveSoon();
 
         Say(allOn
-            ? $"拆掉了这 {edges.Count} 根箭头 · Ctrl＋Z 放回去"
-            : $"连了 {pairs.Count} 根箭头 · 端点在选中时才可拖");
+            ? $"已移除 {edges.Count} 条连线 · 可按 Ctrl＋Z 撤销"
+            : $"已创建 {pairs.Count} 条连线 · 选中后可拖动端点");
     }
 }

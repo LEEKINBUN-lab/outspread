@@ -191,7 +191,7 @@ public sealed partial class MainWindow
 
         if (members.Count == 0)
         {
-            Say("先选中至少一格再成组");
+            Say("请先选中至少一格再创建组");
             return;
         }
 
@@ -200,7 +200,7 @@ public sealed partial class MainWindow
 
         if (loose.Count == 0)
         {
-            Say("选中的格子都已经在组里了 · 按 Ctrl＋G 是解散");
+            Say("所选格子均已属于组 · 按 Ctrl＋G 解散");
             return;
         }
 
@@ -234,8 +234,8 @@ public sealed partial class MainWindow
         ProjectSelection();
 
         Say(members.Count == 1
-            ? "成组了 1 格 · Ctrl＋G 可解散"
-            : $"成组了 {members.Count} 格 · Ctrl＋G 可解散");
+            ? "已创建组（1 格）· 按 Ctrl＋G 解散"
+            : $"已创建组（{members.Count} 格）· 按 Ctrl＋G 解散");
     }
 
     /// <summary>
@@ -314,7 +314,7 @@ public sealed partial class MainWindow
         SaveSoon();
         ProjectSelection();
 
-        Say("已并入 · Ctrl＋G 可解散");
+        Say("已加入组 · 按 Ctrl＋G 解散");
     }
 
     /// <summary>重铸会清选中；成组/解散之后要把人还选着——不然"再按一次"就没有对象了。</summary>
@@ -350,7 +350,7 @@ public sealed partial class MainWindow
 
         if (hit.Count == 0)
         {
-            Say("选中的格子里没有哪格在组里");
+            Say("所选格子均不属于任何组");
             return;
         }
 
@@ -371,7 +371,7 @@ public sealed partial class MainWindow
         SaveSoon();
         ProjectSelection();
 
-        Say("已拆组");
+        Say("组已解散");
     }
 
     private void DuplicateSelection()
@@ -380,7 +380,7 @@ public sealed partial class MainWindow
 
         if (members.Count == 0)
         {
-            Say("没有选中任何格子");
+            Say("未选中任何格子");
             return;
         }
 
@@ -452,7 +452,7 @@ public sealed partial class MainWindow
 
         if (!outcome.Ok)
         {
-            Say($"『{label}』要至少 {outcome.Needed} 格，现在能排的有 {outcome.Have} 格");
+            Say($"“{label}”至少需要 {outcome.Needed} 格，当前可选 {outcome.Have} 格");
 
             return;
         }
@@ -521,7 +521,7 @@ public sealed partial class MainWindow
         SaveSoon();
         ProjectSelection();
 
-        Say($"已{label}");
+        Say($"已应用{label}");
     }
 
     /// <summary>整块板：组算一件、颜色/标签分块、矩阵与小间距都在 Core 里。</summary>

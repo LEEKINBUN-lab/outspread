@@ -1431,17 +1431,24 @@ public sealed partial class MainWindow
 
         var now = Groups().GroupOf(RectOf(node))?.Id;
 
+        static string GroupName(string? id, Func<string, CanvasNode?> find)
+        {
+            var label = id is null ? null : find(id)?.Label;
+
+            return string.IsNullOrWhiteSpace(label) ? "未命名组" : label;
+        }
+
         if (joined || (now is not null && now != state.StartGroupId))
         {
-            Say("已移入这一组");
+            Say($"已加入组“{GroupName(now, NodeOf)}”");
         }
         else if (state.StartGroupId is not null && now is null)
         {
-            Say("已移出那一组");
+            Say($"已从组“{GroupName(state.StartGroupId, NodeOf)}”移出");
         }
         else
         {
-            Say("分组没动");
+            Say("分组未变更");
         }
 
         Diagnostics.Write($"group drag: {state.NodeId} {state.StartGroupId ?? "(散)"} → {now ?? "(散)"}，入组 {joined}");
@@ -1761,7 +1768,7 @@ public sealed partial class MainWindow
         {
             ApplyColor(captured);
             CloseColorPopover();
-            Say(captured is null ? "颜色摘了" : "换了个颜色");
+            Say(captured is null ? "已移除颜色" : "已更改颜色");
             e.Handled = true;
         };
 

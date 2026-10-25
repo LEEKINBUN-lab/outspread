@@ -170,7 +170,7 @@ public sealed partial class MainWindow
     {
         if (_searchHits.Count == 0)
         {
-            Say("现在没有可跳的命中");
+            Say("当前没有可跳转的匹配项");
 
             return;
         }
@@ -184,7 +184,7 @@ public sealed partial class MainWindow
         if (node is null)
         {
             // 列表是上一发按键建的，板子在这之间可能被外面改过——旧 id 不猜，直接说。
-            Say("那一格已经不在板上了（板子刚被改过？重新查找一次）");
+            Say("目标格子已不在板面上，请重新查找");
             RunSearch();
 
             return;
@@ -200,7 +200,7 @@ public sealed partial class MainWindow
         ShakeArrival(node);
         SaveSoon();
 
-        Say($"第 {_searchCursor + 1}/{_searchHits.Count} 处");
+        Say($"第 {_searchCursor + 1}/{_searchHits.Count} 项");
     }
 
     /// <summary>
@@ -300,7 +300,7 @@ public sealed partial class MainWindow
         if (members.Count == 0)
         {
             // 不合法的命令要明着拒绝（不变量 4）：说清它要什么、现在有什么。
-            Say("『看到选中』要先选中点什么，现在选了 0 格");
+            Say("“看到选中”需要先选中格子，当前选中 0 格");
 
             return;
         }
@@ -318,7 +318,7 @@ public sealed partial class MainWindow
 
         if (members.Count == 0)
         {
-            Say("板子是空的，回到 100%");
+            Say("板面为空，已回到 100%");
             ResetView();
 
             return;

@@ -58,7 +58,7 @@ public class BoardNamingTests
         var result = BoardLocator.NewBoard(scratch.Folder, "周会");
 
         Assert.False(result.Ok);
-        Assert.Contains("已经在了", result.Problem, StringComparison.Ordinal);
+        Assert.Contains("已存在", result.Problem, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -119,7 +119,7 @@ public class BoardNamingTests
         var result = BoardLocator.Rename(scratch.BoardPath, "周会");
 
         Assert.False(result.Ok);
-        Assert.Contains("已经在了", result.Problem, StringComparison.Ordinal);
+        Assert.Contains("已存在", result.Problem, StringComparison.Ordinal);
     }
 
     [Fact]

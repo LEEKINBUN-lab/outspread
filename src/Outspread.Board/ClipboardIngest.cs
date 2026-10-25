@@ -76,7 +76,7 @@ internal static class ClipboardIngest
             }
         }
 
-        return new IngestResult(IngestKind.Nothing, "剪贴板被别的程序占着，没读到", Failure: last?.Message);
+        return new IngestResult(IngestKind.Nothing, "剪贴板被其他程序占用，读取失败", Failure: last?.Message);
     }
 
     public static Task<IngestResult> FromDataViewAsync(DataPackageView view) => ReadAsync(view);
@@ -190,7 +190,7 @@ internal static class ClipboardIngest
     {
         if (view is null)
         {
-            return new IngestResult(IngestKind.Nothing, "剪贴板是空的");
+            return new IngestResult(IngestKind.Nothing, "剪贴板为空");
         }
 
         if (view.Contains(StandardDataFormats.StorageItems))
@@ -228,15 +228,15 @@ internal static class ClipboardIngest
             return new IngestResult(
                 IngestKind.Text,
                 dropped > 0
-                    ? $"文字 {text.Length} 字，超出单格上限 {PastedImage.MaxTextCharacters}，截掉了 {dropped} 字"
-                    : $"文字 {text.Length} 字",
+                    ? $"文本 {text.Length} 字，超过单格上限 {PastedImage.MaxTextCharacters}，已截断 {dropped} 字"
+                    : $"文本 {text.Length} 字",
                 Text: text);
         }
 
         var available = AvailableFormats(view);
 
         return new IngestResult(IngestKind.Nothing,
-            available.Length == 0 ? "剪贴板是空的" : $"剪贴板上的东西这板子放不下：{available}");
+            available.Length == 0 ? "剪贴板为空" : $"剪贴板内容无法放置到板面：{available}");
     }
 
     private static async Task<IngestResult> ReadBitmapAsync(DataPackageView view)
@@ -303,7 +303,7 @@ internal static class ClipboardIngest
         return new IngestResult(
             IngestKind.Image,
             repaired
-                ? $"剪贴板图片 {width}×{height}（原图 alpha 全为 0，已按不透明补回，否则会是一张看不见的图）"
+                ? $"剪贴板图片 {width}×{height}（原图 alpha 全为 0，已按不透明修正）"
                 : $"剪贴板图片 {width}×{height}",
             ImageBytes: png,
             Width: width,
@@ -319,7 +319,7 @@ internal static class ClipboardIngest
 
         return new IngestResult(
             IngestKind.Image,
-            $"文件 {Path.GetFileName(path)}（{(width > 0 ? $"{width}×{height}" : "尺寸读不出，按默认格放")}）",
+            $"文件 {Path.GetFileName(path)}（{(width > 0 ? $"{width}×{height}" : "尺寸无法读取，按默认尺寸放置")}）",
             ImageBytes: bytes,
             Width: width,
             Height: height);

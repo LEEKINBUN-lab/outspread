@@ -193,7 +193,7 @@ public sealed partial class MainWindow
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                                    or JsonException or CanvasDocumentException)
         {
-            Say($"总览存盘没写回 {System.IO.Path.GetFileName(ownerPath)}：{ex.Message}");
+            Say($"总览保存未能写回 {System.IO.Path.GetFileName(ownerPath)}：{ex.Message}");
             Diagnostics.Write($"all-notes save failed for {ownerPath}: {ex}");
         }
     }

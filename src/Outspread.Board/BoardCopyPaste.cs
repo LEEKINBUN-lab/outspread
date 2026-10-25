@@ -27,7 +27,7 @@ public sealed partial class MainWindow
             return;
         }
 
-        Say($"已复制 {count} 格｜Ctrl+V 贴到别的板子上也在，图跟着搬");
+        Say($"已复制 {count} 格 · 可通过 Ctrl+V 粘贴到其他板，图片会一并复制");
     }
 
     /// <summary>把选中的放进剪贴板；返回放进去的格数，失败返回 null（回执已经说过了）。</summary>
@@ -37,7 +37,7 @@ public sealed partial class MainWindow
 
         if (notes.Count == 0)
         {
-            Say("没有选中任何格子");
+            Say("未选中任何格子");
 
             return null;
         }
@@ -50,7 +50,7 @@ public sealed partial class MainWindow
 
         if (fragment is null)
         {
-            Say("选中的格子拆不成片段（详情在日志）");
+            Say("所选格子无法拆分为片段（详情见日志）");
             Diagnostics.Write("copy: nothing to take apart — selection matched no node");
 
             return null;
@@ -63,7 +63,7 @@ public sealed partial class MainWindow
 
         if (problem is not null)
         {
-            Say($"复制没成：{problem}");
+            Say($"复制失败：{problem}");
 
             return null;
         }
@@ -78,7 +78,7 @@ public sealed partial class MainWindow
 
         if (notes.Count == 0)
         {
-            Say("没有选中任何格子");
+            Say("未选中任何格子");
 
             return;
         }
@@ -108,7 +108,7 @@ public sealed partial class MainWindow
         Rebuild();
         SaveSoon();
 
-        Say($"已剪切 {notes.Count} 格｜Ctrl+V 贴回来");
+        Say($"已剪切 {notes.Count} 格 · 可按 Ctrl+V 粘贴");
     }
 
     /// <summary>
@@ -239,8 +239,8 @@ public sealed partial class MainWindow
             + (lost == 0 ? string.Empty : $"、{lost} 张没跟来（源板 {source ?? "没写"}）"));
 
         Say(lost == 0
-            ? $"贴了 {pasted.Count} 格" + (carried > 0 ? $"（图 {carried} 张一起搬过来）" : string.Empty)
-            : $"贴了 {pasted.Count} 格｜{lost} 张图没跟来（原来那块板上的文件读不到）");
+            ? $"已粘贴 {pasted.Count} 格" + (carried > 0 ? $"（含图片 {carried} 张）" : string.Empty)
+            : $"已粘贴 {pasted.Count} 格 · {lost} 张图片未能复制（源板文件不可读）");
 
         return true;
     }

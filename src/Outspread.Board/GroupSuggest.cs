@@ -196,7 +196,11 @@ public sealed partial class MainWindow
 
         Rebuild();
         SaveSoon();
-        Say(remaining.Count == 0 ? "这一组只有它一枚，框撤掉了，格子没动" : "移出了那一组：格子尽量留在原位");
+        var groupName = NodeOf(group.Id)?.Label is { Length: > 0 } label ? label : "未命名组";
+
+        Say(remaining.Count == 0
+            ? $"组“{groupName}”已无其他成员，组已解散，格子位置未变"
+            : $"已从组“{groupName}”移出，格子位置尽量保持");
 
         Diagnostics.Write($"pull out: {id} 出 {group.Id}，剩 {remaining.Count} 枚，X→{node.X:0.#} Y→{node.Y:0.#}");
     }

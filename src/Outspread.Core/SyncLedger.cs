@@ -128,7 +128,7 @@ public static class SyncLayout
 
             if (Directory.Exists(to))
             {
-                return $"新名字的账本目录已经在了：{to}";
+                return $"新名称的账本目录已存在：{to}";
             }
 
             try

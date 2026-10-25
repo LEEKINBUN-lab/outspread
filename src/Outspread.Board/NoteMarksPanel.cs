@@ -96,7 +96,7 @@ public sealed partial class MainWindow
 
         PaintEditorChips();
 
-        Say($"收到了 {line}");
+        Say($"已收纳标记行：{line}");
 
         return true;
     }
@@ -291,7 +291,7 @@ public sealed partial class MainWindow
         if (string.Equals(without, node.Text, StringComparison.Ordinal))
         {
             // 删不掉却说删了，比不删更糟。
-            Say($"没在正文里找到「{token}」，所以什么都没动");
+            Say($"正文中未找到“{token}”，未作修改");
             return;
         }
 
@@ -304,7 +304,7 @@ public sealed partial class MainWindow
         Rebuild();
         SaveSoon();
 
-        Say($"去掉了 {token} · Ctrl＋Z 放回去");
+        Say($"已移除标记 {token} · 可按 Ctrl＋Z 撤销");
     }
 
     /// <summary>
@@ -475,8 +475,8 @@ public sealed partial class MainWindow
         // 这两句走 Say() 而不是直接写字：回执那一枚只在 Say() 里浮出来，
         // 上一版直接改文字＝写进一块看不见的板子里。
         Say(_view.TagFilter is { } active
-            ? $"只看 {active} 的格子（再点一次取消）"
-            : "标签筛选已取消");
+            ? $"仅显示标签为 {active} 的格子（再次点击取消）"
+            : "已取消标签筛选");
     }
 
     private void SetDueFilter(NoteMarks.DueState state)
@@ -486,7 +486,7 @@ public sealed partial class MainWindow
         Rebuild();
 
         Say(_view.DueFilter is { } active
-            ? $"只看{DueLabel(active)}的格子（再点一次取消）"
-            : "到期筛选已取消");
+            ? $"仅显示{DueLabel(active)}的格子（再次点击取消）"
+            : "已取消到期筛选");
     }
 }

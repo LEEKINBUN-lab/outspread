@@ -474,7 +474,7 @@ public sealed partial class MainWindow : Window
             ResetPerBoardRuntime();
 
             // 页眉那一栏删了（板子该占满）。名字在标签与标题栏上都有，这里只留两条不直观的入口。
-            Say("双击空白记一件事 · 按住 Tab 看全部键位");
+            Say("双击空白处新建便签 · 按住 Tab 查看全部快捷键");
 
             Diagnostics.Write($"opened {_boardPath} — {resolution.Reason}; {_document.Nodes.Count} nodes");
 
@@ -487,7 +487,7 @@ public sealed partial class MainWindow : Window
             }
 
             Say(errors > 0
-                ? $"{_document.Nodes.Count} 个节点 · {errors} 处不合格式（详情在日志） · 缩放 {Percent()}"
+                ? $"{_document.Nodes.Count} 个节点 · {errors} 处格式问题（详见日志） · 缩放 {Percent()}"
                 : $"{_document.Nodes.Count} 个节点 · 缩放 {Percent()}");
 
             // 组框是派生的：开板时先把有成员的组框贴回成员包围盒。旧板/外部改动留下的
@@ -511,7 +511,7 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) when (ex is CanvasDocumentException or JsonException or IOException
                                    or UnauthorizedAccessException or InvalidOperationException)
         {
-            Say($"打不开板面：{ex.Message}");
+            Say($"无法打开{(_boardPath is null ? "板面" : BoardName(_boardPath))}：{ex.Message}");
             Diagnostics.Write($"load failed: {ex}");
 
             // 开不成也要让标签条说真话：切板失败时它已经指到那块板上了。
@@ -574,7 +574,7 @@ public sealed partial class MainWindow : Window
                                   or JsonException or InvalidOperationException)
         {
             // The board keeps working with an unsaved document, but that has to be on screen.
-            Say($"没存上：{ex.Message}");
+            Say($"无法保存{BoardName(_boardPath)}：{ex.Message}");
             Diagnostics.Write($"save failed: {ex}");
         }
     }
@@ -1487,7 +1487,7 @@ public sealed partial class MainWindow : Window
 
         if (_wheelTargetZoom <= MinZoom + 1e-9 || _wheelTargetZoom >= MaxZoom - 1e-9)
         {
-            Say($"缩放已到边界（{Percent()}）");
+            Say($"已到达缩放边界（{Percent()}）");
         }
     }
 
@@ -1504,7 +1504,7 @@ public sealed partial class MainWindow : Window
 
         var clamped = Math.Abs(before - _view.Zoom) < double.Epsilon;
 
-        Say(clamped ? $"缩放已到边界（{Percent()}）" : string.Empty);
+        Say(clamped ? $"已到达缩放边界（{Percent()}）" : string.Empty);
     }
 
     private int VisibleCount() => _realized.Count(pair => pair.Value.IsHitTestVisible);
@@ -2207,7 +2207,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Say($"板面文件此刻读不到：{ex.Message}");
+            Say($"无法读取板文件：{ex.Message}");
             return;
         }
 
@@ -2228,7 +2228,7 @@ public sealed partial class MainWindow : Window
         {
             // The board keeps showing what it has, and refuses to write over a file nobody
             // can read: silently continuing would next save and destroy that content.
-            Say($"外面改成了读不懂的样子，本次不并入，也不覆盖：{ex.Message}");
+            Say($"外部修改失败：{ex.Message}");
             Diagnostics.Write($"external parse refused: {ex.Message}");
             return;
         }
@@ -2253,7 +2253,7 @@ public sealed partial class MainWindow : Window
             Rebuild();
             SaveSoon();
 
-            Say($"并入了外面的改动（{fromOutside.NodeCount} 处） · {_document.Nodes.Count} 个节点 · 可 Ctrl＋Z 回退");
+            Say($"已合并外部修改（{fromOutside.NodeCount} 处） · {_document.Nodes.Count} 个节点 · 可按 Ctrl＋Z 撤销");
 
             // 外来改动落盘后 _baseJson 已经跟上，随后那次 SaveSoon 会因为"没变化"而直接返回，
             // 所以 agent 写的那一块只能靠这一发去推；少了它，它要等到下一次轮询才上得了线。
@@ -2261,7 +2261,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            Say($"并入失败：{ex.Message}");
+            Say($"合并失败：{ex.Message}");
             Diagnostics.Write($"merge failed: {ex}");
         }
     }
@@ -2298,7 +2298,7 @@ public sealed partial class MainWindow : Window
     {
         if (_boardPath is null)
         {
-            Say("没有可写的板面文件，粘不了");
+            Say("没有可写入的板文件，无法粘贴");
             return;
         }
 
@@ -2321,7 +2321,7 @@ public sealed partial class MainWindow : Window
             case IngestKind.Text when result.Text is { Length: > 0 } text:
             {
                 var node = CreateTextNote(text, PasteWorld());
-                Say($"贴了一格文字 · {result.Description}");
+                Say($"已粘贴文字格 · {result.Description}");
                 SelectOnly(node.Id);
                 break;
             }
@@ -2329,7 +2329,7 @@ public sealed partial class MainWindow : Window
             case IngestKind.Image when result.ImageBytes is { Length: > 0 } bytes:
             {
                 var node = CreateImageNote(bytes, ".png", result.Width, result.Height, PasteWorld());
-                Say($"贴了图 · {result.Description}");
+                Say($"已粘贴图片 · {result.Description}");
                 SelectOnly(node.Id);
                 break;
             }
@@ -2394,8 +2394,8 @@ public sealed partial class MainWindow : Window
         Rebuild();
 
         Say(placed + links == 0
-            ? "拖进来的东西一个都没放下（详情在日志）"
-            : $"放了 {placed} 张图、{links} 个链接");
+            ? "拖入的内容均未放置（详情见日志）"
+            : $"已放置 {placed} 张图片、{links} 个链接");
     }
 
     private CanvasNode CreateTextNote(string text, Point worldAt)
@@ -2591,7 +2591,7 @@ public sealed partial class MainWindow : Window
             }
             else
             {
-                Say("拖进来的不是文件");
+                Say("拖入的内容不是文件");
             }
         }
         finally
@@ -2724,7 +2724,7 @@ public sealed partial class MainWindow : Window
 
         if (node.Kind != CanvasNodeKind.Text)
         {
-            Say($"这一格是 {CanvasNode.NameOfKind(node.Kind)}，不是文字，改不了");
+            Say($"该格类型为 {CanvasNode.NameOfKind(node.Kind)}，仅文字格可编辑");
             return;
         }
 
@@ -2798,7 +2798,7 @@ public sealed partial class MainWindow : Window
         editor.Focus(FocusState.Programmatic);
         editor.Select(editor.Text.Length, 0);
 
-        Say("Ctrl＋Enter 或点到别处提交，Esc 放弃");
+        Say("按 Ctrl＋Enter 或点击其他位置提交，按 Esc 取消");
     }
 
     private void PlaceEditor()
@@ -2911,11 +2911,11 @@ public sealed partial class MainWindow : Window
             {
                 Undo();
 
-                Say("取消了新建：那张空卡没有留下");
+                Say("已取消新建，空卡片已移除");
                 return;
             }
 
-            Say("已放弃这次编辑");
+            Say("已取消本次编辑");
             return;
         }
 
@@ -3011,7 +3011,7 @@ public sealed partial class MainWindow : Window
         box.Focus(FocusState.Programmatic);
         box.Select(box.Text.Length, 0);
 
-        Say("回车或点到别处定名，Esc 不改");
+        Say("按 Enter 或点击其他位置确认，按 Esc 取消");
     }
 
     private void PlaceRename(CanvasNode group)
@@ -3222,7 +3222,7 @@ public sealed partial class MainWindow : Window
 
         if (_history.TakeUndo(current) is not { } entry)
         {
-            Say("没有可撤销的动作了");
+            Say("没有可撤销的操作");
             return;
         }
 
@@ -3235,7 +3235,7 @@ public sealed partial class MainWindow : Window
 
         if (_history.TakeRedo(current) is not { } entry)
         {
-            Say("没有可重做的动作了");
+            Say("没有可重做的操作");
             return;
         }
 
@@ -3259,7 +3259,7 @@ public sealed partial class MainWindow : Window
         Rebuild();
         SaveSoon();
 
-        Say(verb);
+        Say($"已{verb}");
         Diagnostics.Write($"{verb} {entry.Label}");
     }
 
@@ -3284,14 +3284,14 @@ public sealed partial class MainWindow : Window
             Rebuild();
             SaveSoon();
 
-            Say("删掉了那根连线（Ctrl＋Z 可回退）");
+            Say("已删除连线（可按 Ctrl＋Z 撤销）");
 
             return;
         }
 
         if (_selection.Count == 0)
         {
-            Say("没有选中任何格子");
+            Say("未选中任何格子");
             return;
         }
 
@@ -3319,7 +3319,7 @@ public sealed partial class MainWindow : Window
         Rebuild();
         SaveSoon();
 
-        Say($"删掉了 {count} 格（Ctrl＋Z 可回退）");
+        Say($"已删除 {count} 格（可按 Ctrl＋Z 撤销）");
     }
 
     /// <summary>
@@ -3706,7 +3706,7 @@ public sealed partial class MainWindow : Window
             _selection.Add(arrangePair[0].Id);
             Arrange("左对齐", items => Aligning.Align(items, Aligning.Side.Left));
 
-            if (_history.UndoCount != undoBefore || !_sayRow.Text.Contains("要至少 2 件"))
+            if (_history.UndoCount != undoBefore || !_sayRow.Text.Contains("至少需要 2 件"))
             {
                 problems.Add($"一格排布没有明着拒绝：status『{_sayRow.Text}』undo {_history.UndoCount} vs {undoBefore}");
             }

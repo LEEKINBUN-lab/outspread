@@ -69,7 +69,7 @@
                 CloseButtonOverlayMode="OnPointerOver"
                 TabWidthMode="SizeToContent"
                 CanDragTabs="False"
-                CanReorderTabs="False"
+                CanReorderTabs="True"
                 SelectionChanged="OnBoardTabSelected"
                 TabCloseRequested="OnBoardTabClosed" />
 
@@ -83,7 +83,7 @@
                 Padding="0"
                 BorderThickness="0"
                 Background="Transparent"
-                ToolTipService.ToolTip="新板块 · Ctrl+T"
+                ToolTipService.ToolTip="新板块 · Ctrl+N"
                 AutomationProperties.Name="新板块" />
 
             <!-- 浏览器式设置入口：紧挨窗口按钮、在标签条右端。配对/恢复/筛选这三件整板动作归它，

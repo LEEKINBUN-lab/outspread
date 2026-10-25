@@ -148,7 +148,6 @@ public sealed partial class MainWindow
         Rebuild();
         RebuildTabs();
 
-        Say($"所有便签 · {_document.Nodes.Count} 格");
         Diagnostics.Write($"all-notes merged {boards.Count} 块板 → {_document.Nodes.Count} 格");
     }
 

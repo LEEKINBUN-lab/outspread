@@ -296,7 +296,7 @@ public sealed partial class MainWindow
 
         CloseCheatsheet();
 
-        Say("键位清单收起了（按住 Tab 再看）");
+        Say(string.Empty);
     }
 
     /// <summary>

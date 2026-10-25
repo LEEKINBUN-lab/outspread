@@ -27,7 +27,7 @@ public sealed partial class MainWindow
             return;
         }
 
-        Say($"复制了 {count} 格｜Ctrl+V 贴到别的板子上也在，图跟着搬");
+        Say($"已复制 {count} 格｜Ctrl+V 贴到别的板子上也在，图跟着搬");
     }
 
     /// <summary>把选中的放进剪贴板；返回放进去的格数，失败返回 null（回执已经说过了）。</summary>
@@ -100,7 +100,7 @@ public sealed partial class MainWindow
         Rebuild();
         SaveSoon();
 
-        Say($"剪切了 {notes.Count} 格｜Ctrl+V 贴回来");
+        Say($"已剪切 {notes.Count} 格｜Ctrl+V 贴回来");
     }
 
     /// <summary>

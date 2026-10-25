@@ -233,7 +233,7 @@ public sealed partial class MainWindow
         Rebuild();
         SaveSoon();
 
-        Say($"连上了：{SideWord(pull.Side)} → 那格的{SideWord(toSide)}（Ctrl＋Z 拆掉）");
+        Say("已连线");
 
         return true;
     }
@@ -328,12 +328,4 @@ public sealed partial class MainWindow
 
         return null;
     }
-
-    private static string SideWord(string side) => side switch
-    {
-        CanvasEdge.Left => "左边",
-        CanvasEdge.Right => "右边",
-        CanvasEdge.Top => "上边",
-        _ => "下边",
-    };
 }

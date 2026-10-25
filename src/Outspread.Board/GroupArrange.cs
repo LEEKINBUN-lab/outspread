@@ -472,13 +472,10 @@ public sealed partial class MainWindow
 
         if (moved == 0)
         {
-            Say($"{label}：这些格子已经在位子上，没动任何东西");
+            Say("已就位");
 
             return;
         }
-
-        // 有几件是"整块走的组"：这是这一发和"逐枚排"唯一的区别，说出来才看得出没记错。
-        var blocks = units.Count(unit => unit.MemberIds.Count > 1);
 
         BeginGesture(label);
 
@@ -496,8 +493,6 @@ public sealed partial class MainWindow
         Rebuild();
         SaveSoon();
 
-        Say($"{label}：搬了 {moved} 格" +
-            (blocks > 0 ? $"，{blocks} 个组整块跟着走" : string.Empty) +
-            "（Ctrl＋Z 可回退）");
+        Say($"已{label}");
     }
 }

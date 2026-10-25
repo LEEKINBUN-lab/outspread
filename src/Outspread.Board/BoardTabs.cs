@@ -163,6 +163,31 @@ public sealed partial class MainWindow
             new Microsoft.UI.Xaml.Input.PointerEventHandler(EndRenameOnPress),
             handledEventsToo: true);
 
+        // 标签拖动换位置（原生 CanReorderTabs）：拖的过程里平台会改 SelectedIndex，先压住
+        // 切板；松手后按标签的当前顺序回写真名单，选中跟着拖到的那一枚走。
+        BoardTabs.TabDragStarting += (_, _) => _tabsBusy = true;
+        BoardTabs.TabDragCompleted += (_, _) =>
+        {
+            _tabsBusy = false;
+            SyncBoardOrderFromTabs();
+        };
+
+        // 拖出窗口/拖到一半取消时拖完那一发不一定来：这两条路都把"压住切板"的闸放开。
+        BoardTabs.TabDroppedOutside += (_, _) =>
+        {
+            _tabsBusy = false;
+            SyncBoardOrderFromTabs();
+        };
+
+        // 兜底：若平台先改 TabItems 再发拖完（或者根本没发拖动开始），集合这一发也能把顺序落账。
+        BoardTabs.TabItemsChanged += (_, _) =>
+        {
+            if (!_tabsBusy)
+            {
+                SyncBoardOrderFromTabs();
+            }
+        };
+
         StyleAddBoardButton(dark);
         StyleSettingsButton(dark);
         PositionAddBoardButton();
@@ -542,6 +567,57 @@ public sealed partial class MainWindow
         finally
         {
             _tabsBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// 标签拖动只改了 TabItems 的顺序；切板、Ctrl＋左右、下次开屏读的都是 <see cref="_openBoards"/>。
+    /// 这里把标签的当前顺序落成真名单。「所有便签」不是文件、是固定总览，永远钉在第一枚；
+    /// 选中跟着拖到的那一枚走（和浏览器一样）。
+    /// </summary>
+    private void SyncBoardOrderFromTabs()
+    {
+        _tabsBusy = false;
+
+        var order = BoardTabs.TabItems
+            .OfType<TabViewItem>()
+            .Select(item => item.Tag as string)
+            .Where(tag => tag is not null)
+            .Select(tag => tag!)
+            .ToList();
+
+        if (order.Count == 0 || order.Count != _openBoards.Count)
+        {
+            Diagnostics.Write($"标签重排: 标签 {order.Count} 枚与名单 {_openBoards.Count} 块不同步，这一发不回写");
+
+            return;
+        }
+
+        order.RemoveAll(path => IsAllNotes(path));
+        order.Insert(0, AllNotesKey);
+
+        if (order.SequenceEqual(_openBoards, StringComparer.Ordinal))
+        {
+            return;
+        }
+
+        _openBoards.Clear();
+        _openBoards.AddRange(order);
+
+        Diagnostics.Write($"标签重排: {string.Join(" / ", _openBoards.Select(BoardName))}");
+        RememberLastBoard(_boardPath ?? AllNotesKey);
+
+        var selected = BoardTabs.SelectedIndex >= 0 && BoardTabs.SelectedIndex < _openBoards.Count
+            ? _openBoards[BoardTabs.SelectedIndex]
+            : _boardPath;
+
+        if (selected is not null && !SameBoard(selected, _boardPath ?? string.Empty))
+        {
+            SwitchToBoard(selected);
+        }
+        else
+        {
+            RebuildTabs();
         }
     }
 
@@ -2339,6 +2415,13 @@ public sealed partial class MainWindow
             problems.Add("还有命令占着 Ctrl+T：新板块已经改到 Ctrl+N");
         }
 
+        // 标签要拖得动（10-25 他：标签页应该可以长按拖动位置）。重排本身是平台行为，
+        // 这里钉住开关；"拖完顺序要落成真名单"由下面那一段量。
+        if (!BoardTabs.CanReorderTabs)
+        {
+            problems.Add("标签条没开重排：CanReorderTabs 还是 false");
+        }
+
         // 10-24 换的两组：切板走 Ctrl＋左右，四向对齐走 Alt＋方向键。
         (string Label, string Chord)[] wanted =
         [
@@ -2468,6 +2551,66 @@ public sealed partial class MainWindow
 
         // 两枚标签都在场时量那一排的几何：活动填充、关闭键和加号的位置都是他 10-22 点名的。
         SelfTestTabStrip(problems);
+
+        // 拖完顺序不回写的话，切板、Ctrl＋左右和下次开屏都还是旧顺序。这里直接把标签换位，
+        // 走拖动收尾那条同一个方法，量"真名单跟上了、选中跟着拖到的那一枚走"。
+        if (BoardTabs.TabItems.Count == 3 && _openBoards.Count == 3)
+        {
+            var orderBefore = _openBoards.ToList();
+            var tabsBefore = BoardTabs.TabItems.OfType<TabViewItem>().Select(item => (string)item.Tag!).ToList();
+
+            void Arrange(string[] order, string selected)
+            {
+                _tabsBusy = true;
+
+                for (var index = 0; index < order.Length; index++)
+                {
+                    var wanted = BoardTabs.TabItems.OfType<TabViewItem>()
+                        .FirstOrDefault(item => string.Equals((string)item.Tag!, order[index], StringComparison.Ordinal));
+
+                    if (wanted is null)
+                    {
+                        continue;
+                    }
+
+                    var at = BoardTabs.TabItems.IndexOf(wanted);
+
+                    if (at != index)
+                    {
+                        BoardTabs.TabItems.RemoveAt(at);
+                        BoardTabs.TabItems.Insert(index, wanted);
+                    }
+                }
+
+                BoardTabs.SelectedIndex = Array.FindIndex(
+                    order,
+                    path => string.Equals(path, selected, StringComparison.Ordinal));
+
+                SyncBoardOrderFromTabs();
+            }
+
+            Arrange([AllNotesKey, secondPath, firstPath], secondPath);
+
+            if (!_openBoards.SequenceEqual([AllNotesKey, secondPath, firstPath], StringComparer.Ordinal)
+                || !SameBoard(_boardPath ?? string.Empty, secondPath))
+            {
+                problems.Add(
+                    $"标签重排没落成真名单：列表 {string.Join(" / ", _openBoards.Select(BoardName))}，当前 {_boardPath}");
+            }
+            else
+            {
+                Diagnostics.Write("selftest 标签重排: 两枚真实板换位后 _openBoards 跟上、选中跟着那枚走");
+            }
+
+            Arrange([.. tabsBefore], firstPath);
+
+            if (!_openBoards.SequenceEqual(orderBefore, StringComparer.Ordinal)
+                || !SameBoard(_boardPath ?? string.Empty, firstPath))
+            {
+                problems.Add(
+                    $"标签重排收尾没还原：列表 {string.Join(" / ", _openBoards.Select(BoardName))}，当前 {_boardPath}");
+            }
+        }
 
         SwitchToBoard(firstPath);
 

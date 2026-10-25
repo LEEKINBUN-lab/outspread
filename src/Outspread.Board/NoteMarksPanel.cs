@@ -353,8 +353,6 @@ public sealed partial class MainWindow
         _view.DueFilter = null;
 
         Rebuild();
-
-        Say("筛选已清除，所有格子回到原本的亮度");
     }
 
     private void SetTagFilter(string? tag)

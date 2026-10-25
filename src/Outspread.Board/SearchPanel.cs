@@ -281,15 +281,17 @@ public sealed partial class MainWindow
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// 相机只认"真占地方"的格子：0 宽 0 高、或者坐标不是有限数的，是幽灵——
-    /// 它们不该把"看到全部"和"回到 100%"拉到一片空白里去（10-25 他报的那格）。
+    /// 相机只认"真占地方、真人看得见"的格子：0 宽 0 高、坐标不是有限数的是幽灵；组框是成员
+    /// 派生出来的，空组根本画不出来，却会把包围盒拽到空处——它们是"回到 100% 一片空白"
+    /// 的真凶（10-25 他第二次报：测试板上有两个空组在 x≈435、便签却从 1684 起）。
     /// </summary>
     private static bool IsPlaceable(CanvasNode node)
-        => double.IsFinite(node.X) && double.IsFinite(node.Y)
+        => node.Kind != CanvasNodeKind.Group
+            && double.IsFinite(node.X) && double.IsFinite(node.Y)
             && double.IsFinite(node.Width) && double.IsFinite(node.Height)
             && node.Width > 0.5 && node.Height > 0.5;
 
-    private void ZoomToFit() => Frame(_document.Nodes.Where(IsPlaceable).ToList(), "看到全部");
+    private void ZoomToFit() => Frame(_document.Nodes.Where(IsPlaceable).ToList());
 
     private void ZoomToSelection()
     {
@@ -303,14 +305,14 @@ public sealed partial class MainWindow
             return;
         }
 
-        Frame(members, "看到选中");
+        Frame(members);
     }
 
     /// <summary>
     /// 把这些框收进视野，缩放取"两个轴都装得下"的那一档，并且只缩不放超过 100%——
     /// 这两条命令要的是看清全局，不是把一格放大到糊。
     /// </summary>
-    private void Frame(IReadOnlyList<CanvasNode> members, string label)
+    private void Frame(IReadOnlyList<CanvasNode> members)
     {
         members = members.Where(IsPlaceable).ToList();
 
@@ -342,13 +344,12 @@ public sealed partial class MainWindow
         ArrangeAll();
         ProjectSelection();
         SaveSoon();
-
-        Say($"{label}：{members.Count} 格，缩放 {Percent()}");
     }
 
 
     /// <summary>
-    /// 相机两问：0 尺寸的幽灵格拉不拉远"看到全部"；"回到 100%"以后屏幕上有没有内容。
+    /// 相机三问：0 尺寸的幽灵格与空组拉不拉远"看到全部"；fit 有没有把内容摆在正中；
+    /// "回到 100%"以后屏幕上有没有内容、左上角是不是贴着内容。
     /// </summary>
     private void SelfTestCameraFraming(List<string> problems)
     {
@@ -364,18 +365,27 @@ public sealed partial class MainWindow
         var saved = (_view.PanX, _view.PanY, _view.Zoom);
         var ghost = _document.Add(CanvasNodeKind.Text, -50000, -50000, 0.1, 0.1);
 
+        // 空组画不出来，却曾经把包围盒拽到空处（他 10-25 那块"测试"板上就是两个空组）。
+        var ghostGroup = _document.Add(CanvasNodeKind.Group, -60000, -60000, 900, 700);
+
         try
         {
             ZoomToFit();
             var withGhost = _view.Zoom;
 
+            var fitLeft = content.Min(node => _view.ToScreenX(node.X));
+            var fitTop = content.Min(node => _view.ToScreenY(node.Y));
+            var fitRight = content.Max(node => _view.ToScreenX(node.Right));
+            var fitBottom = content.Max(node => _view.ToScreenY(node.Bottom));
+
             _document.Remove(ghost.Id);
+            _document.Remove(ghostGroup.Id);
             ZoomToFit();
             var without = _view.Zoom;
 
             if (Math.Abs(withGhost - without) > 0.001)
             {
-                problems.Add($"自检相机: 一个 0 尺寸的幽灵格把『看到全部』从 {without:0.###} 拉到了 {withGhost:0.###}");
+                problems.Add($"自检相机: 一个 0 尺寸幽灵格/空组把『看到全部』从 {without:0.###} 拉到了 {withGhost:0.###}");
             }
 
             if (withGhost < 0.15)
@@ -383,9 +393,40 @@ public sealed partial class MainWindow
                 problems.Add($"自检相机: 『看到全部』只剩 {withGhost:0.###} 的缩放，屏幕基本是空的");
             }
 
+            var leftMargin = fitLeft;
+            var rightMargin = BoardArea.ActualWidth - fitRight;
+            var topMargin = fitTop;
+            var bottomMargin = BoardArea.ActualHeight - fitBottom;
+
+            if (Math.Abs(leftMargin - rightMargin) > 1.5 || Math.Abs(topMargin - bottomMargin) > 1.5)
+            {
+                problems.Add(
+                    $"自检相机: 『看到全部』没有把内容摆在正中（左右留白 {leftMargin:0.#}/{rightMargin:0.#}，" +
+                    $"上下 {topMargin:0.#}/{bottomMargin:0.#}）——空组把包围盒拽歪了");
+            }
+
+            if (fitLeft < -0.5 || fitTop < -0.5
+                || fitRight > BoardArea.ActualWidth + 0.5 || fitBottom > BoardArea.ActualHeight + 0.5)
+            {
+                problems.Add($"自检相机: 『看到全部』以后仍有内容在屏幕外（{fitLeft:0.#},{fitTop:0.#}–{fitRight:0.#},{fitBottom:0.#}）");
+            }
+
             _view.PanX = 40000;
             _view.PanY = 40000;
-            ResetView();
+            _view.Zoom = 0.29;
+
+            // 走按钮那一条真路径：比例钮以前只改缩放，视野还停在空白处（他 10-25 第二次报的）。
+            OnZoomActualSize(this, new RoutedEventArgs());
+
+            var resetLeft = content.Min(node => _view.ToScreenX(node.X));
+            var resetTop = content.Min(node => _view.ToScreenY(node.Y));
+
+            if (Math.Abs(resetLeft - 24) > 1 || Math.Abs(resetTop - 16) > 1)
+            {
+                problems.Add(
+                    $"自检相机: 回到 100% 没对准内容左上角（读到 {resetLeft:0.#},{resetTop:0.#}，应为 24,16）" +
+                    "——空组/幽灵格还在算进包围盒");
+            }
 
             var visible = content.Any(node =>
             {
@@ -404,11 +445,24 @@ public sealed partial class MainWindow
             }
             else
             {
-                Diagnostics.Write($"selftest 相机: 幽灵格不改 fit（{withGhost:0.###} 对 {without:0.###}）、回到 100% 时屏幕上有内容");
+                Diagnostics.Write(
+                    $"selftest 相机: 幽灵格与空组不改 fit（{withGhost:0.###} 对 {without:0.###}）、" +
+                    $"fit 居中（左右 {leftMargin:0.#}/{rightMargin:0.#}、上下 {topMargin:0.#}/{bottomMargin:0.#}）、" +
+                    $"回到 100% 内容左上角在 ({resetLeft:0.#},{resetTop:0.#})");
             }
         }
         finally
         {
+            if (_document.Find(ghost.Id) is not null)
+            {
+                _document.Remove(ghost.Id);
+            }
+
+            if (_document.Find(ghostGroup.Id) is not null)
+            {
+                _document.Remove(ghostGroup.Id);
+            }
+
             _view.PanX = saved.PanX;
             _view.PanY = saved.PanY;
             _view.Zoom = saved.Zoom;

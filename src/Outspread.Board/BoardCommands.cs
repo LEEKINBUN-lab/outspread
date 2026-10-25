@@ -126,8 +126,6 @@ public sealed partial class MainWindow
         }
 
         ProjectSelection();
-
-        Say($"选中 {_selection.Count} 个节点 · 缩放 {Percent()}");
     }
 
     /// <summary>
@@ -316,7 +314,7 @@ public sealed partial class MainWindow
         SaveSoon();
         ProjectSelection();
 
-        Say($"已并入 {loose.Count} 格 · Ctrl＋G 可解散");
+        Say("已并入 · Ctrl＋G 可解散");
     }
 
     /// <summary>重铸会清选中；成组/解散之后要把人还选着——不然"再按一次"就没有对象了。</summary>
@@ -373,7 +371,7 @@ public sealed partial class MainWindow
         SaveSoon();
         ProjectSelection();
 
-        Say($"解散了 {hit.Count} 个组，格子的位置没动（Ctrl＋Z 可回退）");
+        Say("已拆组");
     }
 
     private void DuplicateSelection()
@@ -408,7 +406,7 @@ public sealed partial class MainWindow
         Rebuild();
         SaveSoon();
 
-        Say($"复制了 {members.Count} 格");
+        Say($"已复制 {members.Count} 格");
     }
 
     /// <summary>
@@ -501,7 +499,7 @@ public sealed partial class MainWindow
 
         if (moved == 0)
         {
-            Say($"{label}：这几格已经在位子上，没动任何东西");
+            Say("已就位");
 
             return;
         }
@@ -523,7 +521,7 @@ public sealed partial class MainWindow
         SaveSoon();
         ProjectSelection();
 
-        Say($"排列了 {notes.Count} 格");
+        Say($"已{label}");
     }
 
     /// <summary>整块板：组算一件、颜色/标签分块、矩阵与小间距都在 Core 里。</summary>
@@ -532,7 +530,7 @@ public sealed partial class MainWindow
         var units = Groups().UnitsOf();
 
         // 一个组跟着它第一格走：排列要的是"同类放一起"，而组是一件东西，不能为了分色把它劈成两半。
-        // 所以那一块由组里最先出现的那格决定，回执里也会说出搬了几件是整块。
+        // 所以那一块由组里最先出现的那格决定。
         var keys = units
             .Select(unit => NodeOf(unit.MemberIds[0]) is { } first ? keyOf(first) : string.Empty)
             .ToList();

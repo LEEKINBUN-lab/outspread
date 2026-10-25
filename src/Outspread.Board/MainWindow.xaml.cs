@@ -80,6 +80,15 @@ public sealed partial class MainWindow : Window
 
     private NodeGesture? _nodeGesture;
 
+    /// <summary>上一发按在哪个格子上、什么时候、什么位置——认出"双击边缘"的第二下。</summary>
+    private string? _lastPressNodeId;
+    private Point _lastPressPoint;
+    private long _lastPressTicks;
+
+    /// <summary>双击窗口与"同一处"的容差，跟平台认 DoubleTapped 的规矩同一量级。</summary>
+    private const long DoubleClickWindowMs = 500;
+    private const double DoubleClickSlopPx = 4;
+
     /// <summary>这一发按下已经走过 4 像素的拖动阈值没有：没过就不许写格子的位置（手抖不是拖动）。
     /// 每一发按下重新归零，所以它跟着 <see cref="_nodeGesture"/> 的两处创建点各写一次 false。</summary>
     private bool _nodeDragStarted;
@@ -463,8 +472,8 @@ public sealed partial class MainWindow : Window
 
             ResetPerBoardRuntime();
 
-            // 页眉那一栏删了（板子该占满）。名字改在这行说一次，同时把两条入口一并交代清楚。
-            Say($"板子 · {System.IO.Path.GetFileNameWithoutExtension(_boardPath)}｜双击空白记一件事，按住 Tab 看全部键位");
+            // 页眉那一栏删了（板子该占满）。名字在标签与标题栏上都有，这里只留两条不直观的入口。
+            Say("双击空白记一件事 · 按住 Tab 看全部键位");
 
             Diagnostics.Write($"opened {_boardPath} — {resolution.Reason}; {_document.Nodes.Count} nodes");
 
@@ -805,6 +814,18 @@ public sealed partial class MainWindow : Window
 
         var point = e.GetCurrentPoint(BoardArea);
 
+        // 双击边缘的第二下可能落在格子**外面**那条 12px 带里（OnNodePressed 收不到）。这一发
+        // 如果起框选，松手时的"空按＝清选中"会把第一下亮出来的选中框收掉。认出来就交给
+        // DoubleTapped 去起拉线，这里什么也不做。
+        if (!Pulling
+            && DoubleTapTarget(point.Position) is ("拉线", { } edgeTarget, _)
+            && IsSecondEdgePress(edgeTarget, point.Position))
+        {
+            RecordNodePress(edgeTarget, point.Position);
+            e.Handled = true;
+            return;
+        }
+
         // 拉线中按到空白＝这根线没画过（一个字节都没动，所以也不需要撤销）。
         if (Pulling && FinishPull(point.Position))
         {
@@ -1111,10 +1132,10 @@ public sealed partial class MainWindow : Window
 
                     SelectInside(new Rect(left, top, width, height), append: append);
                 }
-                else if (!e.KeyModifiers.HasFlag(Windows.System.VirtualKeyModifiers.Shift))
+                else if (!Pulling && !e.KeyModifiers.HasFlag(Windows.System.VirtualKeyModifiers.Shift))
                 {
                     // 没拖过阈值的一按＝一次点击：清空选中。上一版这个动作发生在"按下"那一帧，
-                    // 于是左键框选根本不存在。
+                    // 于是左键框选根本不存在。正在拉线时不清：那一发可能是拉线开始前的空按。
                     ClearSelection();
                 }
 
@@ -1506,6 +1527,33 @@ public sealed partial class MainWindow : Window
             ? ([.. Groups().OnFramePressed(RectOf(pressed))], pressed.Id)
             : ([pressed.Id], null);
 
+    /// <summary>记下这一发：下一发要在 500ms/4px 内回到同一格才认成双击。</summary>
+    private void RecordNodePress(CanvasNode node, Point at)
+    {
+        _lastPressNodeId = node.Id;
+        _lastPressPoint = at;
+        _lastPressTicks = Environment.TickCount64;
+    }
+
+    /// <summary>
+    /// 这一发是不是"双击边缘"的第二下：同一格、同一处、够快，并且落在拉线带（内外 12px）里。
+    /// 只认这个组合——普通的"点一下再马上拖"仍归拖动。
+    /// </summary>
+    private bool IsSecondEdgePress(CanvasNode node, Point at)
+    {
+        if (node.Kind == CanvasNodeKind.Group
+            || _lastPressNodeId is null
+            || !string.Equals(_lastPressNodeId, node.Id, StringComparison.Ordinal)
+            || Environment.TickCount64 - _lastPressTicks > DoubleClickWindowMs
+            || Math.Abs(_lastPressPoint.X - at.X) > DoubleClickSlopPx
+            || Math.Abs(_lastPressPoint.Y - at.Y) > DoubleClickSlopPx)
+        {
+            return false;
+        }
+
+        return LinkPull.EdgeNear(ScreenRectOf(node), at.X, at.Y, LinkPull.StartBandPx) is not null;
+    }
+
     private void OnNodePressed(object sender, PointerRoutedEventArgs e)
     {
         if (sender is not NodeVisual visual)
@@ -1652,6 +1700,19 @@ public sealed partial class MainWindow : Window
         }
 
         var screen = e.GetCurrentPoint(BoardArea).Position;
+
+        // 双击边缘的第二下：这一发以前会先走"压边＝缩放"，把第一下亮出来的选中框/操作条
+        // 收掉，接着 DoubleTapped 才起拉线——看起来就是"选中框闪一下又没了"（10-25 他报的）。
+        // 认出来以后什么都不做，把这一发交给 DoubleTapped 去起拉线。
+        var secondEdgePress = !Pulling && IsSecondEdgePress(pressedNode, screen);
+        RecordNodePress(pressedNode, screen);
+
+        if (secondEdgePress)
+        {
+            Diagnostics.Write($"双击边缘: 第二发不再起缩放/拖动（{id}）");
+            e.Handled = true;
+            return;
+        }
 
         // 拉线中：这一发按在这格上就是落点，不归移动也不归缩放。
         if (Pulling && FinishPull(screen))
@@ -2733,7 +2794,7 @@ public sealed partial class MainWindow : Window
         editor.Focus(FocusState.Programmatic);
         editor.Select(editor.Text.Length, 0);
 
-        Say("编辑中：Ctrl＋Enter 或点到别处提交，Esc 放弃");
+        Say("Ctrl＋Enter 或点到别处提交，Esc 放弃");
     }
 
     private void PlaceEditor()
@@ -2932,7 +2993,6 @@ public sealed partial class MainWindow : Window
             else if (e.Key == Windows.System.VirtualKey.Escape)
             {
                 CloseRename();
-                Say("没改名");
                 e.Handled = true;
             }
         };
@@ -2947,7 +3007,7 @@ public sealed partial class MainWindow : Window
         box.Focus(FocusState.Programmatic);
         box.Select(box.Text.Length, 0);
 
-        Say("给这一组起个名：回车或点到别处定名，Esc 不改");
+        Say("回车或点到别处定名，Esc 不改");
     }
 
     private void PlaceRename(CanvasNode group)
@@ -3502,8 +3562,6 @@ public sealed partial class MainWindow : Window
         ArrangeAll();
         ProjectSelection();
         SaveSoon();
-
-        Say("回到 100%");
     }
 
     // -------------------------------------------------------------------------
@@ -5036,6 +5094,40 @@ public sealed partial class MainWindow : Window
                     problems.Add("双击边界外 20px 判成了拉线——空白新建的地盘被吃了");
                 }
 
+                // 双击的第二发要认得出来（认得出来就不再走"按下＝缩放"，选中框不会闪掉）。
+                var savedLastPress = (_lastPressNodeId, _lastPressPoint, _lastPressTicks);
+
+                try
+                {
+                    RecordNodePress(tapped, onEdge);
+
+                    if (!IsSecondEdgePress(tapped, onEdge))
+                    {
+                        problems.Add("双击边缘的第二发没被认出来——它会先起缩放，把选中框收掉");
+                    }
+
+                    if (IsSecondEdgePress(tapped, inside))
+                    {
+                        problems.Add("双击格内的第二发被当成边缘——格内编辑会被拉线吃掉");
+                    }
+
+                    if (IsSecondEdgePress(tapped, new Point(onEdge.X + 10, onEdge.Y)))
+                    {
+                        problems.Add("换了位置的第二发仍被认成同一处");
+                    }
+
+                    _lastPressTicks -= DoubleClickWindowMs + 50;
+
+                    if (IsSecondEdgePress(tapped, onEdge))
+                    {
+                        problems.Add("超过双击窗口的第二发仍被认成双击");
+                    }
+                }
+                finally
+                {
+                    (_lastPressNodeId, _lastPressPoint, _lastPressTicks) = savedLastPress;
+                }
+
                 // 四条边各起各的：判定给哪一面，StartPull 就钉哪一面。
                 // 旧账：SpecSide 只认单字母 w/e/n，spec 词全落到默认的 bottom——"在哪双击都从下边拉线"。
                 var boxLeft = _view.ToScreenX(tapped.X);
@@ -6491,7 +6583,8 @@ public sealed partial class MainWindow : Window
         double left = double.MaxValue, top = double.MaxValue, right = double.MinValue, bottom = double.MinValue;
         var any = false;
 
-        foreach (var node in _document.Nodes)
+        // 和"看到全部"用同一把尺：空组/幽灵格不参与包围盒，否则 fit 取证图也框在空处。
+        foreach (var node in _document.Nodes.Where(IsPlaceable))
         {
             any = true;
             left = Math.Min(left, node.X);
@@ -6673,7 +6766,6 @@ public sealed partial class MainWindow : Window
                 {
                     // 一按退一层：正在拉的那根线先断掉，板子上什么都没留下。
                     CancelPull();
-                    Say("那根线没收了");
                     e.Handled = true;
                     break;
                 }
@@ -6722,7 +6814,6 @@ public sealed partial class MainWindow : Window
                 }
 
                 ProjectSelection();
-                Say($"选中了 {_selection.Count} 格");
                 e.Handled = true;
                 break;
 

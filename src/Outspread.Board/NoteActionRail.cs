@@ -1433,15 +1433,15 @@ public sealed partial class MainWindow
 
         if (joined || (now is not null && now != state.StartGroupId))
         {
-            Say("移入了这一组：框长过去罩住它，格子没动");
+            Say("已移入这一组");
         }
         else if (state.StartGroupId is not null && now is null)
         {
-            Say("移出了那一组：框已缩回");
+            Say("已移出那一组");
         }
         else
         {
-            Say("松在了原来的位置——分组没动");
+            Say("分组没动");
         }
 
         Diagnostics.Write($"group drag: {state.NodeId} {state.StartGroupId ?? "(散)"} → {now ?? "(散)"}，入组 {joined}");

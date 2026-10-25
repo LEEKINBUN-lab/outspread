@@ -33,7 +33,7 @@ public sealed partial class MainWindow
     private void OnZoomActualSize(object sender, RoutedEventArgs e)
     {
         // 只把比例改到 100% 是不够的：视野若正停在空白处，放大以后还是一片空白（10-25 他
-        // 第二次报）。这一个按钮的文案就是"回到 100%"，所以它和空格键走同一条复位。
+        // 第二次报）。这一个按钮的文案就是"回到 100%"，所以它和 Ctrl＋0 走同一条复位（空格 10-25 撤了）。
         ResetView();
     }
 

@@ -29,11 +29,6 @@ public sealed partial class MainWindow
 {
     private bool _cheatsheetOpen;
 
-    /// <summary>空格是板子的键（按一下＝回到默认位置默认大小），不是"按下焦点所在的那枚按钮"。
-    /// 上一版焦点停在右下角的缩小键上，一敲空格板子就缩——他这次点名的就是这一下。
-    /// 它也不再兼任"按住＝平移"：那条 10-24 撤了。</summary>
-    private bool _spaceTap;
-
     private void OnCheatPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
         // 编辑中的一发回车只能在这一层接。10-24 查"Ctrl+Enter 不收笔"量的：同一发键在 preview
@@ -68,15 +63,6 @@ public sealed partial class MainWindow
         // 第二下才满足旧守卫。现在那第一下就把焦点交给板面并直接开清单——在标签条/按钮上按
         // Tab 也是同一个意思。同一批改动里他还点名"找按钮"那一下：所以不归板子的 Tab 也一律
         // 截住（见下），不再让平台把焦点挪到别的控件上。
-        if (e.Key == Windows.System.VirtualKey.Space && _editingId is null && !_searchOpen && BareSpace())
-        {
-            // 在 Tab 之前截：空格要抢在"焦点按钮被激活"前面。
-            _spaceTap = true;
-            e.Handled = true;
-
-            return;
-        }
-
         if (e.Key != Windows.System.VirtualKey.Tab)
         {
             // 板子的组合键要先于焦点控件拿到这一发：Alt＋方向、Ctrl＋方向这类是很多控件的
@@ -164,37 +150,10 @@ public sealed partial class MainWindow
         return true;
     }
 
-    /// <summary>空格只单独算一件事：不带 Ctrl/Alt/Shift 的那一发才是"复位视图"。</summary>
-    private static bool BareSpace()
-        => !KeyDownIs(Windows.System.VirtualKey.Control)
-            && !KeyDownIs(Windows.System.VirtualKey.Menu)
-            && !KeyDownIs(Windows.System.VirtualKey.Shift);
-
     /// <summary>那一枚修饰键此刻按没按下（读的是线程的键盘状态，不走事件）。</summary>
     private static bool KeyDownIs(Windows.System.VirtualKey key)
         => Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(key)
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-
-    /// <summary>
-    /// 松手那一下＝"按一下复位"。以前还要分"按住拖过就是平移"（10-24 那条撤了），所以现在
-    /// 空格只有一个意思：回到默认位置默认大小。
-    /// </summary>
-    private void OnSpacePreviewKeyUp(object sender, KeyRoutedEventArgs e)
-    {
-        if (e.Key != Windows.System.VirtualKey.Space || !_spaceTap)
-        {
-            return;
-        }
-
-        _spaceTap = false;
-
-        if (_editingId is null)
-        {
-            ResetView();
-        }
-
-        e.Handled = true;
-    }
 
     private void OnCheatKeyUp(object sender, KeyRoutedEventArgs e)
     {

@@ -68,7 +68,7 @@ public sealed partial class MainWindow : Window
     // 手势词汇与网页那一版对齐（判定函数在 Core 的 BoardGestures，两边共用同一份语义）：
     // 左键拖空白＝框选 · 右键拖＝平移 · 静止的一发右键＝菜单。
     // 上一版是左键拖＝平移、Shift＋拖＝框选，于是"想框选要先按住一个键"。
-    // 10-24 撤掉的只有"空格＋拖＝平移"那一条：空格从此不参与手势（按一下＝复位），右键那档留着。
+    // 10-25 空格整个撤了（按一下复位也容易误触）：复位只剩 Ctrl＋0 与点比例钮，右键那档留着。
     private bool _rightDrag;
     private Point _rightPressAt;
     private Point _panOrigin;
@@ -273,20 +273,11 @@ public sealed partial class MainWindow : Window
         // 守卫在 OnCheatPreviewKeyDown 里：不在编辑/文本/浮层里就归板子，第一下就开；归不了板子
         // 的那一发也被这一句截住——他 10-23 要的就是"别再去通用地找按钮"。
         Root.PreviewKeyDown += OnCheatPreviewKeyDown;
-        Root.PreviewKeyUp += OnSpacePreviewKeyUp;   // 空格：按下时截住，松手那一下复位视图（它不再兼任平移）
 
         // 任何一次按下都先把滚轮预览落到真布局：手柄/命中区不建立在"缩放层"上。
         Root.AddHandler(
             UIElement.PointerPressedEvent,
             new PointerEventHandler((_, _) => CommitWheelPreview()),
-            handledEventsToo: true);
-
-        // 空格那一发只要被板子上的任何一次按下用过，就不算"按一下复位"了。10-24 他报的正是这一发：
-        // 按住空格再左键框选，视野跟着跳——撤掉"空格＋拖＝平移"之后，框选不再理空格，可松手那一下
-        // 还是把复位打了出去。复位只该留给"什么也没干地敲了一下空格"。
-        BoardArea.AddHandler(
-            UIElement.PointerPressedEvent,
-            new PointerEventHandler((_, _) => _spaceTap = false),
             handledEventsToo: true);
 
         Closed += (_, _) =>
@@ -826,6 +817,14 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // 拉线中右键＝取消（与点空白同一条），左键才去接落点。
+        if (Pulling && point.Properties.IsRightButtonPressed)
+        {
+            CancelPull();
+            e.Handled = true;
+            return;
+        }
+
         // 拉线中按到空白＝这根线没画过（一个字节都没动，所以也不需要撤销）。
         if (Pulling && FinishPull(point.Position))
         {
@@ -842,8 +841,8 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        // 右键那一发先当作平移，松手时没拖过阈值再改成菜单。空格不参与（10-24 撤了"空格＋拖＝平移"，
-        // 它现在只有一件事：按一下＝复位，见 Cheatsheet 的 OnSpacePreviewKeyUp）。
+        // 右键那一发先当作平移，松手时没拖过阈值再改成菜单。空格 10-25 整个撤掉了（误触），
+        // 复位只剩 Ctrl＋0 与点比例钮。
         var action = BoardGestures.OnEmptyPress(
             point.Properties.IsRightButtonPressed, point.Properties.IsLeftButtonPressed);
 
@@ -1047,30 +1046,15 @@ public sealed partial class MainWindow : Window
             _edgeDrag = null;
 
             var at = e.GetCurrentPoint(BoardArea).Position;
-            var worldX = _view.ToWorldX(at.X);
-            var worldY = _view.ToWorldY(at.Y);
 
             // 拖的过程中那一头一直跟着指针（TrackEdgeDrag），松手就按它停下的地方结算：
-            // 吸在别的格上＝换归属，吸在本格另一条边上＝换进出面，什么都没吸住＝按落点最近的那面。
-            var changed = _document.Edges.Any(edge => edge.Id == drag.EdgeId)
-                && (CommitEdgeDrag(drag.EdgeId, drag.End)
-                    || (_edgeSnap is null && _document.Find(drag.NodeId) is { } card
-                        && _document.SetEdgeSide(drag.EdgeId, drag.End == CanvasEdge.FromEnd, CanvasEdge.NearestSide(card, worldX, worldY))));
-
-            _edgePreview = null;
-            _edgeSnap = null;
-
-            EndGesture();
-            Rebuild();
-
-            if (changed)
-            {
-                SaveSoon();
-            }
-            else
-            {
-                Say("这一头本来就在那一面");
-            }
+            // 拖到空地＝删线；吸在别的格上＝换归属；什么都没吸住但离格子不远＝只换进出面。
+            FinishEdgeDrag(
+                drag.EdgeId,
+                drag.End,
+                drag.NodeId,
+                _view.ToWorldX(at.X),
+                _view.ToWorldY(at.Y));
 
             e.Handled = true;
             return;
@@ -1598,6 +1582,14 @@ public sealed partial class MainWindow : Window
 
         if (point.Properties.IsRightButtonPressed)
         {
+            // 拉线中右键＝取消这一根：不接、不弹菜单。接上只认左键点落点。
+            if (Pulling)
+            {
+                CancelPull();
+                e.Handled = true;
+                return;
+            }
+
             var rightNode = NodeOf(id);
 
             if (rightNode is not null)
@@ -2660,6 +2652,7 @@ public sealed partial class MainWindow : Window
 
             if (route == "拉线")
             {
+                _pullOwnsSelection = true;
                 StartPull(hit.Id, side!);
             }
             else
@@ -4499,6 +4492,50 @@ public sealed partial class MainWindow : Window
                     _document.RemoveEdge(joined.Id);
                 }
 
+                ArrangeAll();
+
+                // 双击起线时那一格是替它选中的：取消要退回未选中（他 10-25 报的右键取消还亮着）。
+                SelectOnly(ends[0].Id);
+                _pullOwnsSelection = true;
+                StartPull(ends[0].Id, "e");
+                CancelPull();
+
+                if (_selection.Count != 0)
+                {
+                    problems.Add($"双击拉线取消后还选着 {_selection.Count} 格——右键/空白/Esc 应退回未选中");
+                }
+
+                // 从菜单起线时选中是用户自己的，取消不该清掉。
+                SelectOnly(ends[1].Id);
+                StartPull(ends[1].Id, "e");
+                CancelPull();
+
+                if (!_selection.Contains(ends[1].Id))
+                {
+                    problems.Add("从菜单起线取消后把用户原来的选中也清了");
+                }
+
+                // 接上那一路也不许残留选中。
+                SelectOnly(ends[0].Id);
+                _pullOwnsSelection = true;
+                StartPull(ends[0].Id, "e");
+                FinishPull(new Point(
+                    _view.ToScreenX(ends[1].X + ends[1].Width / 2),
+                    _view.ToScreenY(ends[1].Y + ends[1].Height / 2)));
+
+                if (_selection.Count != 0)
+                {
+                    problems.Add("接上以后还残留选中——成功那一路应退出选中");
+                }
+
+                foreach (var extra in _document.Edges
+                    .Where(edge => edge.FromNode == ends[0].Id && edge.ToNode == ends[1].Id)
+                    .ToList())
+                {
+                    _document.RemoveEdge(extra.Id);
+                }
+
+                ClearSelection();
                 ArrangeAll();
             }
         }

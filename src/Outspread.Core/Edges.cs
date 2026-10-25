@@ -191,6 +191,12 @@ public static class EdgeGeometry
     /// <summary>Prototype <c>.edge.on</c>: an edge touching a selected card goes to the accent.</summary>
     public static Rgb SelectedColour(bool dark) => SelectionChrome.Ring(dark);
 
+    /// <summary>
+    /// 拖线头拖到空地、松手就会删掉它：预览整根转红。红要比线灰和选中蓝都醒目，
+    /// 深色档提亮一档，免得压在深底上发黑。
+    /// </summary>
+    public static Rgb DeleteColour(bool dark) => dark ? new Rgb(255, 116, 108) : new Rgb(196, 43, 28);
+
     /// <summary>The invisible hit ring on an endpoint is 13px in radius (26 across) so it clears
     /// WCAG 2.5.8's 24px door; the visible dot is 4.5px.</summary>
     public const double HandleHitRadiusPx = 13;

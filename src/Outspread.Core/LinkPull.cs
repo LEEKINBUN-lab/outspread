@@ -133,6 +133,18 @@ public static class LinkPull
         return best;
     }
 
+    /// <summary>
+    /// 点到矩形外缘的世界距离；点在矩形里为 0。拉线手柄松手时用它分两档：
+    /// 只是没吸上（离边不远）与真拖到空地（离谁都远，删线）。
+    /// </summary>
+    public static double GapToRect(Grouping.Rect note, double px, double py)
+    {
+        var dx = Math.Max(0, Math.Max(note.X - px, px - note.Right));
+        var dy = Math.Max(0, Math.Max(note.Y - py, py - note.Bottom));
+
+        return Math.Sqrt((dx * dx) + (dy * dy));
+    }
+
     /// <summary>给"落在格子里"那一档让路用的常数：比任何屏幕半径都大，所以只在同为 inside 时比锚点远近。</summary>
     private const double InsideBand = 1_000_000;
 }

@@ -31,6 +31,10 @@ public sealed partial class MainWindow
 {
     private (string FromId, string Side)? _pulling;
 
+    /// <summary>这一次拉线的"选中"是双击替它开出来的：取消时要一起退回去。
+    /// 从菜单/键位起线时选中是用户自己的，取消不该把它清掉。</summary>
+    private bool _pullOwnsSelection;
+
     private Microsoft.UI.Xaml.Shapes.Path? _pullWire;
 
     private Microsoft.UI.Xaml.Shapes.Path? _pullHead;
@@ -48,6 +52,8 @@ public sealed partial class MainWindow
     {
         if (NodeOf(id) is not { } node)
         {
+            _pullOwnsSelection = false;
+
             return;
         }
 
@@ -108,6 +114,8 @@ public sealed partial class MainWindow
             return;
         }
 
+        // 菜单那条路：选中是用户自己的，取消时留着。
+        _pullOwnsSelection = false;
         StartPull(members[0].Id, SideTowardViewCentre(members[0]));
     }
 
@@ -243,6 +251,15 @@ public sealed partial class MainWindow
         _pulling = null;
 
         ClearPullGhost();
+
+        // 双击起线时选中是替这一发开的：取消（右键/点空白/Esc）就退回去；接上那一路
+        // 由 Rebuild 清选中，同样不残留。从菜单起线时不动用户原有的选中。
+        if (_pullOwnsSelection)
+        {
+            _pullOwnsSelection = false;
+            ClearSelection();
+            ProjectSelection();
+        }
     }
 
     private void ClearPullGhost()

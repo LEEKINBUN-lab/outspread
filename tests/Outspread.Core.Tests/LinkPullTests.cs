@@ -104,4 +104,16 @@ public sealed class LinkPullTests
         // 旧写法只量四条边的直线距离：这个点（格子上方 300px、离左边 5px）会被误认成左缘。
         Assert.Null(LinkPull.EdgeNear(rect, 350, 95, 12));
     }
+
+    [Fact]
+    public void 点到矩形外缘的距离里外都量对了()
+    {
+        var rect = Note("a", 100, 100, 200, 100);
+
+        Assert.Equal(0, LinkPull.GapToRect(rect, 200, 150), 9);   // 里面
+        Assert.Equal(0, LinkPull.GapToRect(rect, 100, 100), 9);   // 边上
+        Assert.Equal(5, LinkPull.GapToRect(rect, 200, 205), 9);   // 下外 5
+        Assert.Equal(5, LinkPull.GapToRect(rect, 305, 150), 9);   // 右外 5
+        Assert.Equal(Math.Sqrt((50 * 50) + (30 * 30)), LinkPull.GapToRect(rect, 50, 70), 9); // 左上角外
+    }
 }

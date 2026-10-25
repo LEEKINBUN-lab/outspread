@@ -40,6 +40,12 @@ public sealed partial class MainWindow
 
     private (string NodeId, string Side)? _edgeSnap;
 
+    /// <summary>松手就会删线：指针离所有格子都超过 <see cref="EdgeDeleteReachPx"/>（屏幕像素）。
+    /// 吸附半径是 44，留出这段空白再判删除，才不至于把"只是没吸上"当成拖到空地。</summary>
+    private bool _edgeDeleteArmed;
+
+    private const double EdgeDeleteReachPx = 96;
+
     /// <summary>指针在走：把被拖的那一头挪到指针（或它吸住的边中心）上，并重画。</summary>
     private void TrackEdgeDrag(double worldX, double worldY)
     {
@@ -48,7 +54,8 @@ public sealed partial class MainWindow
             return;
         }
 
-        var snap = LinkPull.Nearest(BoardNotes().ConvertAll(RectOf), worldX, worldY, null, LinkPull.Reach(_view.Zoom));
+        var notes = BoardNotes();
+        var snap = LinkPull.Nearest(notes.ConvertAll(RectOf), worldX, worldY, null, LinkPull.Reach(_view.Zoom));
 
         if (snap is { } hit)
         {
@@ -60,6 +67,10 @@ public sealed partial class MainWindow
             _edgeSnap = null;
             _edgePreview = (worldX, worldY);
         }
+
+        _edgeDeleteArmed = snap is null
+            && notes.Count > 0
+            && notes.All(note => LinkPull.GapToRect(RectOf(note), worldX, worldY) * _view.Zoom > EdgeDeleteReachPx);
 
         PaintLinks();
     }
@@ -83,6 +94,61 @@ public sealed partial class MainWindow
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// 线头松手：拖到没有便签的空地（删除区）＝删掉这根线；吸在别的格上＝换归属；
+    /// 否则只换进出哪一面。删除区要比吸附半径大一圈，才不会把"只是没吸上"当成拖到空地。
+    /// </summary>
+    private bool FinishEdgeDrag(string edgeId, string end, string nodeId, double worldX, double worldY)
+    {
+        if (_edgeDeleteArmed)
+        {
+            _edgePreview = null;
+            _edgeSnap = null;
+            _edgeDeleteArmed = false;
+
+            if (!_document.Edges.Any(edge => edge.Id == edgeId))
+            {
+                EndGesture();
+                Rebuild();
+
+                return false;
+            }
+
+            // 换掉开手那条"换面"标签：撤销里要说得出这一步删的是一根线。
+            BeginGesture("删掉一根连线");
+            _document.RemoveEdge(edgeId);
+            EndGesture();
+            Rebuild();
+            SaveSoon();
+            Say("已删除这根线 · Ctrl＋Z 可回退");
+
+            return true;
+        }
+
+        var changed = _document.Edges.Any(edge => edge.Id == edgeId)
+            && (CommitEdgeDrag(edgeId, end)
+                || (_edgeSnap is null && _document.Find(nodeId) is { } card
+                    && _document.SetEdgeSide(edgeId, end == CanvasEdge.FromEnd, CanvasEdge.NearestSide(card, worldX, worldY))));
+
+        _edgePreview = null;
+        _edgeSnap = null;
+        _edgeDeleteArmed = false;
+
+        EndGesture();
+        Rebuild();
+
+        if (changed)
+        {
+            SaveSoon();
+        }
+        else
+        {
+            Say("这一头本来就在那一面");
+        }
+
+        return changed;
     }
 
     /// <summary>
@@ -152,7 +218,96 @@ public sealed partial class MainWindow
             return;
         }
 
-        Diagnostics.Write("selftest 线头: 拖端点时那一头跟指针走（虚线预览）、吸住离得最近的那条边、松手换归属，撤销回原样");
+        // 删除区：离所有格子都远（吸附半径 44 之外还有一圈空当）＝预览转红、松手删线。
+        var doomed = _document.AddEdge(pair[0].Id, pair[1].Id);
+
+        ArrangeAll();
+
+        _edgeDrag = (doomed.Id, CanvasEdge.ToEnd, pair[1].Id);
+
+        var farX = BoardNotes().Max(node => node.Right) + 2000;
+        var farY = BoardNotes().Max(node => node.Bottom) + 2000;
+
+        TrackEdgeDrag(farX, farY);
+
+        if (!_edgeDeleteArmed)
+        {
+            problems.Add("自检线头: 拖到没有格子的空地没进入删除区");
+        }
+        else
+        {
+            var danger = NoteStyling.ToColor(EdgeGeometry.DeleteColour(NoteStyling.IsDark));
+            var previewPath = LinkLayer.Children
+                .OfType<Microsoft.UI.Xaml.Shapes.Path>()
+                .FirstOrDefault(path => path.StrokeDashArray is { Count: > 0 });
+
+            if (previewPath?.Stroke is not SolidColorBrush brush || brush.Color != danger)
+            {
+                problems.Add("自检线头: 删除区里那根线没变红——松手删不删看不出来");
+            }
+        }
+
+        var removed = FinishEdgeDrag(doomed.Id, CanvasEdge.ToEnd, pair[1].Id, farX, farY);
+
+        if (!removed || _document.Edges.Any(edge => edge.Id == doomed.Id))
+        {
+            problems.Add("自检线头: 拖到空地松手没删掉这根线");
+        }
+        else if (!_sayRow.Text.Contains("已删除", StringComparison.Ordinal))
+        {
+            problems.Add($"自检线头: 删线没说：回执『{_sayRow.Text}』");
+        }
+
+        Undo();
+        Rebuild();
+
+        if (_document.Edges.All(edge => edge.Id != doomed.Id))
+        {
+            problems.Add("自检线头: 删线以后撤销没把线带回来");
+        }
+
+        _document.RemoveEdge(doomed.Id);
+        ArrangeAll();
+
+        // 只是没吸上：离边 60px（吸附 44、删除 96 之间）不该判成删除。
+        var near = _document.AddEdge(pair[0].Id, pair[1].Id);
+
+        ArrangeAll();
+
+        _edgeDrag = (near.Id, CanvasEdge.ToEnd, pair[1].Id);
+
+        var topmost = BoardNotes().OrderBy(node => node.Y).First();
+        var justMissX = topmost.X + (topmost.Width / 2);
+        var justMissY = topmost.Y - 60;
+
+        TrackEdgeDrag(justMissX, justMissY);
+
+        if (_edgeSnap is not null)
+        {
+            problems.Add($"自检线头: 离边 60px 仍吸住了 {_edgeSnap.Value.NodeId}——没测到“只是没吸上”那一档");
+        }
+
+        if (_edgeDeleteArmed)
+        {
+            problems.Add("自检线头: 离边 60px 只是没吸上，却被判成删除");
+        }
+
+        _edgeDrag = null;
+        _edgePreview = null;
+        _edgeSnap = null;
+        _edgeDeleteArmed = false;
+
+        _document.RemoveEdge(near.Id);
+        ArrangeAll();
+
+        if (_document.ToJson() != before)
+        {
+            problems.Add("自检线头: 删除区那一发收尾没把文档带回原样");
+        }
+
+        Diagnostics.Write(
+            "selftest 线头: 拖端点时那一头跟指针走（虚线预览）、吸住最近那条边、松手换归属；" +
+            "拖到空地预览转红、松手删线且可撤销；离边 60px 只是没吸上时不删");
     }
 
     /// <summary>
@@ -315,6 +470,7 @@ public sealed partial class MainWindow
         var dark = NoteStyling.IsDark;
         var wire = new SolidColorBrush(NoteStyling.ToColor(EdgeGeometry.WireColour(dark)));
         var accent = new SolidColorBrush(NoteStyling.ToColor(EdgeGeometry.SelectedColour(dark)));
+        var danger = new SolidColorBrush(NoteStyling.ToColor(EdgeGeometry.DeleteColour(dark)));
 
         foreach (var edge in _document.Edges)
         {
@@ -379,7 +535,8 @@ public sealed partial class MainWindow
 
             var selected = _selectedEdgeId == edge.Id;
             var on = selected || _selection.Contains(from.Id) || _selection.Contains(to.Id);
-            var brush = on ? accent : wire;
+            var deleting = (draggingFrom || draggingTo) && _edgeDeleteArmed;
+            var brush = deleting ? danger : on ? accent : wire;
 
             // 命中线也画一份自己的几何：Geometry 是依赖对象，不要两枚 Path 共用一个实例。
             PathGeometry Wire()
@@ -408,7 +565,7 @@ public sealed partial class MainWindow
                 Stroke = brush,
                 StrokeThickness = selected ? EdgeGeometry.SelectedStrokePx : EdgeGeometry.StrokePx,
                 StrokeDashArray = draggingFrom || draggingTo ? [4, 3] : null,
-                Opacity = draggingFrom || draggingTo ? 0.72 : 1,
+                Opacity = draggingFrom || draggingTo ? (deleting ? 1 : 0.72) : 1,
                 IsHitTestVisible = false,
                 Data = Wire(),
             });

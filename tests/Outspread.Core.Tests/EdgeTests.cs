@@ -201,4 +201,23 @@ public class EdgeTests
         // 端点附近：曲线之外 10px 的落点也有距离读数，不会被判成"在线上"。
         Assert.True(EdgeGeometry.DistanceToCurve(-10, 0, x1, y1, c1x, c1y, c2x, c2y, x2, y2) > 9.5);
     }
+
+    [Fact]
+    public void The_delete_preview_red_is_distinct_from_wire_and_selection()
+    {
+        foreach (var dark in new[] { false, true })
+        {
+            var red = EdgeGeometry.DeleteColour(dark);
+            var wire = EdgeGeometry.WireColour(dark);
+            var selected = EdgeGeometry.SelectedColour(dark);
+
+            Assert.True(red.R > red.G + 100 && red.R > red.B + 100, $"删除色不够红：{red.R},{red.G},{red.B}");
+            Assert.True(
+                Math.Abs(red.R - wire.R) + Math.Abs(red.G - wire.G) + Math.Abs(red.B - wire.B) > 150,
+                "删除红和线灰太近");
+            Assert.True(
+                Math.Abs(red.R - selected.R) + Math.Abs(red.G - selected.G) + Math.Abs(red.B - selected.B) > 150,
+                "删除红和选中蓝太近");
+        }
+    }
 }

@@ -219,4 +219,19 @@ public class BoardNamingTests
 
         Assert.Empty(boards);
     }
+
+    [Fact]
+    public void An_untitled_name_whose_sync_ledger_survives_is_skipped()
+    {
+        using var scratch = new Scratch("naming");
+
+        // 旧板删了、账本还在；默认名若复用它，新板会继承旧身份并跟着旧的远端改名标记跑。
+        var result = BoardLocator.NewUntitledBoard(
+            scratch.Folder,
+            avoid: null,
+            nameTaken: name => name == "未命名板1");
+
+        Assert.True(result.Ok);
+        Assert.Equal(Path.Combine(scratch.Folder, "未命名板2.canvas"), result.BoardPath);
+    }
 }

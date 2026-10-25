@@ -1217,7 +1217,20 @@ public sealed partial class MainWindow
         var current = SameBoard(path, _boardPath ?? string.Empty);
 
         var rename = new MenuFlyoutItem { Text = "重命名" };
-        rename.Click += (_, _) => BeginRenameTab(path);
+        rename.Click += (_, _) =>
+        {
+            // 菜单关闭那一下会把焦点交还给标签条；等它关完再落焦点，否则改名框刚拿到焦点就被抢走，
+            // 还得再点一下文本才能打字（他 10-25 报的）。
+            menu.Closed += (_, _) =>
+            {
+                if (_renameBox is { } box)
+                {
+                    FocusRenameBox(box);
+                }
+            };
+
+            BeginRenameTab(path);
+        };
         menu.Items.Add(rename);
 
         var close = new MenuFlyoutItem { Text = "关闭" };
@@ -1640,9 +1653,24 @@ public sealed partial class MainWindow
         CancelRename();
 
         var clock = System.Diagnostics.Stopwatch.StartNew();
+        var folder = BoardLocator.BoardDirectory(_boardPath);
+
         var result = BoardLocator.NewUntitledBoard(
-            BoardLocator.BoardDirectory(_boardPath),
-            _openBoards);
+            folder,
+            _openBoards,
+            name =>
+            {
+                // 自检跑在临时副本上，不能因为本机真实账本里恰好有这些默认名就改数（否则装置自己变红）。
+                if (App.SelfTest)
+                {
+                    return false;
+                }
+
+                var stem = name.ToLowerInvariant();
+
+                return Directory.Exists(System.IO.Path.Combine(SyncLayout.Root, stem))
+                    || Directory.Exists(System.IO.Path.Combine(SyncLayout.LegacyRoot, stem));
+            });
 
         if (!result.Ok)
         {
@@ -1762,6 +1790,17 @@ public sealed partial class MainWindow
 
         box.KeyDown += OnRenameKeyDown;
         box.LostFocus += OnRenameLostFocus;
+        box.GotFocus += (_, _) => box.SelectAll();
+
+        // 第一次进改名时框还没进树，Focus 可能落空；进树后补一次，光标/全选随第一次点击就位。
+        box.Loaded += (_, _) =>
+        {
+            if (ReferenceEquals(_renameBox, box))
+            {
+                box.Focus(FocusState.Keyboard);
+                box.SelectAll();
+            }
+        };
 
         // TextBox 默认模板在"有字且聚焦"时会在右边亮一枚圆形清除按钮（× 那枚）。它在模板的视觉状态里，
         // 不在 Border* 上，所以那几枚主题资源管不着。真机截图里它就长在标签的改名框里，既吃宽度又像
@@ -1770,6 +1809,8 @@ public sealed partial class MainWindow
         box.Loaded += (_, _) => HideRenameClearButton(box);
         box.TextChanged += (_, _) => HideRenameClearButton(box);
 
+        // 入树前先试一次（双击路径通常已经挂上表头了），再走异步焦点那条路。
+        box.Focus(FocusState.Keyboard);
         FocusRenameBox(box);
     }
 
@@ -1882,6 +1923,16 @@ public sealed partial class MainWindow
             }
 
             box.SelectAll();
+
+            // 再补一拍：菜单/双击那一发的焦点归位可能排在我们后面，这一拍保证光标真的在框里。
+            _ = DispatcherQueue.TryEnqueue(() =>
+            {
+                if (ReferenceEquals(_renameBox, box))
+                {
+                    box.Focus(FocusState.Keyboard);
+                    box.SelectAll();
+                }
+            });
         });
     }
 

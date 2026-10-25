@@ -194,7 +194,8 @@ public static class BoardLocator
     /// </param>
     public static NewBoardResult NewUntitledBoard(
         string directory,
-        IReadOnlyCollection<string>? avoid = null)
+        IReadOnlyCollection<string>? avoid = null,
+        Func<string, bool>? nameTaken = null)
     {
         for (var suffix = 1; suffix < 1000; suffix++)
         {
@@ -202,6 +203,13 @@ public static class BoardLocator
             var path = Path.Combine(directory, name + CanvasStore.Extension);
 
             if (avoid is not null && avoid.Any(open => string.Equals(open, path, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            // 默认名会被重复使用；若这个名字还留着上一块板的同步账本，新板会继承旧身份，
+            // 跟着旧的远端改名标记跑（10-25 他新建的板被自动改名成“测试”）。名字被账本占用就跳下一个。
+            if (nameTaken?.Invoke(name) == true)
             {
                 continue;
             }

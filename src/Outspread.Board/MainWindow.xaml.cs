@@ -5354,7 +5354,7 @@ public sealed partial class MainWindow : Window
             // 双击空白新建、关板子都不该出现在这张页上。负面对照之外还要正面那几条在——
             // 只剩空表也会让上面这一条"没有禁止项"变成假绿。
             {
-                string[] forbidden = ["上移一格", "下移一格", "左移一格", "右移一格", "复制选中", "粘贴剪贴板", "取消选中", "新建便签", "关掉这块板"];
+                string[] forbidden = ["上移一格", "下移一格", "左移一格", "右移一格", "复制选中", "粘贴剪贴板", "取消选中", "新建便签", "关掉这块板", "从边缘拉一根线", "恢复…"];
                 var sheetRows = MenuRows(CheatPanel);
                 var leaked = sheetRows.Where(row => forbidden.Contains(row.Text)).Select(row => row.Text).Distinct().ToList();
 
@@ -5363,9 +5363,9 @@ public sealed partial class MainWindow : Window
                     problems.Add($"键位清单里还有他点掉的那几行：{string.Join("、", leaked)}");
                 }
 
-                if (sheetRows.All(row => row.Text != "从边缘拉一根线"))
+                if (sheetRows.Any(row => row.Text == "从边缘拉一根线" || row.Text == "恢复…"))
                 {
-                    problems.Add("键位清单里读不到『从边缘拉一根线』——操作条那枚钮撤掉以后，这条是它唯一的说明");
+                    problems.Add("键位清单里又出现了他点名要隐藏的手势/恢复行");
                 }
             }
 

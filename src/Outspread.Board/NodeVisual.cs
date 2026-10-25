@@ -171,6 +171,9 @@ public sealed class NodeVisual : ContentControl
 
     private int _visibleLines = 1;
 
+    /// <summary>上一次的溢出布局键：只有它变了才主动重排，平移时不会每帧触发。</summary>
+    private string _overflowKey = string.Empty;
+
     /// <summary>自检读的第三个数：实际允许画几行（有溢出时会比可见行多一行半行）。</summary>
     internal int RenderedMaxLines => _label.MaxLines;
 
@@ -846,6 +849,17 @@ public sealed class NodeVisual : ContentControl
                 _surface.Padding = _hasMore && !showChips
                     ? new Thickness(inset, inset, inset, 0)
                     : new Thickness(inset);
+
+                // 溢出布局（行数/多出的半行/下内距）变了就主动重排一次：已有便签在加载或拖高时
+                // 没有文字变化，若只依赖 TextBlock 自己失效，半行会等下一次编辑才出现。
+                var overflowKey = $"{_hasMore}|{_visibleLines}|{_label.MaxLines}|{leading:0.##}|{room:0.##}";
+
+                if (!string.Equals(overflowKey, _overflowKey, StringComparison.Ordinal))
+                {
+                    _overflowKey = overflowKey;
+                    _label.InvalidateMeasure();
+                    _textHost.InvalidateMeasure();
+                }
 
                 // 多出的那一行不额外限高：标签照常排到卡底，由卡片自己的 Clip 从中间裁断，
                 // 底部渐隐再把它吃掉——这才是"半行"。限成正文区高度反而会让整行消失。

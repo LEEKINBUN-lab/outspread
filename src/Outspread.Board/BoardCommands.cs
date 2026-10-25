@@ -65,12 +65,13 @@ public sealed partial class MainWindow
 
     private Command[] Commands() =>
     [
+        // 键位清单按"同一类键连在一起"排：Alt＋方向四条相邻，居中两条相邻，均分两条相邻。
         new("左对齐", "Alt+Left", "排布", () => Arrange("左对齐", items => Aligning.Align(items, Aligning.Side.Left))),
-        new("水平居中", "Alt+H", "排布", () => Arrange("水平居中", items => Aligning.Align(items, Aligning.Side.HCenter))),
         new("右对齐", "Alt+Right", "排布", () => Arrange("右对齐", items => Aligning.Align(items, Aligning.Side.Right))),
         new("上对齐", "Alt+Up", "排布", () => Arrange("上对齐", items => Aligning.Align(items, Aligning.Side.Top))),
-        new("垂直居中", "Alt+V", "排布", () => Arrange("垂直居中", items => Aligning.Align(items, Aligning.Side.VCenter))),
         new("下对齐", "Alt+Down", "排布", () => Arrange("下对齐", items => Aligning.Align(items, Aligning.Side.Bottom))),
+        new("水平居中", "Alt+H", "排布", () => Arrange("水平居中", items => Aligning.Align(items, Aligning.Side.HCenter))),
+        new("垂直居中", "Alt+V", "排布", () => Arrange("垂直居中", items => Aligning.Align(items, Aligning.Side.VCenter))),
         new("横向均分", "Alt+J", "排布", () => Arrange("横向均分", items => Aligning.Distribute(items, horizontal: true))),
         new("纵向均分", "Alt+K", "排布", () => Arrange("纵向均分", items => Aligning.Distribute(items, horizontal: false))),
         new("堆叠", "Alt+L", "排布", () => Arrange("堆叠", Aligning.Stack)),
@@ -83,7 +84,8 @@ public sealed partial class MainWindow
 
         // 连线按叠放次序把选中的串成一条链，全都在就是拆链（原型同一条命令两用）。
         new("连线", "Alt+C", "组织", ConnectSelection),
-        new("从边缘拉一根线", "双击边缘", "组织", StartPullFromSelection, Dispatched: false, Menu: false),
+        // 键位页不再列它（他 10-25 点名），但双击边缘那条手势本身照旧。
+        new("从边缘拉一根线", "双击边缘", "组织", StartPullFromSelection, Dispatched: false, Sheet: false, Menu: false),
         new("全部选中", "Ctrl+A", "板子", SelectAll, Dispatched: false, Listed: false),
         new("复制选中", "Ctrl+C", "板子", () => _ = CopySelectionAsync(), Sheet: false),
         new("剪切选中", "Ctrl+X", "板子", () => _ = CutSelectionAsync(), Listed: false, Sheet: false),
@@ -96,7 +98,8 @@ public sealed partial class MainWindow
 
         // 查找与恢复没有第二个入口的要不得：查找是"贴进去的东西找得回来"，恢复是"改坏了还够得着"。
         new("查找", "Ctrl+F", "板子", OpenSearch, Listed: false),
-        new("恢复…", string.Empty, "板子", OpenRestorePanel),
+        // 恢复只从标题条右端的 ⋮ 进；键位页不再列它（功能还在）。
+        new("恢复…", string.Empty, "板子", OpenRestorePanel, Sheet: false),
 
         // 一块板一件事：这一组管的是"这扇窗口现在在处理哪件事"，不动板子上的任何一个字。
         new("新板块", "Ctrl+N", "换板子", CreateNewBoard),

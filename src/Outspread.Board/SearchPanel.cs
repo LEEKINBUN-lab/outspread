@@ -360,7 +360,7 @@ public sealed partial class MainWindow
     private void SelfTestOverflowCue(List<string> problems)
     {
         var saved = (_view.PanX, _view.PanY, _view.Zoom);
-        var note = _document.Add(CanvasNodeKind.Text, 40000, 40000, 260, 68);
+        var note = _document.Add(CanvasNodeKind.Text, 40000, 40000, 260, 90);
         note.Text = "快速\n所有\n再看";
         _view.MarkManualSize(note.Id);
 
@@ -370,7 +370,12 @@ public sealed partial class MainWindow
             _view.PanX = 24 - (note.X * 1.4);
             _view.PanY = 16 - (note.Y * 1.4);
 
+            // 先按 90 高放一次（已有便签的加载状态），再只改高度、不改文字——复现"已有便签要重新编辑才出现渐隐"。
             Rebuild();
+            ArrangeAll();
+            BoardArea.UpdateLayout();
+
+            note.Height = 68;
             ArrangeAll();
             BoardArea.UpdateLayout();
 

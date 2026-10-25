@@ -45,6 +45,9 @@ public sealed class BoardViewState
 
     public void MarkManualSize(string id) => _manualSizes.Add(id);
 
+    /// <summary>把"手动定过大小"的标记摘掉（只在确认那几像素是误触时用）。</summary>
+    public void UnmarkManualSize(string id) => _manualSizes.Remove(id);
+
     /// <summary>
     /// Today, as far as the marks care. A property rather than a call to <c>DateTime.Now</c> so the
     /// due arithmetic is testable and so a board left open past midnight can be told to re-evaluate.

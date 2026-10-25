@@ -171,6 +171,9 @@ public sealed class NodeVisual : ContentControl
 
     private int _visibleLines = 1;
 
+    /// <summary>自检读的第三个数：实际允许画几行（有溢出时会比可见行多一行半行）。</summary>
+    internal int RenderedMaxLines => _label.MaxLines;
+
     private int _totalLines = 1;
 
     /* "还有没有藏起来的行"必须按**视觉行**算：一段长句子在窄格子里会绕成三四行，
@@ -824,7 +827,9 @@ public sealed class NodeVisual : ContentControl
             }
             else
             {
-                _label.MaxLines = _visibleLines;
+                // 还有内容时多放一行在卡底外面：卡自己会裁掉大半行，渐隐再压上去，
+                // 屏幕上就露出"半行正在淡出"，而不是一行都不剩、只剩一片空白。
+                _label.MaxLines = _hasMore ? _visibleLines + 1 : _visibleLines;
                 _label.TextTrimming = TextTrimming.WordEllipsis;
             }
         }

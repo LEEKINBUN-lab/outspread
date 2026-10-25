@@ -351,6 +351,115 @@ public sealed partial class MainWindow
 
 
     /// <summary>
+    /// 只差几像素的手动尺寸按误触修正；断头线（一端便签已删）在打开/删除时真正清掉。
+    /// </summary>
+    private void SelfTestRepairs(List<string> problems)
+    {
+        var note = _document.Add(CanvasNodeKind.Text, 40000, 40000, 260, 60);
+        note.Text = "快速\n所有";
+
+        var need = MeasureTextHeight(note.Text, note.Width, _view.FontSizeFor(note.Id));
+        note.Height = need - 5;
+        _view.MarkManualSize(note.Id);
+
+        var repaired = RepairTinyManualShrinks();
+
+        if (repaired < 1 || Math.Abs(note.Height - need) > 0.001 || _view.IsManualSize(note.Id))
+        {
+            problems.Add(
+                $"自检修复: 只差 5px 的手动尺寸没被修正（高 {note.Height:0.#}，应 {need:0.#}，手动 {_view.IsManualSize(note.Id)}）");
+        }
+
+        _view.UnmarkManualSize(note.Id);
+        _document.Remove(note.Id);
+
+        var left = _document.Add(CanvasNodeKind.Text, 40100, 40000, 200, 60);
+        var right = _document.Add(CanvasNodeKind.Text, 40400, 40000, 200, 60);
+        var edge = _document.AddEdge(left.Id, right.Id);
+        _document.Remove(right.Id);
+
+        var removed = PurgeOrphanEdges();
+
+        if (removed < 1 || _document.Edges.Any(item => item.Id == edge.Id))
+        {
+            problems.Add("自检修复: 删掉一端便签后，指向它的连线没被清掉");
+        }
+
+        _document.Remove(left.Id);
+        _document.RemoveEdge(edge.Id);
+
+        if (problems.Count == 0)
+        {
+            Diagnostics.Write("selftest 修复: 5px 误触尺寸回到自动高度；断头线在删除后清掉");
+        }
+    }
+
+    /// <summary>
+    /// 内容确实放不下时：底部渐隐要亮，而且卡里要真的多画半行，否则渐隐压在空白上，
+    /// 屏幕上还是"看不出有没有显示完"（他 10-25 报的第二条）。
+    /// </summary>
+    private void SelfTestOverflowCue(List<string> problems)
+    {
+        var saved = (_view.PanX, _view.PanY, _view.Zoom);
+        var note = _document.Add(CanvasNodeKind.Text, 40000, 40000, 260, 60);
+        note.Text = "快速\n所有";
+        _view.MarkManualSize(note.Id);
+
+        try
+        {
+            _view.Zoom = 1.4;
+            _view.PanX = 24 - (note.X * 1.4);
+            _view.PanY = 16 - (note.Y * 1.4);
+
+            Rebuild();
+            ArrangeAll();
+            BoardArea.UpdateLayout();
+
+            if (!_realized.TryGetValue(note.Id, out var card))
+            {
+                problems.Add("自检溢出处: 140% 下没有画出那枚便签");
+
+                return;
+            }
+
+            var state = card.WindowState();
+            var fade = FindDescendant<Microsoft.UI.Xaml.Shapes.Rectangle>(card, "OverflowFadeBelow");
+
+            if (!state.HasMore)
+            {
+                problems.Add("自检溢出处: 60 高的两行便签没被判定为还有内容");
+            }
+
+            if (fade?.Visibility != Visibility.Visible)
+            {
+                problems.Add("自检溢出处: 内容放不下时底部渐隐没有亮");
+            }
+
+            if (card.RenderedMaxLines <= state.Visible)
+            {
+                problems.Add(
+                    $"自检溢出处: 渐隐亮着但只画了 {card.RenderedMaxLines} 行（可见 {state.Visible}）——渐隐压在空白上");
+            }
+            else
+            {
+                Diagnostics.Write(
+                    $"selftest 溢出处: 60 高便签可见 {state.Visible} 行、多画 {card.RenderedMaxLines - state.Visible} 行半行，底部渐隐亮");
+            }
+        }
+        finally
+        {
+            _view.UnmarkManualSize(note.Id);
+            _document.Remove(note.Id);
+            _view.PanX = saved.PanX;
+            _view.PanY = saved.PanY;
+            _view.Zoom = saved.Zoom;
+
+            Rebuild();
+            ArrangeAll();
+        }
+    }
+
+    /// <summary>
     /// 两行便签在 160% 这样的小数缩放下也必须显示两行：所有尺寸都乘过 zoom，floor 之前若不留
     /// epsilon，42/21 会算成 1.9999999999999998，第二行整行消失、渐隐却亮着（10-25 他报的）。
     /// </summary>

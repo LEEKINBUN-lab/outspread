@@ -87,7 +87,7 @@ public sealed partial class MainWindow : Window
 
     /// <summary>双击窗口与"同一处"的容差，跟平台认 DoubleTapped 的规矩同一量级。</summary>
     private const long DoubleClickWindowMs = 500;
-    private const double DoubleClickSlopPx = 4;
+    private const double DoubleClickSlopPx = 8;
 
     /// <summary>这一发按下已经走过 4 像素的拖动阈值没有：没过就不许写格子的位置（手抖不是拖动）。
     /// 每一发按下重新归零，所以它跟着 <see cref="_nodeGesture"/> 的两处创建点各写一次 false。</summary>
@@ -195,7 +195,21 @@ public sealed partial class MainWindow : Window
         // 系统那三枚按钮（最小化／最大化／关闭）画在客户端区右上，标签条必须给它们让出宽度，
         // 否则最后一枚标签会被盖住。让多少不能拍脑袋：读 AppWindow.TitleBar.RightInset（设备像素）
         // 再除以这扇窗的缩放。要等 XamlRoot 有缩放才量得到，所以挂在第一次布局之后。
-        Root.Loaded += (_, _) => ReserveCaptionButtons();
+        Root.Loaded += (_, _) =>
+        {
+            ReserveCaptionButtons();
+
+            // 只差几像素的“手动大小”多半是压边误触留下的：它把自动高度锁住，正文就被裁掉。
+            // 这不是界面提示能解释的事，开机时静默修正；真正拉大/拉小的框（差得多）不动。
+            var repaired = RepairTinyManualShrinks();
+
+            if (repaired > 0)
+            {
+                Diagnostics.Write($"打开时修正 {repaired} 个只差几像素的误触尺寸");
+                Rebuild();
+                SaveSoon();
+            }
+        };
 
         // 两块"只有一行"的浮层：筛选横幅与回执那一句话。行就是菜单那一枚控件，文字由各自的事件改，
         // 所以建窗时搭一次、以后只换字——换字不改结构，就不会长成第三、第四种组件。
@@ -416,11 +430,12 @@ public sealed partial class MainWindow : Window
 
             // 打开时把只剩空壳的组收掉：它们不可见、不可点，只在搜索/同步里顶着旧名字。
             // 删的是文档里已经死掉的框架，下一次保存会把它从文件里带走。
+            var orphanEdges = PurgeOrphanEdges();
             var shells = PurgeEmptyGroups();
 
-            if (shells > 0)
+            if (orphanEdges > 0 || shells > 0)
             {
-                Diagnostics.Write($"打开时收掉 {shells} 个空组");
+                Diagnostics.Write($"打开时收掉 {orphanEdges} 条断头线、{shells} 个空组");
                 SaveSoon();
             }
 
@@ -1173,13 +1188,32 @@ public sealed partial class MainWindow : Window
 
         if (_resizeGesture is { } resize)
         {
-            // 手动拖过大小的文字格：以后回车不再改它的框；这是他自己定下的尺寸。
-            foreach (var (node, _, _, startWidth, startHeight) in resize.Start.Values)
+            // 几像素的形变多半是压边误触（双击拉线的第二下、单击选中时的手抖），不是"定尺寸"。
+            // 这一档退回原尺寸，也不写手动标记；超过 8 世界像素才算真的拖过大小。
+            const double deliberateResizePx = 8;
+            var biggest = resize.Start.Values
+                .Select(item => Math.Max(Math.Abs(item.Node.Width - item.W), Math.Abs(item.Node.Height - item.H)))
+                .DefaultIfEmpty(0)
+                .Max();
+
+            if (biggest <= deliberateResizePx)
             {
-                if (node.Kind == CanvasNodeKind.Text
-                    && (Math.Abs(node.Width - startWidth) > 0.5 || Math.Abs(node.Height - startHeight) > 0.5))
+                foreach (var (node, _, _, startWidth, startHeight) in resize.Start.Values)
                 {
-                    _view.MarkManualSize(node.Id);
+                    node.Width = startWidth;
+                    node.Height = startHeight;
+                }
+            }
+            else
+            {
+                // 手动拖过大小的文字格：以后回车不再改它的框；这是他自己定下的尺寸。
+                foreach (var (node, _, _, startWidth, startHeight) in resize.Start.Values)
+                {
+                    if (node.Kind == CanvasNodeKind.Text
+                        && (Math.Abs(node.Width - startWidth) > 0.5 || Math.Abs(node.Height - startHeight) > 0.5))
+                    {
+                        _view.MarkManualSize(node.Id);
+                    }
                 }
             }
 
@@ -2540,6 +2574,32 @@ public sealed partial class MainWindow : Window
     /// 随文字 / 固定 — the note-size switch. Fixed means editing changes the text only, and the
     /// frame is sized by the handles alone.
     /// </summary>
+    /// <summary>
+    /// 手动尺寸若只比自动高度小几像素，按误触处理：摘掉手动标记并补到自动高度。
+    /// 大得多的手动尺寸不动——那是用户有意压小的框，靠渐隐提示还有内容。
+    /// </summary>
+    private int RepairTinyManualShrinks()
+    {
+        var repaired = 0;
+
+        foreach (var node in _document.Nodes
+            .Where(node => node.Kind == CanvasNodeKind.Text && _view.IsManualSize(node.Id))
+            .ToList())
+        {
+            var need = MeasureTextHeight(node.Text ?? string.Empty, node.Width, _view.FontSizeFor(node.Id));
+            var gap = need - node.Height;
+
+            if (gap > 0.5 && gap <= 8)
+            {
+                node.Height = need;
+                _view.UnmarkManualSize(node.Id);
+                repaired++;
+            }
+        }
+
+        return repaired;
+    }
+
     private void FitNoteHeight(CanvasNode node)
     {
         if (_view.NoteSize == NoteSizeMode.Fixed || _view.IsManualSize(node.Id))
@@ -3310,12 +3370,13 @@ public sealed partial class MainWindow : Window
             _document.Remove(id);
         }
 
-        // 删完成员后没成员的组一起收掉：否则它们只是被藏起来，搜索里还能搜到。
+        // 删完成员后：连着它的线、没成员的组一起收掉。只删节点会留下永远修不掉的格式错误。
+        var orphanEdges = PurgeOrphanEdges();
         var purged = PurgeEmptyGroups();
 
-        if (purged > 0)
+        if (orphanEdges > 0 || purged > 0)
         {
-            Diagnostics.Write($"删除时收掉 {purged} 个空组");
+            Diagnostics.Write($"删除时收掉 {orphanEdges} 条断头线、{purged} 个空组");
         }
 
         ClearSelection();
@@ -5647,6 +5708,8 @@ public sealed partial class MainWindow : Window
         // 相机：幽灵格不许拉远"看到全部"；"回到 100%"以后屏幕上必须有内容。
         SelfTestCameraFraming(problems);
         SelfTestTwoLineNoteAtFractionalZoom(problems);
+        SelfTestOverflowCue(problems);
+        SelfTestRepairs(problems);
 
         // 双击组名＝改名（不是空白新建）。
         SelfTestGroupLabelHit(problems);

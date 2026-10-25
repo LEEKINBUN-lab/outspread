@@ -164,6 +164,27 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
+    /// 删掉两端有一头已经不在板上的连线。删便签时以前只删节点、不删线，文件里就留下
+    /// "edge refers to node X, which is not in this board" 这种永远不消失的格式错误
+    /// （他 10-25 看到的 4 处就是一条指向两个已删便签的旧线）。
+    /// </summary>
+    private int PurgeOrphanEdges()
+    {
+        var live = _document.Nodes.Select(node => node.Id).ToHashSet(StringComparer.Ordinal);
+        var dead = _document.Edges
+            .Where(edge => !live.Contains(edge.FromNode) || !live.Contains(edge.ToNode))
+            .Select(edge => edge.Id)
+            .ToList();
+
+        foreach (var id in dead)
+        {
+            _document.RemoveEdge(id);
+        }
+
+        return dead.Count;
+    }
+
+    /// <summary>
     /// 把成员已经一个不剩的组从文档里真正删掉。删完成员的组框既看不见也点不到（EmptyGroupIds
     /// 会藏它），留在文件里只剩搜索和同步里的一个鬼名——他 10-25 的"测试/分组不在了还搜得到"
     /// 就是这种空壳。返回删了几个，调用方负责把它包在同一个撤销步里。

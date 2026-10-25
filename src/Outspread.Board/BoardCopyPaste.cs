@@ -95,12 +95,13 @@ public sealed partial class MainWindow
             _document.Remove(node.Id);
         }
 
-        // 和删除同一条：名单空了的组连框一起收掉，别留下搜得到的空壳。
+        // 和删除同一条：连线与空组一起收掉，别留下断头线或搜得到的空壳。
+        var orphanEdges = PurgeOrphanEdges();
         var purged = PurgeEmptyGroups();
 
-        if (purged > 0)
+        if (orphanEdges > 0 || purged > 0)
         {
-            Diagnostics.Write($"剪切时收掉 {purged} 个空组");
+            Diagnostics.Write($"剪切时收掉 {orphanEdges} 条断头线、{purged} 个空组");
         }
 
         ClearSelection();

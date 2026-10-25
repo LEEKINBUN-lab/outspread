@@ -525,6 +525,12 @@ public sealed partial class MainWindow : Window
             _sync?.Stop();
             _sync = new SyncHost(_boardPath, Say, DispatcherQueue, FollowRemoteRename);
             _sync.Start();
+
+            if (!_ledgerCleanupStarted)
+            {
+                _ledgerCleanupStarted = true;
+                _ = ReleaseUntitledLedgersAsync();
+            }
         }
         catch (Exception ex) when (ex is CanvasDocumentException or JsonException or IOException
                                    or UnauthorizedAccessException or InvalidOperationException)

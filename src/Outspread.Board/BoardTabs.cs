@@ -2234,6 +2234,44 @@ public sealed partial class MainWindow
     }
 
     /// <summary>给本机同名板找一个可用名字：名字本身、加“（本机）”、再加编号。</summary>
+    private bool _ledgerCleanupStarted;
+
+    /// <summary>
+    /// 启动后读一次远端文件表，释放"远端已经不存在"的默认名/自检账本。一次请求，失败就算了；
+    /// 只碰未命名板N与 selftest*，有名有姓的板账本不动。
+    /// </summary>
+    private async Task ReleaseUntitledLedgersAsync()
+    {
+        if (_boardPath is null || IsAllNotes(_boardPath) || App.SelfTest)
+        {
+            return;
+        }
+
+        try
+        {
+            var folder = BoardLocator.BoardDirectory(_boardPath);
+            var keep = new HashSet<string>(
+                _openBoards.Where(path => !IsAllNotes(path)).Select(SyncPaths.BoardStem),
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var path in BoardLocator.BoardsIn(folder))
+            {
+                keep.Add(SyncPaths.BoardStem(path));
+            }
+
+            var released = await SyncHousekeeping.ReleaseUntitledLedgersAsync(keep);
+
+            if (released.Count > 0)
+            {
+                Diagnostics.Write($"释放未用的默认板名: {string.Join(", ", released)}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Write($"释放默认板名失败（不影响开板）：{ex.Message}");
+        }
+    }
+
     private static string UniqueBoardStem(string folder, string stem)
     {
         var candidate = $"{stem}（本机）";

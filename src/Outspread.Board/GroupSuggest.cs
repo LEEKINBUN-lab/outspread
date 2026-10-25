@@ -57,7 +57,7 @@ public sealed partial class MainWindow
 
         _groupHintIds = ids;
 
-        _groupHint = AssistPill($"编成组？这 {_groupHintIds.Count} 格");
+        _groupHint = AssistPill($"编成组？这 {_groupHintIds.Count} 个便签");
         _groupHint.Name = "GroupHint";
         _groupHint.PointerPressed += (_, args) =>
         {
@@ -141,7 +141,7 @@ public sealed partial class MainWindow
         var rect = RectOf(node);
         var remaining = Groups().Members(group.Id).Where(member => member.Id != id).ToList();
 
-        BeginGesture("把这格移出组");
+        BeginGesture("把这个便签移出组");
 
         if (remaining.Count == 0)
         {
@@ -199,8 +199,8 @@ public sealed partial class MainWindow
         var groupName = NodeOf(group.Id)?.Label is { Length: > 0 } label ? label : "未命名组";
 
         Say(remaining.Count == 0
-            ? $"组“{groupName}”已无其他成员，组已解散，格子位置未变"
-            : $"已从组“{groupName}”移出，格子位置尽量保持");
+            ? $"组“{groupName}”已无其他成员，组已解散，便签位置未变"
+            : $"已从组“{groupName}”移出，便签位置尽量保持");
 
         Diagnostics.Write($"pull out: {id} 出 {group.Id}，剩 {remaining.Count} 枚，X→{node.X:0.#} Y→{node.Y:0.#}");
     }

@@ -466,7 +466,7 @@ public sealed partial class MainWindow
     {
         if (!outcome.Ok)
         {
-            Say($"“{label}”至少需要 {outcome.Needed} 件（一格或一组计一件），当前可选 {outcome.Have} 件");
+            Say($"“{label}”至少需要 {outcome.Needed} 件（一个便签或一组计一件），当前可选 {outcome.Have} 件");
 
             return;
         }

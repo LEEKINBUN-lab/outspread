@@ -57,6 +57,40 @@ public sealed partial class MainWindow
     /// <see cref="_editorProps"/> and takes it out of the buffer — so the token disappears where it
     /// was typed and shows up as a chip. Any other Enter is a normal newline and is left alone.
     /// </summary>
+    /// <summary>
+    /// 编辑框里的回车。Ctrl＋Enter＝收笔；标记行＝收进隐藏块。只改牌子的那一趟收下后直接收笔，
+    /// 新建/正文编辑仍留在编辑态，方便接着补日期或序号。返回 true＝这一发被吃掉（不插换行）。
+    /// </summary>
+    private bool HandleEditorEnter()
+    {
+        if (_editingId is null)
+        {
+            return false;
+        }
+
+        if (KeyDownIs(Windows.System.VirtualKey.Control))
+        {
+            CloseEditor(commit: true);
+
+            return true;
+        }
+
+        if (AbsorbPropertyLine())
+        {
+            if (_markEditOnly)
+            {
+                CloseEditor(commit: true);
+            }
+
+            return true;
+        }
+
+        // 换行照插（不吃这一发，交给输入框自己），但排版要等 TextChanged 落定之后再量一次。
+        DispatcherQueue.TryEnqueue(GrowEditorToFit);
+
+        return false;
+    }
+
     private bool AbsorbPropertyLine()
     {
         if (_editor is not { } editor)
@@ -261,15 +295,15 @@ public sealed partial class MainWindow
         var what = _view.TagFilter is { Length: > 0 } tag
             ? $"只看 {tag}"
             : _view.DueFilter is { } state
-                ? $"只看{DueLabel(state)}的格子"
+                ? $"只看{DueLabel(state)}的便签"
                 : "没有筛选";
 
         // 折进组里的那几格必须有一句，否则筛选看起来像删了便签。框上那行标签会被卡片盖住
         // （框贴着成员收，没给标题留边），所以这句话由这条一直在屏幕上的横幅来说。
         var folded = FoldedAwayCount;
 
-        _bannerRow.Text = $"{what} · {notes.Count} 格中的 {shown} 格"
-            + (folded > 0 ? $" · {folded} 格折进了组" : string.Empty)
+        _bannerRow.Text = $"{what} · {notes.Count} 个便签中的 {shown} 个"
+            + (folded > 0 ? $" · {folded} 个便签折叠进了组" : string.Empty)
             + " · 点这清除";
         FilterBanner.Visibility = Visibility.Visible;
     }
@@ -319,6 +353,9 @@ public sealed partial class MainWindow
         }
 
         BeginEdit(nodeId);
+
+        // 从牌子进来的这一发是"只改这枚标记"：收下它以后回车就收笔，不再停在新便签的编辑态。
+        _markEditOnly = true;
         BeginMarkEdit(token);
     }
 
@@ -405,6 +442,81 @@ public sealed partial class MainWindow
         Canvas.SetTop(_editorChips, Canvas.GetTop(_editor) + _editor.Height - pad - Math.Max(16, size * 1.6));
     }
 
+    /// <summary>
+    /// 只改牌子的那一趟：收下标记行的回车要收笔；普通/新建编辑里同样的回车仍留在编辑态。
+    /// </summary>
+    private void SelfTestMarkEditEnter(List<string> problems)
+    {
+        var target = BoardNotes()
+            .Where(node => node.Kind == CanvasNodeKind.Text)
+            .Select(node => (Node: node, Chips: NoteMarks.Chips(Tags.Read(node.Text), _view.Today)))
+            .FirstOrDefault(pair => pair.Chips.Count > 0);
+
+        if (target.Node is null)
+        {
+            Diagnostics.Write("selftest 标记回车: 板上没有带标记的便签，这一发不适用");
+
+            return;
+        }
+
+        var before = _document.ToJson();
+        var token = target.Chips[0].Source;
+
+        EditMarkFrom(target.Node.Id, token);
+
+        if (_editor is null || !_markEditOnly)
+        {
+            problems.Add("自检标记回车: 从牌子进入编辑时没有记成‘只改标记’");
+
+            return;
+        }
+
+        if (!HandleEditorEnter())
+        {
+            problems.Add($"自检标记回车: 选中 {token} 按回车没有收下标记行");
+        }
+        else if (_editor is not null)
+        {
+            problems.Add("自检标记回车: 只改牌子时按回车没有退出编辑态");
+        }
+
+        if (_document.ToJson() != before)
+        {
+            Undo();
+            Rebuild();
+
+            if (_document.ToJson() != before)
+            {
+                problems.Add("自检标记回车: 收笔后的改动撤销不回去");
+            }
+        }
+
+        // 普通编辑（含新建）：同样收下标记行，但必须留在编辑态。
+        BeginEdit(target.Node.Id);
+        _editor!.Text = "@t自检";
+        _editor.SelectionStart = _editor.Text.Length;
+
+        if (!HandleEditorEnter())
+        {
+            problems.Add("自检标记回车: 普通编辑里收下标记行失败");
+        }
+        else if (_editor is null)
+        {
+            problems.Add("自检标记回车: 普通编辑收下标记行后也被迫收笔了");
+        }
+
+        CloseEditor(commit: false);
+
+        if (_document.ToJson() != before)
+        {
+            problems.Add("自检标记回车: 取消普通编辑却改了文档");
+        }
+        else
+        {
+            Diagnostics.Write("selftest 标记回车: 只改牌子→收笔；普通/新建编辑→留在编辑态；两者都不误写文档");
+        }
+    }
+
     private void ClearFilters()
     {
         _view.TagFilter = null;
@@ -475,7 +587,7 @@ public sealed partial class MainWindow
         // 这两句走 Say() 而不是直接写字：回执那一枚只在 Say() 里浮出来，
         // 上一版直接改文字＝写进一块看不见的板子里。
         Say(_view.TagFilter is { } active
-            ? $"仅显示标签为 {active} 的格子（再次点击取消）"
+            ? $"仅显示标签为 {active} 的便签（再次点击取消）"
             : "已取消标签筛选");
     }
 
@@ -486,7 +598,7 @@ public sealed partial class MainWindow
         Rebuild();
 
         Say(_view.DueFilter is { } active
-            ? $"仅显示{DueLabel(active)}的格子（再次点击取消）"
+            ? $"仅显示{DueLabel(active)}的便签（再次点击取消）"
             : "已取消到期筛选");
     }
 }

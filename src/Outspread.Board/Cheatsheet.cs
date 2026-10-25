@@ -36,24 +36,7 @@ public sealed partial class MainWindow
         // 是死的，中文输入法在场时他按多少次都不收笔。"回车收下标记行"那条也是同一条路。
         if (e.Key == Windows.System.VirtualKey.Enter && _editingId is not null)
         {
-            if (KeyDownIs(Windows.System.VirtualKey.Control))
-            {
-                CloseEditor(commit: true);
-                e.Handled = true;
-
-                return;
-            }
-
-            if (AbsorbPropertyLine())
-            {
-                // 这一发回车是"收下这枚标记"，不是换行。
-                e.Handled = true;
-
-                return;
-            }
-
-            // 换行照插（不吃这一发，交给输入框自己），但排版要等 TextChanged 落定之后再量一次。
-            DispatcherQueue.TryEnqueue(GrowEditorToFit);
+            e.Handled = HandleEditorEnter();
 
             return;
         }
@@ -272,7 +255,7 @@ public sealed partial class MainWindow
     /// </summary>
     private void NewNoteAt(Point screen)
     {
-        BeginGesture("新建一格");
+        BeginGesture("新建便签");
 
         var node = CreateTextNote(string.Empty, FreeOfGroups(new Point(_view.ToWorldX(screen.X), _view.ToWorldY(screen.Y))));
 

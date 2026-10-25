@@ -92,7 +92,7 @@ public sealed partial class MainWindow
         GuideLayer.Children.Add(_pullDot);
 
 
-        Say("拉线中：点击另一格完成连接，点击空白或按 Esc 取消");
+        Say("拉线中：点击另一个便签完成连接，点击空白或按 Esc 取消");
     }
 
     /// <summary>菜单/键位那一条路：从选中那一格靠视野中心的那一面起头。</summary>
@@ -109,7 +109,7 @@ public sealed partial class MainWindow
 
         if (members.Count != 1)
         {
-            Say($"拉线需要选中 1 格，当前选中 {members.Count} 格");
+            Say($"拉线需要选中 1 个便签，当前选中 {members.Count} 个便签");
 
             return;
         }
@@ -211,7 +211,7 @@ public sealed partial class MainWindow
         if (target is null || target.Id == pull.FromId)
         {
             CancelPull();
-            Say("未连接到任何格子，未创建连线");
+            Say("未连接到任何便签，未创建连线");
 
             return true;
         }

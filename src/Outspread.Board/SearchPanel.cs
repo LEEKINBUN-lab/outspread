@@ -126,7 +126,8 @@ public sealed partial class MainWindow
     {
         var query = _searchBox.Text;
 
-        _searchHits = BoardSearch.Find(_document, query);
+        // 44 字窗口：命中左右各留一段上下文，整行又不会长到把命中裁出可视宽度。
+        _searchHits = BoardSearch.Find(_document, query, window: 44);
         _searchCursor = -1;
 
         if (string.IsNullOrWhiteSpace(query))
@@ -138,7 +139,7 @@ public sealed partial class MainWindow
 
         if (_searchHits.Count == 0)
         {
-            SearchScroll.Content = PanelKit.Host(PanelKit.Line("板上没有哪一格含这些字"));
+            SearchScroll.Content = PanelKit.Host(PanelKit.Line("板上没有任何便签包含这些文字"));
 
             return;
         }
@@ -151,8 +152,10 @@ public sealed partial class MainWindow
             var index = i;
 
             rows.Add(
-                PanelKit.Row(
+                PanelKit.SearchRow(
                     hit.Snippet,
+                    hit.MatchStart,
+                    hit.MatchLength,
                     KindWord(hit.Kind),
                     () => JumpToHit(index)));
         }
@@ -184,7 +187,7 @@ public sealed partial class MainWindow
         if (node is null)
         {
             // 列表是上一发按键建的，板子在这之间可能被外面改过——旧 id 不猜，直接说。
-            Say("目标格子已不在板面上，请重新查找");
+            Say("目标便签已不在板面上，请重新查找");
             RunSearch();
 
             return;
@@ -300,7 +303,7 @@ public sealed partial class MainWindow
         if (members.Count == 0)
         {
             // 不合法的命令要明着拒绝（不变量 4）：说清它要什么、现在有什么。
-            Say("“看到选中”需要先选中格子，当前选中 0 格");
+            Say("“看到选中”需要先选中便签，当前选中 0 个便签");
 
             return;
         }

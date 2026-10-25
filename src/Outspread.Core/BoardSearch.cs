@@ -66,7 +66,7 @@ public static class BoardSearch
     /// <paramref name="limit"/>. An empty or whitespace-only query, or a non-positive limit, returns
     /// nothing — an empty query means "not typed yet", not "match everything".
     /// </summary>
-    public static IReadOnlyList<Hit> Find(CanvasDocument document, string query, int limit = 50)
+    public static IReadOnlyList<Hit> Find(CanvasDocument document, string query, int limit = 50, int window = SnippetWindow)
     {
         if (document is null || limit <= 0)
         {
@@ -96,9 +96,25 @@ public static class BoardSearch
                 continue;
             }
 
-            if (TryScore(node, terms, out var position, out var length, out var snippet, out var start))
+            if (!TryMatch(node, terms, out var field, out var matches))
             {
-                scored.Add(new Scored(new Hit(node.Id, node.Kind, snippet, start, length), terms.Length, position, index));
+                continue;
+            }
+
+            // 同一格里的每一处出现都给一条：他 10-25 要的"同一便签多个匹配就显示多条"。
+            var first = matches[0].Start;
+
+            for (var occurrence = 0; occurrence < matches.Count; occurrence++)
+            {
+                var (start, length) = matches[occurrence];
+                var (snippet, offset) = Window(field, start, length, window);
+
+                scored.Add(new Scored(
+                    new Hit(node.Id, node.Kind, snippet, offset, length),
+                    terms.Length,
+                    first,
+                    index,
+                    occurrence));
             }
         }
 
@@ -121,8 +137,8 @@ public static class BoardSearch
         return hits;
     }
 
-    /// <summary>A hit plus the three ranking keys it was sorted by, kept out of the public shape.</summary>
-    private readonly record struct Scored(Hit Hit, int Matched, int Position, int Index);
+    /// <summary>A hit plus the ranking keys it was sorted by, kept out of the public shape.</summary>
+    private readonly record struct Scored(Hit Hit, int Matched, int FirstPosition, int Index, int Occurrence);
 
     private static int Order(Scored a, Scored b)
     {
@@ -136,32 +152,36 @@ public static class BoardSearch
             return byTerms;
         }
 
-        var byPosition = a.Position.CompareTo(b.Position);
+        // 先比这一格**第一处**命中的位置（旧的排序语义），再按板上顺序；同一格的多条按出现顺序
+        // 挨在一起，不会被别格的行切开。
+        var byFirst = a.FirstPosition.CompareTo(b.FirstPosition);
 
-        if (byPosition != 0)
+        if (byFirst != 0)
         {
-            return byPosition;
+            return byFirst;
         }
 
-        return a.Index.CompareTo(b.Index);
+        var byIndex = a.Index.CompareTo(b.Index);
+
+        return byIndex != 0 ? byIndex : a.Occurrence.CompareTo(b.Occurrence);
     }
 
     /// <summary>
     /// Whether <paramref name="node"/> carries every term, and if so the snippet window around its
     /// earliest in-field match plus the offset of the match within that window.
     /// </summary>
-    private static bool TryScore(
+    /// <summary>
+    /// 这一格是否含全部词；含的话交出摘要字段（折成一行）和该字段里每一处可高亮的出现。
+    /// 同一处只算一次；一个词是另一个的前缀时取更长的那个。
+    /// </summary>
+    private static bool TryMatch(
         CanvasNode node,
         string[] terms,
-        out int position,
-        out int length,
-        out string snippet,
-        out int start)
+        out string field,
+        out List<(int Start, int Length)> matches)
     {
-        position = 0;
-        length = 0;
-        snippet = string.Empty;
-        start = 0;
+        field = string.Empty;
+        matches = [];
 
         // Coverage is checked against the raw fields: a term never holds whitespace (the query was
         // split on it), so folding newlines to spaces cannot add or remove a substring match.
@@ -173,13 +193,10 @@ public static class BoardSearch
             }
         }
 
-        var field = SingleLine(BestField(node, terms));
+        field = SingleLine(BestField(node, terms));
+        matches = AllMatches(field, terms);
 
-        EarliestMatch(field, terms, out position, out length);
-
-        (snippet, start) = Window(field, position, length, SnippetWindow);
-
-        return true;
+        return matches.Count > 0;
     }
 
     /// <summary>Whether any searchable field of the node contains the term.</summary>
@@ -239,30 +256,41 @@ public static class BoardSearch
         return false;
     }
 
-    /// <summary>The earliest occurrence of any term in the field; a longer term wins an exact tie.</summary>
-    private static void EarliestMatch(string field, string[] terms, out int position, out int length)
+    /// <summary>这一格里每一处可高亮的出现，按位置排序；同一处取更长的词。</summary>
+    private static List<(int Start, int Length)> AllMatches(string field, string[] terms)
     {
-        position = 0;
-        length = 0;
-        var found = false;
+        var found = new List<(int Start, int Length)>();
 
         foreach (var term in terms)
         {
-            var at = field.IndexOf(term, StringComparison.OrdinalIgnoreCase);
-
-            if (at < 0)
+            if (term.Length == 0)
             {
                 continue;
             }
 
-            // 同一处取更长的那个词：一个词是另一个的前缀时，高亮该盖住更完整的写法。
-            if (!found || at < position || (at == position && term.Length > length))
+            var at = 0;
+
+            while (at < field.Length
+                && (at = field.IndexOf(term, at, StringComparison.OrdinalIgnoreCase)) >= 0)
             {
-                position = at;
-                length = term.Length;
-                found = true;
+                found.Add((at, term.Length));
+                at += term.Length;
             }
         }
+
+        found.Sort((a, b) => a.Start != b.Start ? a.Start.CompareTo(b.Start) : b.Length.CompareTo(a.Length));
+
+        var unique = new List<(int Start, int Length)>(found.Count);
+
+        foreach (var match in found)
+        {
+            if (unique.Count == 0 || unique[^1].Start != match.Start)
+            {
+                unique.Add(match);
+            }
+        }
+
+        return unique;
     }
 
     /// <summary>

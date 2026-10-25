@@ -120,7 +120,7 @@ public sealed partial class MainWindow
                 null,
                 false,
                 Grouping.Enclose(frame.Id, expanded ? rects : visible),
-                $" · 折起 {plan.FoldedCount} 格",
+                $" · 折叠 {plan.FoldedCount} 个便签",
                 Revealed: true);
 
             _foldOwners[frame.Id] = frame.Id;

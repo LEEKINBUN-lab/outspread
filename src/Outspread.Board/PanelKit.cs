@@ -149,6 +149,97 @@ internal static class PanelKit
         };
     }
 
+    /// <summary>
+    /// 查找结果那一行：命中词单独一段、用强调色加粗并衬一层淡底，左右各留上下文。
+    /// 这是这套浮层里唯一允许第三种墨色的地方——他 10-25 明确要求"把匹配的部分高亮"，
+    /// 否则一长条正文里根本看不出为什么这行算命中。
+    /// </summary>
+    public static SheetRow SearchRow(string snippet, int matchStart, int matchLength, string hint, Action onClick)
+    {
+        var dark = NoteStyling.IsDark;
+        var ink = new SolidColorBrush(NoteStyling.ToColor(Sheet.Ink(dark)));
+        var accent = new SolidColorBrush(NoteStyling.ToColor(SelectionChrome.Ring(dark)));
+
+        var start = Math.Clamp(matchStart, 0, snippet.Length);
+        var length = Math.Clamp(matchLength, 0, snippet.Length - start);
+
+        TextBlock Part(string text) => new()
+        {
+            Text = text,
+            FontSize = Sheet.FontPx,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = ink,
+        };
+
+        var strip = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        strip.Children.Add(Part(snippet[..start]));
+        strip.Children.Add(new Border
+        {
+            Background = new SolidColorBrush(NoteStyling.WithAlpha(SelectionChrome.Ring(dark), 0.14)),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock
+            {
+                Text = snippet.Substring(start, length),
+                FontSize = Sheet.FontPx,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = accent,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        });
+        strip.Children.Add(Part(snippet[(start + length)..]));
+
+        var grid = new Grid
+        {
+            MinHeight = Sheet.RowPx,
+            Padding = new Thickness(Sheet.PadX, 0, Sheet.PadX, 0),
+            ColumnSpacing = Sheet.GapPx,
+        };
+
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        Grid.SetColumn(strip, 0);
+        grid.Children.Add(strip);
+
+        var right = new TextBlock
+        {
+            Text = hint,
+            FontSize = Sheet.HintPx,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = new SolidColorBrush(NoteStyling.ToColor(Sheet.HintInk(dark))),
+        };
+
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(right, 1);
+        grid.Children.Add(right);
+
+        // Text/FontPx/Ink 是这行的读数接口；高亮行的字形在 strip 里，phantom 只留一份同尺读数。
+        var phantom = new TextBlock
+        {
+            Text = snippet,
+            FontSize = Sheet.FontPx,
+            Foreground = ink,
+        };
+
+        var row = new SheetRow(grid, phantom, right);
+
+        var hover = new SolidColorBrush(NoteStyling.WithAlpha(Sheet.Hover(dark), Sheet.HoverAlpha(dark)));
+
+        row.PointerEntered += (_, _) => row.Background = hover;
+        row.PointerExited += (_, _) => row.Background = new SolidColorBrush(Colors.Transparent);
+        row.PointerPressed += (_, e) => e.Handled = true;
+        row.Tapped += (_, e) =>
+        {
+            e.Handled = true;
+            onClick();
+        };
+
+        return row;
+    }
+
     private static SheetRow Build(string label, string? hint, Action? onClick, bool quiet, bool keys, double band)
     {
         var dark = NoteStyling.IsDark;

@@ -31,7 +31,7 @@ public sealed partial class MainWindow
             // 这一层是"这块板子的历史"，没有板子路径就没有历史可列——不说清就等于给了一个空面板。
             if (_boardPath is not { } path)
             {
-                Say("尚无板文件，没有可恢复的版本");
+                Say("尚无文件，没有可恢复的版本");
 
                 return;
             }

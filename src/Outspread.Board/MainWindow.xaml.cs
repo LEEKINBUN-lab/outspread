@@ -105,6 +105,9 @@ public sealed partial class MainWindow : Window
 
     private string? _editingId;
 
+    /// <summary>这一次编辑是从牌子点进来的"只改这枚标记"：收下标记行的回车应当直接收笔。</summary>
+    private bool _markEditOnly;
+
     // 组改名那枚就地小编辑器（组没有正文，改的是 label）——和便签正文编辑器分开，各管各的。
     private TextBox? _groupRenameBox;
     private string? _groupRenameId;
@@ -487,8 +490,8 @@ public sealed partial class MainWindow : Window
             }
 
             Say(errors > 0
-                ? $"{_document.Nodes.Count} 个节点 · {errors} 处格式问题（详见日志） · 缩放 {Percent()}"
-                : $"{_document.Nodes.Count} 个节点 · 缩放 {Percent()}");
+                ? $"{_document.Nodes.Count} 个便签 · {errors} 处格式问题（详见日志） · 缩放 {Percent()}"
+                : $"{_document.Nodes.Count} 个便签 · 缩放 {Percent()}");
 
             // 组框是派生的：开板时先把有成员的组框贴回成员包围盒。旧板/外部改动留下的
             // 旧框只在这一处归位一次，空组保持原样（渲染层会把它藏起来）。
@@ -1736,7 +1739,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        BeginGesture(startGeometry.Count > 1 ? $"移动 {startGeometry.Count} 格" : "移动一格");
+        BeginGesture(startGeometry.Count > 1 ? $"移动 {startGeometry.Count} 个便签" : "移动便签");
 
         // 普通拖动要记住"这一格此刻在谁的框里、那框此刻都有谁"：松手时如果它被甩出了框，
         // 框跟着长（sticky）而不是把它踢出去——拆组只归组钮那一条路（NoteActionRail.cs）。
@@ -1831,7 +1834,7 @@ public sealed partial class MainWindow : Window
 
         _resizeGesture = new ResizeGesture(direction, box, start, _view.ToWorldX(screenPointer.X), _view.ToWorldY(screenPointer.Y));
 
-        BeginGesture(start.Count > 1 ? $"缩放 {start.Count} 格" : "缩放一格");
+        BeginGesture(start.Count > 1 ? $"缩放 {start.Count} 个便签" : "缩放便签");
     }
 
     private void ApplyResize(Point screenPointer, ResizeGesture gesture)
@@ -2207,7 +2210,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Say($"无法读取板文件：{ex.Message}");
+            Say($"无法读取文件：{ex.Message}");
             return;
         }
 
@@ -2253,7 +2256,7 @@ public sealed partial class MainWindow : Window
             Rebuild();
             SaveSoon();
 
-            Say($"已合并外部修改（{fromOutside.NodeCount} 处） · {_document.Nodes.Count} 个节点 · 可按 Ctrl＋Z 撤销");
+            Say($"已合并外部修改（{fromOutside.NodeCount} 处） · {_document.Nodes.Count} 个便签 · 可按 Ctrl＋Z 撤销");
 
             // 外来改动落盘后 _baseJson 已经跟上，随后那次 SaveSoon 会因为"没变化"而直接返回，
             // 所以 agent 写的那一块只能靠这一发去推；少了它，它要等到下一次轮询才上得了线。
@@ -2298,7 +2301,7 @@ public sealed partial class MainWindow : Window
     {
         if (_boardPath is null)
         {
-            Say("没有可写入的板文件，无法粘贴");
+            Say("没有可写入的文件，无法粘贴");
             return;
         }
 
@@ -2314,14 +2317,14 @@ public sealed partial class MainWindow : Window
         Diagnostics.Write($"paste: {result.Kind} — {result.Description}" +
                           (result.Failed ? $" (failure: {result.Failure})" : string.Empty));
 
-        BeginGesture("贴了一格");
+        BeginGesture("粘贴便签");
 
         switch (result.Kind)
         {
             case IngestKind.Text when result.Text is { Length: > 0 } text:
             {
                 var node = CreateTextNote(text, PasteWorld());
-                Say($"已粘贴文字格 · {result.Description}");
+                Say($"已粘贴文字便签 · {result.Description}");
                 SelectOnly(node.Id);
                 break;
             }
@@ -2676,7 +2679,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        BeginGesture("新建一格");
+        BeginGesture("新建便签");
 
         var node = CreateTextNote(string.Empty, FreeOfGroups(e.GetPosition(BoardArea) is { } screen
             ? new Point(_view.ToWorldX(screen.X), _view.ToWorldY(screen.Y))
@@ -2710,6 +2713,8 @@ public sealed partial class MainWindow : Window
     {
         CloseEditor(commit: true);
 
+        _markEditOnly = false;
+
         if (NodeOf(id) is not { } node)
         {
             return;
@@ -2724,7 +2729,7 @@ public sealed partial class MainWindow : Window
 
         if (node.Kind != CanvasNodeKind.Text)
         {
-            Say($"该格类型为 {CanvasNode.NameOfKind(node.Kind)}，仅文字格可编辑");
+            Say($"该便签类型为 {CanvasNode.NameOfKind(node.Kind)}，仅文字便签可编辑");
             return;
         }
 
@@ -2882,6 +2887,7 @@ public sealed partial class MainWindow : Window
 
         _editor = null;
         _editingId = null;
+        _markEditOnly = false;
 
         if (editor is null)
         {
@@ -3291,7 +3297,7 @@ public sealed partial class MainWindow : Window
 
         if (_selection.Count == 0)
         {
-            Say("未选中任何格子");
+            Say("未选中任何便签");
             return;
         }
 
@@ -3319,7 +3325,7 @@ public sealed partial class MainWindow : Window
         Rebuild();
         SaveSoon();
 
-        Say($"已删除 {count} 格（可按 Ctrl＋Z 撤销）");
+        Say($"已删除 {count} 个便签（可按 Ctrl＋Z 撤销）");
     }
 
     /// <summary>
@@ -3489,7 +3495,7 @@ public sealed partial class MainWindow : Window
         {
             problems.Add($"空板右键菜单应至少留着粘贴与恢复，读到 {string.Join(" / ", emptyMenu)}");
         }
-        string[] gone = ["叠放", "提到最前", "压到最后", "上移一格", "下移一格", "左移一格", "右移一格", "从边缘拉一根线", "回到 100%", "在这里新建一格", "按颜色排列", "按标签排列"];
+        string[] gone = ["叠放", "提到最前", "压到最后", "上移一格", "下移一格", "左移一格", "右移一格", "从边缘拉一根线", "回到 100%", "新建便签", "按颜色排列", "按标签排列"];
         var leaked = gone.Where(all.Contains).Distinct().ToList();
 
         if (leaked.Count > 0)
@@ -3603,6 +3609,7 @@ public sealed partial class MainWindow : Window
         // 组框与空组的读数要取在这一拍：后面的排布/拖拽会真的改动成员。
         SelfTestGroups(problems);
         SelfTestMarkChipEdits(problems);
+        SelfTestMarkEditEnter(problems);
         SelfTestCulledVisuals(problems);
         SelfTestFreshNoteIsFree(problems);
 
@@ -4152,14 +4159,14 @@ public sealed partial class MainWindow : Window
                     problems.Add($"框没有跟着看得见的格子收：读到 {(shown?.Width ?? -1):0.#} 宽，原来那副框是 {host.frame.Width:0.#}");
                 }
 
-                if (!suffix.Contains("折起 1 格", StringComparison.Ordinal))
+                if (!suffix.Contains("折叠 1 个便签", StringComparison.Ordinal))
                 {
                     problems.Add($"框上那句「藏着几格」没出现：读到『{suffix}』");
                 }
 
                 // 框上那行会被卡片盖住（框贴着成员收，没给标题留边），所以同一句话必须由横幅再说一遍
                 // ——这一发量的就是"屏幕上真有一处说得出藏了几格"。
-                if (!_bannerRow.Text.Contains("1 格折进了组", StringComparison.Ordinal))
+                if (!_bannerRow.Text.Contains("1 个便签折叠进了组", StringComparison.Ordinal))
                 {
                     problems.Add($"横幅没说折进了几格：『{_bannerRow.Text}』");
                 }
@@ -4788,7 +4795,7 @@ public sealed partial class MainWindow : Window
                 {
                     var hintText = ((TextBlock)_groupHint.Child).Text;
 
-                    if (!hintText.Contains("3 格", StringComparison.Ordinal))
+                    if (!hintText.Contains("3 个便签", StringComparison.Ordinal))
                     {
                         problems.Add($"提议没说清是几格：『{hintText}』");
                     }
@@ -5286,7 +5293,7 @@ public sealed partial class MainWindow : Window
             // 双击空白新建、关板子都不该出现在这张页上。负面对照之外还要正面那几条在——
             // 只剩空表也会让上面这一条"没有禁止项"变成假绿。
             {
-                string[] forbidden = ["上移一格", "下移一格", "左移一格", "右移一格", "复制选中", "粘贴剪贴板", "取消选中", "新建一格", "关掉这块板"];
+                string[] forbidden = ["上移一格", "下移一格", "左移一格", "右移一格", "复制选中", "粘贴剪贴板", "取消选中", "新建便签", "关掉这块板"];
                 var sheetRows = MenuRows(CheatPanel);
                 var leaked = sheetRows.Where(row => forbidden.Contains(row.Text)).Select(row => row.Text).Distinct().ToList();
 

@@ -697,7 +697,7 @@ public sealed partial class MainWindow
 
         if (list.Count < 2)
         {
-            Say("连线至少需要 2 格（按叠放次序连接为链）");
+            Say("连线至少需要 2 个便签（按叠放次序连接为链）");
 
             return;
         }

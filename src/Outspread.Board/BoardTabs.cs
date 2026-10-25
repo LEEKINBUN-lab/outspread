@@ -2157,7 +2157,7 @@ public sealed partial class MainWindow
 
                 if (occupied is not null)
                 {
-                    Say($"无法腾出名称“{newStem}”：{occupied}");
+                    Say($"无法重命名同名板“{newStem}”：{occupied}");
 
                     return;
                 }

@@ -66,7 +66,8 @@ public class BoardSearchTests
     {
         var document = Board("n1", text: "延迟来自接口层");
 
-        Assert.Single(BoardSearch.Find(document, query));
+        // 每个词的一次出现各给一条：多词查询不再被压成一张卡。
+        Assert.NotEmpty(BoardSearch.Find(document, query));
     }
 
     [Fact]
@@ -279,5 +280,27 @@ public class BoardSearchTests
         }
 
         AssertOffsetsInBoard(document, query);
+    }
+
+    [Fact]
+    public void Multiple_occurrences_of_the_same_term_come_back_as_separate_centred_hits()
+    {
+        var text = new string('甲', 120) + "快速" + new string('乙', 120) + "快速" + new string('丙', 30);
+        var document = Board("n1", text: text);
+
+        var hits = BoardSearch.Find(document, "快速", window: 40);
+
+        Assert.Equal(2, hits.Count);
+        Assert.NotEqual(hits[0].Snippet, hits[1].Snippet);
+
+        foreach (var hit in hits)
+        {
+            Assert.Equal("快速", hit.Snippet.Substring(hit.MatchStart, hit.MatchLength));
+
+            // 40 字窗口、2 字命中：命中左右各留 19 字，前面再一枚省略号 ⇒ 从第 20 个字符开始。
+            Assert.Equal(20, hit.MatchStart);
+            Assert.StartsWith("…", hit.Snippet, StringComparison.Ordinal);
+            Assert.EndsWith("…", hit.Snippet, StringComparison.Ordinal);
+        }
     }
 }

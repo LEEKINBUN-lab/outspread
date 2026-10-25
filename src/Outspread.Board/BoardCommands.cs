@@ -92,7 +92,7 @@ public sealed partial class MainWindow
         new("删掉选中", "Delete", "板子", RemoveSelection, Dispatched: false, Listed: false),
         new("撤回", "Ctrl+Z", "板子", Undo, Dispatched: false, Listed: false),
         new("重做", "Ctrl+Y", "板子", Redo, Dispatched: false, Listed: false),
-        new("新建一格", "双击空白", "板子", NewNoteAtCentre, Dispatched: false, Sheet: false),
+        new("新建便签", "双击空白", "板子", NewNoteAtCentre, Dispatched: false, Sheet: false),
 
         // 查找与恢复没有第二个入口的要不得：查找是"贴进去的东西找得回来"，恢复是"改坏了还够得着"。
         new("查找", "Ctrl+F", "板子", OpenSearch, Listed: false),
@@ -191,7 +191,7 @@ public sealed partial class MainWindow
 
         if (members.Count == 0)
         {
-            Say("请先选中至少一格再创建组");
+            Say("请先选中至少一个便签再创建组");
             return;
         }
 
@@ -200,7 +200,7 @@ public sealed partial class MainWindow
 
         if (loose.Count == 0)
         {
-            Say("所选格子均已属于组 · 按 Ctrl＋G 解散");
+            Say("所选便签均已属于组 · 按 Ctrl＋G 解散");
             return;
         }
 
@@ -234,8 +234,8 @@ public sealed partial class MainWindow
         ProjectSelection();
 
         Say(members.Count == 1
-            ? "已创建组（1 格）· 按 Ctrl＋G 解散"
-            : $"已创建组（{members.Count} 格）· 按 Ctrl＋G 解散");
+            ? "已创建组（1 个便签）· 按 Ctrl＋G 解散"
+            : $"已创建组（{members.Count} 个便签）· 按 Ctrl＋G 解散");
     }
 
     /// <summary>
@@ -350,7 +350,7 @@ public sealed partial class MainWindow
 
         if (hit.Count == 0)
         {
-            Say("所选格子均不属于任何组");
+            Say("所选便签均不属于任何组");
             return;
         }
 
@@ -380,11 +380,11 @@ public sealed partial class MainWindow
 
         if (members.Count == 0)
         {
-            Say("未选中任何格子");
+            Say("未选中任何便签");
             return;
         }
 
-        BeginGesture($"复制 {members.Count} 格");
+        BeginGesture($"复制 {members.Count} 个便签");
 
         foreach (var node in members)
         {
@@ -406,7 +406,7 @@ public sealed partial class MainWindow
         Rebuild();
         SaveSoon();
 
-        Say($"已复制 {members.Count} 格");
+        Say($"已复制 {members.Count} 个便签");
     }
 
     /// <summary>
@@ -452,7 +452,7 @@ public sealed partial class MainWindow
 
         if (!outcome.Ok)
         {
-            Say($"“{label}”至少需要 {outcome.Needed} 格，当前可选 {outcome.Have} 格");
+            Say($"“{label}”至少需要 {outcome.Needed} 个便签，当前可选 {outcome.Have} 个便签");
 
             return;
         }

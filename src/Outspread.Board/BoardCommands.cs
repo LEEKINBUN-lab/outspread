@@ -215,12 +215,13 @@ public sealed partial class MainWindow
                 Diagnostics.Write($"selftest 统一大小（{label}）: 这群里 {narrowest:0}–{widest:0} 宽，统一成 {width:0}×{after[0].Height:0}，两格正文都放得下");
             }
 
+            // 两发都得从撤销栈上摘干净：栈是整块板共用的，留一枚在后面，
+            // 下一位（左对齐那一步）的 Undo 就撤到我这一发上——10-26 那发"第一跑必红、重跑才绿"就是这么来的。
+            // "统一大小是一步撤销"这句产品承诺只在按最大那一发验：连撤两发会和别人的步骤错位。
+            Undo();
+
             if (!bySmallest)
             {
-                // "统一大小是一步撤销"这句产品承诺只验一次：撤销栈是整块板共用的，
-                // 一个自检里连撤两发就会和别人的步骤错位（今天踩的就是这个）。
-                Undo();
-
                 foreach (var (id, size) in staged)
                 {
                     if (NodeOf(id) is { } node
@@ -244,6 +245,74 @@ public sealed partial class MainWindow
             }
 
             Rebuild();
+        }
+
+        // 等宽那一发是他 10-26 21:4x 撞的：那批卡的宽本来就全一样，两档点出来一模一样，
+        // 他读到的就是"我按了最小，怎么按的最大"。语义（最小公框）他已定档不动，
+        // 要锁的是**回执得当场说清宽没变**——否则这一发下一次还得靠他来报。
+        {
+            var equal = ids.Select(NodeOf).Where(node => node is not null).Select(node => node!).ToList();
+
+            if (equal.Count >= 2)
+            {
+                equal[0].Width = 200;
+                equal[1].Width = 200;
+                Rebuild();
+
+                _selection.Clear();
+
+                foreach (var node in equal)
+                {
+                    _selection.Add(node.Id);
+                }
+
+                ProjectSelection();
+
+                var staged2 = equal.ToDictionary(node => node.Id, node => (node.Width, node.Height), StringComparer.Ordinal);
+
+                UniformNoteSizes(bySmallest: true);
+
+                var same = equal.Select(node => NodeOf(node.Id)).Where(node => node is not null).Select(node => node!).ToList();
+                var receipt = SayTextForSelfTest ?? string.Empty;
+
+                if (same.Any(node => Math.Abs(node.Width - 200) > 0.5))
+                {
+                    problems.Add($"自检统一大小（宽本来就一样）: 不该动的宽动了（读到 {string.Join(" / ", same.Select(node => $"{node.Width:0}"))}）");
+                }
+
+                if (same.Any(node => MeasureTextHeight(node.Text ?? string.Empty, node.Width, _view.FontSizeFor(node.Id)) > node.Height + 0.5))
+                {
+                    problems.Add("自检统一大小（宽本来就一样）: 抬起来的高度还裁着某格的正文");
+                }
+
+                if (!receipt.Contains("本来就都是 200 宽", StringComparison.Ordinal))
+                {
+                    problems.Add($"自检统一大小（宽本来就一样）: 回执没告诉他宽这一档没得收（读到「{receipt}」）");
+                }
+
+                Diagnostics.Write($"selftest 统一大小（宽本来就一样）: 两档同框，回执说清了——{receipt}");
+
+                // 这一步自己也要从撤销栈上摘掉：栈是整块板共用的，留一枚在这儿，
+                // 后面"左对齐"那一步的 Undo 就会撤到我这一发上（10-26 那发第一跑必红、重跑才绿就是这么来的）。
+                if (same.Any(node => staged2.TryGetValue(node.Id, out var size)
+                        && (Math.Abs(node.Width - size.Width) > 0.5 || Math.Abs(node.Height - size.Height) > 0.5)))
+                {
+                    Undo();
+                }
+
+                foreach (var (id, size) in before)
+                {
+                    if (NodeOf(id) is { } node)
+                    {
+                        node.Width = size.Width;
+                        node.Height = size.Height;
+                    }
+
+                    _view.UnmarkManualSize(id);
+                }
+
+                Rebuild();
+            }
         }
 
         ClearSelection();
@@ -279,6 +348,8 @@ public sealed partial class MainWindow
             node.Text ?? string.Empty,
             width,
             _view.FontSizeFor(node.Id)));
+        var narrowest = notes.Min(node => node.Width);
+        var widest = notes.Max(node => node.Width);
 
         BeginGesture("统一便签大小");
 
@@ -297,7 +368,12 @@ public sealed partial class MainWindow
         Reselect(ids);
         SaveSoon();
         ProjectSelection();
-        Say($"已把 {notes.Count} 张便签统一到 {width:0}×{height:0}（按{(bySmallest ? "最小" : "最大")}）");
+        Say($"已把 {notes.Count} 张便签统一到 {width:0}×{height:0}"
+            + $"（按{(bySmallest ? "最小" : "最大")}：宽取这群里{(bySmallest ? "最窄" : "最宽")}的 {width:0}，"
+            + $"高取这格里最长那段正文放得下的 {height:0}）"
+            + (narrowest == widest
+                ? $"——这群本来就都是 {widest:0} 宽，所以宽这一档两下点出来一样。"
+                : string.Empty));
     }
 
     /// <summary>Every node on the board — the same call the keyboard's Ctrl+A makes.</summary>

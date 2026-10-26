@@ -50,20 +50,7 @@ dotnet build src\Outspread.Cli\outspread.csproj -c Debug
 if not "%ERRORLEVEL%"=="0" goto :fail
 
 echo [5/6] 界面自检（在临时副本上跑，绝不动 boards 里的板子）
-if not exist "%SCRATCH%" mkdir "%SCRATCH%"
-rem Reset the WHOLE scratch board set, not just the one file. The window writes a sidecar
-rem next to each board (camera: pan/zoom, manualSize), and the self test itself ends up at
-rem zoom 112% while the "all notes" parent file keeps a node per run. Left in place, the next
-rem run starts somewhere the assertions were not written for: on 2026-10-24 that leaked a
-rem zoom=1.12 sidecar and the markdown-fit step went red (140 < 142.08) on a board nobody
-rem touched. ASCII wildcards on purpose: the Chinese file names cannot be spelled in this
-rem file (cmd parses a batch in the OEM codepage).
-del /q "%SCRATCH%\*.canvas" >nul 2>&1
-del /q "%SCRATCH%\*.canvas.view.json" >nul 2>&1
-if exist "%SCRATCH%\.outspread-history" rd /s /q "%SCRATCH%\.outspread-history"
-copy /y "tests\fixtures\gate.canvas" "%SCRATCH%\selftest.canvas" >nul
-if exist "boards\assets" xcopy /y /i /e /q "boards\assets" "%SCRATCH%\assets" >nul
-if not exist "%BOARD%" goto :fail
+call :reset_scratch
 rem The board path must be passed explicitly. The window locates a board by
 rem --board, then TANKAI_BOARD, then boards\scratch.canvas walking up, then the first
 rem .canvas in the cwd — and this cwd is the repository root, so without the argument the
@@ -75,8 +62,17 @@ rem the OEM codepage, and a multi-byte sequence can swallow the CR of the line e
 rem merge the next line into this one. Which line survives the merge is up to the file's
 rem byte alignment — today it ate a comment and still printed "all green"; another alignment
 rem would eat the self test call below and print "all green" anyway.
-"%BOARD%" --selftest "%SCRATCH%\selftest.canvas" || "%BOARD%" --selftest "%SCRATCH%\selftest.canvas"
+"%BOARD%" --selftest "%SCRATCH%\selftest.canvas"
+set "FIRST_RC=%ERRORLEVEL%"
+if "%FIRST_RC%"=="0" goto :selftest_done
+echo 界面自检第一发红（rc=%FIRST_RC%）：把副本重置以后再跑一发取对照
+call :reset_scratch
+"%BOARD%" --selftest "%SCRATCH%\selftest.canvas"
 if not "%ERRORLEVEL%"=="0" goto :fail
+echo 注意：两发跑的是同一份重置过的副本，所以第二发绿只能是起步抖动，不是状态依赖
+goto :selftest_done
+
+:selftest_done
 
 echo [6/6] 跟上开始菜单那枚
 rem The Start Menu copy is a snapshot of a build, so it goes stale unless something refreshes
@@ -103,3 +99,23 @@ exit /b 0
 echo.
 echo 红灯：看上面的输出，日志在 %%LOCALAPPDATA%%\Outspread\board.log
 exit /b 1
+
+:reset_scratch
+rem Reset the WHOLE scratch board set, not just the one file. The window writes a sidecar
+rem next to each board (camera: pan/zoom, manualSize), and the self test itself ends up at
+rem zoom 112% while the "all notes" parent file keeps a node per run. Left in place, the next
+rem run starts somewhere the assertions were not written for: on 2026-10-24 that leaked a
+rem zoom=1.12 sidecar and the markdown-fit step went red (140 < 142.08) on a board nobody
+rem touched. On 2026-10-26 the same residue did worse: the retry ran on the board the failed
+rem first attempt had left behind, so "first red, second green" printed as all green for
+rem hours. Reset per attempt — then a second attempt can only differ by startup timing.
+rem ASCII wildcards on purpose: the Chinese file names cannot be spelled in this file
+rem (cmd parses a batch in the OEM codepage).
+if not exist "%SCRATCH%" mkdir "%SCRATCH%"
+del /q "%SCRATCH%\*.canvas" >nul 2>&1
+del /q "%SCRATCH%\*.canvas.view.json" >nul 2>&1
+if exist "%SCRATCH%\.outspread-history" rd /s /q "%SCRATCH%\.outspread-history"
+copy /y "tests\fixtures\gate.canvas" "%SCRATCH%\selftest.canvas" >nul
+if exist "boards\assets" xcopy /y /i /e /q "boards\assets" "%SCRATCH%\assets" >nul
+if not exist "%BOARD%" goto :fail
+goto :eof

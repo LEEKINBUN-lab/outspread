@@ -161,7 +161,17 @@ public sealed partial class MainWindow
         _sayRow.Text = message;
 
         SayHost.Visibility = string.IsNullOrEmpty(message) ? Visibility.Collapsed : Visibility.Visible;
+
+        // 说给他看的每一句都留一行底：他回报"没生效／效果不对"时，我去日志读那一句的读数，
+        // 不用猜也不用反问。自检那一发把 Say 当 assertion 台账用，喊得凶，不灌进真日志。
+        if (message.Length > 0 && !App.SelfTest)
+        {
+            Diagnostics.Write($"say: {message}");
+        }
     }
+
+    /// <summary>自检读的那句：浮层上此刻写着什么。</summary>
+    internal string SayTextForSelfTest => _sayRow.Text;
 
     /// <summary>点那句话说完的浮层＝"知道了，收起"。它不是一行日志的复读，所以也不该一直占着。</summary>
     private void OnSayPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)

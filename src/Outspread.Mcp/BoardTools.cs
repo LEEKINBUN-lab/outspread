@@ -203,7 +203,9 @@ public sealed class BoardTools
             + (blocked.Count == 0 ? "。" : $"\n没收进去、还在等他的有 {blocked.Count} 格：{string.Join("、", blocked)}");
     }
 
-    [McpServerTool(Name = "board_read"), Description("读一块板：每格一行，给编号、首行、标签、位置。想知道板子上现在有什么就先叫它。")]
+    [McpServerTool(Name = "board_read"), Description(
+        "读一块板：每格一行，给编号、首行、标签、位置。想知道板子上现在有什么就先叫它。"
+        + "收尾的那一发就靠它当凭据：返回第二行按 @t轮次给出「还欠几格」，把那个数写进汇报。")]
     public static string BoardRead(
         [Description("画板文件路径。不填就用你的「Agent 出口」板。")] string? board = null,
         [Description("最多列几格，默认 40。")] int limit = 40)
@@ -223,7 +225,21 @@ public sealed class BoardTools
             .Take(Math.Clamp(limit, 1, 200))
             .Select(node => $"{node.Id} | {FirstLine(node.Text)} | {string.Join(",", Tags.Of(node.Text))} | {node.X:0},{node.Y:0} {node.Width:0}×{node.Height:0}");
 
-        return $"{path}\n" + string.Join("\n", lines);
+        // 收尾那一发的凭据：按轮次标签数还有几格没结。他勾掉一格，这里的数就掉一格。
+        // 标签读出来是规范形 #xxx（@t 只是写在板上的样子），所以这里认 # 开头，不是认 @t。
+        var pending = document.Nodes
+            .Where(node => node.Kind == CanvasNodeKind.Text && AwaitsHim(node))
+            .SelectMany(node => Tags.Of(node.Text)
+                .Where(tag => tag.StartsWith("#", StringComparison.Ordinal))
+                .Select(tag => (tag, node)))
+            .GroupBy(pair => pair.tag)
+            .OrderByDescending(group => group.Count())
+            .Take(6)
+            .Select(group => $"{group.Key} 还欠 {group.Count()} 格")
+            .ToList();
+
+        return $"{path}\n未结：{(pending.Count == 0 ? "没有——他要看的都结清了" : string.Join(" / ", pending))}\n"
+            + string.Join("\n", lines);
     }
 
     [McpServerTool(Name = "board_search"), Description("在一块板里找字（也认 @标签），返回命中的格子。回答\"上次那条写哪去了\"这类问题用它。")]

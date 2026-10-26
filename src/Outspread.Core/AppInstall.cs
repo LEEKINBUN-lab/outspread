@@ -4,10 +4,18 @@ namespace Outspread.Core;
 /// 这块板子住在哪儿、用户从哪儿点开它。
 /// </summary>
 /// <remarks>
+/// <para>
 /// 应用是 unpackaged 的：没有安装程序，每次构建 exe 都换一条 <c>bin\...</c> 路径，
 /// 而开始菜单要的是**不会随构建漂移**的那一条。所以有一个稳定目录
 /// （<c>%LOCALAPPDATA%\Programs\Outspread</c>），快捷方式永远指向它；从 bin 里跑起来的那一发
 /// 把稳定目录对齐到当前构建。用户数据不在这儿——板子按绝对路径记在 prefs 里，换目录不改数据。
+/// </para>
+/// <para>
+/// 对齐只能由 bin 那一发做：稳定目录里正在跑的那一份被系统锁着，自己拷不动自己。因此稳定副本
+/// 必须记住自己的来源（<see cref="SourceHintFileName"/>），点开时如果发现来源里有更新的那一发，
+/// 就把窗口交给它并退出——否则「从开始菜单点开」这条路永远不会自愈，点开的一直是上次对齐时的旧构建。
+/// 2026-10-26 他就是从开始菜单点开的，右键菜单里那两档「统一便签大小」在他屏幕上只有一个。
+/// </para>
 /// </remarks>
 public static class AppInstall
 {
@@ -20,6 +28,59 @@ public static class AppInstall
             "Outspread");
 
     public static string StableExePath() => Path.Combine(StableDirectory(), BoardExeName);
+
+    /// <summary>
+    /// 稳定目录里那份是**哪一棵构建树**拷过来的。对齐一次就重写一次；
+    /// 从稳定目录点开的那一发靠它去找"有没有更新的那一发"。
+    /// </summary>
+    public const string SourceHintFileName = "outspread-source.txt";
+
+    public static string SourceHintPath() => Path.Combine(StableDirectory(), SourceHintFileName);
+
+    /// <summary>读来源那棵树在哪。没有记（老副本）、读不动、或空 → null。</summary>
+    public static string? ReadSourceHint(string hintPath)
+    {
+        try
+        {
+            if (!File.Exists(hintPath))
+            {
+                return null;
+            }
+
+            var recorded = File.ReadAllText(hintPath).Trim();
+
+            return recorded.Length > 0 ? recorded : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 这一发是从稳定目录里点开的，而它记下的来源树里有一份更新的构建 → 返回那份构建的 exe，
+    /// 交给它接手窗口。其余情况（不是稳定副本、没记来源、来源已不在、两边一模一样）→ null，
+    /// 也就是"这发就是该跑的那一发"。
+    /// </summary>
+    public static string? StaleSourceExe(string runningExe, string? hintSourceDirectory, string stableDirectory)
+    {
+        if (runningExe.Length == 0 || hintSourceDirectory is not { Length: > 0 })
+        {
+            return null;
+        }
+
+        if (!string.Equals(
+                Path.GetDirectoryName(runningExe)?.TrimEnd('\\'),
+                stableDirectory.TrimEnd('\\'),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var sourceExe = Path.Combine(hintSourceDirectory, BoardExeName);
+
+        return NeedsRefresh(sourceExe, runningExe) ? sourceExe : null;
+    }
 
     /// <summary>开始菜单指哪儿：稳定目录里那份在就指它；还没有（第一次启动）就指当前这个 exe。</summary>
     public static string PreferredLaunchTarget(string runningExe, bool stableExeExists)
@@ -87,6 +148,16 @@ public static class AppInstall
                 }
 
                 File.Copy(file, target, overwrite: true);
+            }
+
+            try
+            {
+                // 记下"这份是从哪儿拷来的"：稳定副本下次点开时靠它判断有没有更新的构建。
+                File.WriteAllText(Path.Combine(targetDirectory, SourceHintFileName), sourceDirectory);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // 拷贝已经成了，只是这一发没记住来源：下一发从 bin 点开时会再记一次。
             }
 
             return null;

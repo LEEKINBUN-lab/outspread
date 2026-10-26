@@ -78,6 +78,46 @@ public sealed class AppInstallTests : IDisposable
         Assert.NotNull(why);
     }
 
+    [Fact]
+    public void An_aligned_copy_remembers_which_build_it_came_from()
+    {
+        Write("src\\Outspread.Board.exe", "exe");
+
+        Assert.Null(AppInstall.ReadSourceHint(AppInstall.SourceHintPath()));
+
+        Assert.Null(AppInstall.Refresh(Path.Combine(_root, "src"), Path.Combine(_root, "dst")));
+        Assert.Equal(Path.Combine(_root, "src"), AppInstall.ReadSourceHint(Path.Combine(_root, "dst", AppInstall.SourceHintFileName)));
+
+        // 来源树被 clean 掉了：读到的还是那行路径，但它已经不能接手——由 StaleSourceExe 那一层判。
+        Assert.Null(AppInstall.ReadSourceHint(Path.Combine(_root, "没有这一层", AppInstall.SourceHintFileName)));
+    }
+
+    [Fact]
+    public void The_stable_copy_hands_the_window_to_a_newer_build_instead_of_running_stale()
+    {
+        var source = Write("build\\Outspread.Board.exe", "新的那一发");
+        var stable = Write("stable\\Outspread.Board.exe", "旧");
+        var stableDir = Path.Combine(_root, "stable");
+
+        // 两边一模一样才叫"已对齐"，所以先把稳定副本的刻度挪到与来源同一发。
+        File.SetLastWriteTimeUtc(stable, File.GetLastWriteTimeUtc(source));
+
+        // 来源里那一份又大又新：从稳定目录点开时不能就这般把旧构建端上去。
+        Assert.Equal(source, AppInstall.StaleSourceExe(stable, Path.Combine(_root, "build"), stableDir));
+
+        // 对齐以后（时间戳与字节数都一致）就交给它自己跑，不再交接。
+        Assert.Null(AppInstall.Refresh(Path.Combine(_root, "build"), stableDir));
+
+        Assert.Null(AppInstall.StaleSourceExe(stable, Path.Combine(_root, "build"), stableDir));
+
+        // 从 bin 里点开的那一发不是稳定副本：它就是最新的那一发，交接给它自己等于死循环。
+        Assert.Null(AppInstall.StaleSourceExe(source, Path.Combine(_root, "build"), stableDir));
+
+        // 没记来源（老副本）、来源被删掉：照旧跑这一发，不能把人晾在门外。
+        Assert.Null(AppInstall.StaleSourceExe(stable, null, stableDir));
+        Assert.Null(AppInstall.StaleSourceExe(stable, Path.Combine(_root, "这一层没了"), stableDir));
+    }
+
     private string Write(string relative, string content)
     {
         var path = Path.Combine(_root, relative);

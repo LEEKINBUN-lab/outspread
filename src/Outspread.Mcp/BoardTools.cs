@@ -256,10 +256,15 @@ public sealed class BoardTools
 
         var needle = query.Trim();
         var byTag = needle.StartsWith('@');
+        // 标签读出来是规范形 #xxx：板上写 @tagent出口，存的就是 #agent出口。
+        // 所以两种写法都认（带 t 的那条是 @t 这个键省下来的），不然按标签搜永远搜不到东西。
+        var wanted = byTag
+            ? new[] { "#" + needle[1..], needle.StartsWith("@t", StringComparison.Ordinal) ? "#" + needle[2..] : "#" + needle[1..] }
+            : [];
 
         var hits = CanvasStore.Load(path).Nodes
             .Where(node => byTag
-                ? Tags.Of(node.Text).Any(tag => needle[1..].Equals(tag, StringComparison.OrdinalIgnoreCase))
+                ? Tags.Of(node.Text).Any(tag => wanted.Contains(tag, StringComparer.OrdinalIgnoreCase))
                 : (node.Text ?? string.Empty).Contains(needle, StringComparison.OrdinalIgnoreCase))
             .Take(40)
             .Select(node => $"{node.Id} | {FirstLine(node.Text)} | {node.X:0},{node.Y:0}")

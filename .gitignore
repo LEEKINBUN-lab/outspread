@@ -20,3 +20,7 @@ obj/
 # 他的产品待办与私人板：真身在板子上、边用边变，不进版本库（备份走远端同步仓）。
 boards/待办事项.canvas
 boards/备忘录.canvas
+
+# agent 写在板上的出口是运行产物，跟相机 sidecar 同一类：不进版本库。
+boards/Agent 出口.canvas
+boards/Agent 出口.canvas.view.json

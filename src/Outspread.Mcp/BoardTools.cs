@@ -85,9 +85,18 @@ public sealed class BoardTools
                 }
 
                 // 标记行放最前面：他板子上那套约定是"@n8 @b0 换行 正文"，牌子才会落到卡片左下角。
-                var marks = Tags.LooksLikePropertyLine(body.Split('\n')[0])
-                    ? string.Empty
-                    : band.Key == "note" ? tag : $"{tag} @n{++seq} @b0";
+                // 每一格都要有自己的号——结论也要，因为他想引用"你写的那条结论"时只能靠 @n。
+                // @b 只给要他动作的三档挂：结论挂上牌子，"还欠几格"就会把无关的结论算进他的负担。
+                var stamped = !Tags.LooksLikePropertyLine(body.Split('\n')[0]);
+                var marks = string.Empty;
+                int? ordinal = null;
+
+                if (stamped)
+                {
+                    ordinal = ++seq;
+                    marks = band.Key == "note" ? $"{tag} @n{ordinal}" : $"{tag} @n{ordinal} @b0";
+                }
+
                 var text = marks.Length == 0 ? body : $"{marks}\n{body}";
 
                 // 高度按**折行后**的行数估（一行按 15px 一个汉字算），再多留两行：
@@ -106,7 +115,8 @@ public sealed class BoardTools
                     height,
                     ColourOf(band.Key)));
 
-                written.Add($"@n{seq} {band.Key} {x:0},{rowTop:0} {height:0}");
+                // 回执要说真话：这一格实际挂上的号才是它能被引用的号（没挂的就直说，别报一个板子上不存在的号）。
+                written.Add($"{(ordinal is { } number ? $"@n{number}" : "@n—（沿用你写的标记行）")} {band.Key} {x:0},{rowTop:0} {height:0}");
                 rowTallest = Math.Max(rowTallest, height);
                 slot++;
             }

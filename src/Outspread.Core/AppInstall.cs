@@ -104,7 +104,9 @@ public static class AppInstall
 /// <remarks>
 /// 走 WScript.Shell 而不是手写 .lnk 的二进制格式：那是这台机器上唯一成文的建快捷方式 API，
 /// 而 .lnk 的链接格式是 MS-SHLLINK，自己拼反而更容易错。
+/// 整枚类都是 Windows 的事——Core 本身是跨平台的，标出来分析器才不会把每个调用点都报一遍 CA1416。
 /// </remarks>
+[System.Runtime.Versioning.SupportedOSPlatform("windows")]
 public static class StartMenuShortcut
 {
     public const string ShortcutFileName = "铺陈画板.lnk";

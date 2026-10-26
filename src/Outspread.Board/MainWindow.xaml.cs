@@ -4276,8 +4276,17 @@ public sealed partial class MainWindow : Window
             menu.Items.Add(submenu);
         }
 
-        var uniform = new MenuFlyoutItem { Text = "统一便签大小" };
-        uniform.Click += (_, _) => UniformNoteSizes();
+        // 两档都要能一眼够到：按最大是"谁都别裁"，按最小是"堆起来之前先缩一圈"（他 10-26）。
+        var uniform = new MenuFlyoutSubItem { Text = "统一便签大小" };
+
+        var widest = new MenuFlyoutItem { Text = "按最大的统一" };
+        widest.Click += (_, _) => UniformNoteSizes(bySmallest: false);
+        uniform.Items.Add(widest);
+
+        var tightest = new MenuFlyoutItem { Text = "按最小的统一" };
+        tightest.Click += (_, _) => UniformNoteSizes(bySmallest: true);
+        uniform.Items.Add(tightest);
+
         menu.Items.Add(uniform);
 
         if (where != MenuWhere.Empty)
@@ -4297,10 +4306,13 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void SelfTestBoardMenu(List<string> problems)
     {
+        // 子菜单那一行的标题也是他看得见的菜单项，一起算进来：否则"统一便签大小"这一档
+        // 变成子菜单后，断言会读不到它，而它明明在菜单上。
         static List<string> Texts(MenuFlyout menu)
             => menu.Items.OfType<MenuFlyoutItem>().Select(item => item.Text)
                 .Concat(menu.Items.OfType<MenuFlyoutSubItem>()
-                    .SelectMany(sub => sub.Items.OfType<MenuFlyoutItem>().Select(item => item.Text)))
+                    .SelectMany(sub => new[] { sub.Text }
+                        .Concat(sub.Items.OfType<MenuFlyoutItem>().Select(item => item.Text))))
                 .ToList();
 
         var all = Texts(BuildBoardMenu(MenuWhere.OneNote))
@@ -4335,9 +4347,10 @@ public sealed partial class MainWindow : Window
             problems.Add("右键菜单里读不到排布/组织命令——删过头了");
         }
 
-        if (!all.Contains("统一便签大小"))
+        // 两档统一都要够得着：只留一档，堆叠前那一发就没入口了。
+        if (!all.Contains("统一便签大小") || !all.Contains("按最大的统一") || !all.Contains("按最小的统一"))
         {
-            problems.Add("右键菜单里读不到『统一便签大小』");
+            problems.Add($"右键菜单里读不到『统一便签大小』的两档（读到 {string.Join(" / ", all.Where(text => text.Contains("统一", StringComparison.Ordinal)))}）");
         }
 
         if (!all.Any(text => text.StartsWith("删掉这 ", StringComparison.Ordinal)))

@@ -126,7 +126,8 @@ public sealed partial class MainWindow
         Say("保存成功");
     }
 
-    /// <summary>统一大小的写分支：两格真的变成同一框，且每格正文都放得下；撤销逐格回到原框。</summary>
+    /// <summary>统一大小的写分支：两格真的变成同一框，且每格正文都放得下；撤销逐格回到原框。
+    /// 两档各跑一遍——按最小那一档尤其要量"有没有裁字"，它收窄了宽度，正是容易裁的一档。</summary>
     private void SelfTestUniformSize(List<string> problems)
     {
         var notes = BoardNotes()
@@ -141,59 +142,119 @@ public sealed partial class MainWindow
             return;
         }
 
+        // 原框只记一次：每一发跑完都把两发撤销回去，下一发的起点还是这里。
         var before = notes.ToDictionary(node => node.Id, node => (node.Width, node.Height), StringComparer.Ordinal);
 
-        _selection.Clear();
+        // 只留编号：撤销会把整份文档换成新的对象，攥着上一档的节点对象会改到一个已经不在板上的东西上
+        // （今天那条"按最小量到 340"就是这么来的）。
+        var ids = notes.Select(node => node.Id).ToList();
 
-        foreach (var node in notes)
+        foreach (var (bySmallest, label) in new[] { (false, "按最大"), (true, "按最小") })
         {
-            _selection.Add(node.Id);
-        }
+            var live = ids.Select(NodeOf).Where(node => node is not null).Select(node => node!).ToList();
 
-        ProjectSelection();
-        UniformNoteSizes();
-
-        var after = notes.Select(node => NodeOf(node.Id)).Where(node => node is not null).Select(node => node!).ToList();
-
-        if (after.Count != notes.Count
-            || after.Select(node => node.Width).Distinct().Count() != 1
-            || after.Select(node => node.Height).Distinct().Count() != 1)
-        {
-            problems.Add($"自检统一大小: 两格没有变成同一框（{string.Join(" / ", after.Select(node => $"{node.Width:0}×{node.Height:0}"))}）");
-        }
-        else
-        {
-            foreach (var node in after)
+            if (live.Count < 2)
             {
-                var need = MeasureTextHeight(node.Text ?? string.Empty, node.Width, _view.FontSizeFor(node.Id));
+                problems.Add($"自检统一大小（{label}）: 撤销以后这两格找不回来了，量不了");
 
-                if (need > node.Height + 0.5)
+                break;
+            }
+
+            // 先弄出一宽一窄：夹具里这几格都是 340 宽，min 和 max 撞成同一个数，两档算出来一模一样，
+            // 那一发就成了空操作——History 不记空操作，撤销会-pop 到别人那一步（今天那条红就是这么来的）。
+            // 这一步是直接写，不进历史：它不是被测对象，进历史只会让撤销错位。
+            live[0].Width = 340;
+            live[1].Width = 200;
+            Rebuild();
+
+            // Rebuild 会清掉选中：不在这儿重新选上，下面统一的就是整块板而不是这两格
+            // （第一版栽过：按最小量到的是全板最窄 260，不是这两格里最窄的 200）。
+            _selection.Clear();
+
+            foreach (var node in live)
+            {
+                _selection.Add(node.Id);
+            }
+
+            ProjectSelection();
+
+            var staged = live.ToDictionary(node => node.Id, node => (node.Width, node.Height), StringComparer.Ordinal);
+            var widest = staged.Values.Max(size => size.Width);
+            var narrowest = staged.Values.Min(size => size.Width);
+
+            UniformNoteSizes(bySmallest);
+
+            var after = live.Select(node => NodeOf(node.Id)).Where(node => node is not null).Select(node => node!).ToList();
+
+            if (after.Count != notes.Count
+                || after.Select(node => node.Width).Distinct().Count() != 1
+                || after.Select(node => node.Height).Distinct().Count() != 1)
+            {
+                problems.Add($"自检统一大小（{label}）: 两格没有变成同一框（{string.Join(" / ", after.Select(node => $"{node.Width:0}×{node.Height:0}"))}）");
+            }
+            else
+            {
+                var width = after[0].Width;
+                var want = bySmallest ? narrowest : widest;
+
+                if (Math.Abs(width - want) > 0.5)
                 {
-                    problems.Add($"自检统一大小: {node.Id} 统一后还差 {need - node.Height:0}px 放不下正文");
+                    problems.Add($"自检统一大小（{label}）: 宽统一到了 {width:0}，应取这群里的 {(bySmallest ? "最窄" : "最宽")} {want:0}");
+                }
+
+                foreach (var node in after)
+                {
+                    var need = MeasureTextHeight(node.Text ?? string.Empty, node.Width, _view.FontSizeFor(node.Id));
+
+                    if (need > node.Height + 0.5)
+                    {
+                        problems.Add($"自检统一大小（{label}）: {node.Id} 统一后还差 {need - node.Height:0}px 放不下正文");
+                    }
+                }
+
+                Diagnostics.Write($"selftest 统一大小（{label}）: 这群里 {narrowest:0}–{widest:0} 宽，统一成 {width:0}×{after[0].Height:0}，两格正文都放得下");
+            }
+
+            if (!bySmallest)
+            {
+                // "统一大小是一步撤销"这句产品承诺只验一次：撤销栈是整块板共用的，
+                // 一个自检里连撤两发就会和别人的步骤错位（今天踩的就是这个）。
+                Undo();
+
+                foreach (var (id, size) in staged)
+                {
+                    if (NodeOf(id) is { } node
+                        && (Math.Abs(node.Width - size.Width) > 0.01 || Math.Abs(node.Height - size.Height) > 0.01))
+                    {
+                        problems.Add($"自检统一大小（{label}）: {id} 撤销以后没回到 {size.Width:0}×{size.Height:0}（读到 {node.Width:0}×{node.Height:0}）");
+                    }
                 }
             }
-        }
 
-        Undo();
-
-        foreach (var (id, size) in before)
-        {
-            if (NodeOf(id) is { } node
-                && (Math.Abs(node.Width - size.Width) > 0.01 || Math.Abs(node.Height - size.Height) > 0.01))
+            // 回原框用直接写，不靠撤销栈：这一档测的是"宽度取哪一头"，撤销只在上档验一次。
+            foreach (var (id, size) in before)
             {
-                problems.Add($"自检统一大小: {id} 撤销以后没回到 {size.Width:0}×{size.Height:0}");
+                if (NodeOf(id) is { } node)
+                {
+                    node.Width = size.Width;
+                    node.Height = size.Height;
+                }
+
+                _view.UnmarkManualSize(id);
             }
 
-            _view.UnmarkManualSize(id);
+            Rebuild();
         }
 
         ClearSelection();
         ProjectSelection();
     }
 
-    /// <summary>右键菜单的「统一便签大小」：选中优先；没选中就对所有文字便签。
-    /// 宽度取这群里最宽的一格，再按这个宽度量每格正文，取最高 —— 统一后最长的那段也放得下。</summary>
-    private void UniformNoteSizes()
+    /// <summary>右键菜单的「统一便签大小」：选中优先；没选中就对所有文字便签。</summary>
+    /// <param name="bySmallest">false＝按最大的统一（宽度取最宽的一格，再按这个宽度量每格正文取最高，
+    /// 最长那段也放得下）。true＝按最小的统一：宽度收到这群里**最窄**的一格，高度仍按"这个宽度下
+    /// 谁最高"取——一格都不被裁，但整摞比按最大小一圈。堆叠之前先用它，摞起来才不占地方。</param>
+    private void UniformNoteSizes(bool bySmallest = false)
     {
         var notes = SelectedNotes()
             .Where(node => node.Kind == CanvasNodeKind.Text && !EntityCards.IsTable(node))
@@ -213,7 +274,7 @@ public sealed partial class MainWindow
             return;
         }
 
-        var width = notes.Max(node => node.Width);
+        var width = bySmallest ? notes.Min(node => node.Width) : notes.Max(node => node.Width);
         var height = notes.Max(node => MeasureTextHeight(
             node.Text ?? string.Empty,
             width,
@@ -236,7 +297,7 @@ public sealed partial class MainWindow
         Reselect(ids);
         SaveSoon();
         ProjectSelection();
-        Say($"已把 {notes.Count} 张便签统一到 {width:0}×{height:0}");
+        Say($"已把 {notes.Count} 张便签统一到 {width:0}×{height:0}（按{(bySmallest ? "最小" : "最大")}）");
     }
 
     /// <summary>Every node on the board — the same call the keyboard's Ctrl+A makes.</summary>

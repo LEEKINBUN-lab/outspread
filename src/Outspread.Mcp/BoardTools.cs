@@ -164,8 +164,9 @@ public sealed class BoardTools
             .Select(node => node.Id)
             .ToList();
 
-        // 堆之前先统一框：一摞里高低不齐就叠不拢（界面那发「按最小的统一」量字体，这里量不到，
-        // 所以取"最窄宽 × 最高框"——不裁字，但比按最大小一圈）。
+        // 堆之前先统一框：一摞里高低不齐就叠不拢。界面那发「按最小的统一」能量字体，每格贴自己的正文；
+        // MCP 这一侧没有字体引擎，量不到，所以取"最窄宽 × 这群里最高的现框"——**只会偏高、不会裁字**，
+        // 板子下次按正文贴时自己会收下来（他 10-26 定的语义是各自贴正文，这发是它的保守上界）。
         var width = wanted.Min(node => node.Width);
         var height = wanted.Max(node => node.Height);
         var boxes = wanted.Select(node => new Aligning.Placed(node.Id, node.X, node.Y, width, height)).ToList();

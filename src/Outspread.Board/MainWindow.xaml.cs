@@ -4276,14 +4276,15 @@ public sealed partial class MainWindow : Window
             menu.Items.Add(submenu);
         }
 
-        // 两档都要能一眼够到：按最大是"谁都别裁"，按最小是"堆起来之前先缩一圈"（他 10-26）。
+        // 两档都要能一眼够到：按最大＝谁都别裁的同一个框，按最小＝宽收到最窄、高各自贴正文
+        // （他 10-26 21:5x 否掉了"最小公框"：那批卡宽本来就全一样，那一档点出来和按最大没区别）。
         var uniform = new MenuFlyoutSubItem { Text = "统一便签大小" };
 
-        var widest = new MenuFlyoutItem { Text = "按最大的统一" };
+        var widest = new MenuFlyoutItem { Text = "按最大的统一（同一个框）" };
         widest.Click += (_, _) => UniformNoteSizes(bySmallest: false);
         uniform.Items.Add(widest);
 
-        var tightest = new MenuFlyoutItem { Text = "按最小的统一" };
+        var tightest = new MenuFlyoutItem { Text = "按最小的统一（各自贴正文）" };
         tightest.Click += (_, _) => UniformNoteSizes(bySmallest: true);
         uniform.Items.Add(tightest);
 
@@ -4348,7 +4349,9 @@ public sealed partial class MainWindow : Window
         }
 
         // 两档统一都要够得着：只留一档，堆叠前那一发就没入口了。
-        if (!all.Contains("统一便签大小") || !all.Contains("按最大的统一") || !all.Contains("按最小的统一"))
+        if (!all.Contains("统一便签大小")
+            || !all.Any(text => text.StartsWith("按最大的统一", StringComparison.Ordinal))
+            || !all.Any(text => text.StartsWith("按最小的统一", StringComparison.Ordinal)))
         {
             problems.Add($"右键菜单里读不到『统一便签大小』的两档（读到 {string.Join(" / ", all.Where(text => text.Contains("统一", StringComparison.Ordinal)))}）");
         }

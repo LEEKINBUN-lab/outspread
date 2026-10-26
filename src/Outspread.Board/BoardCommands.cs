@@ -130,10 +130,26 @@ public sealed partial class MainWindow
     /// 两档各跑一遍——按最小那一档尤其要量"有没有裁字"，它收窄了宽度，正是容易裁的一档。</summary>
     private void SelfTestUniformSize(List<string> problems)
     {
-        var notes = BoardNotes()
+        // 挑正文最长和最短的那两格：Take(2) 那两格在统一宽度下恰好需要同一个高度（都是 160），
+        // 于是"各自贴正文"和"最小公框"算出同一个框，变异回旧语义也照样绿——夹具必须真能分岔。
+        var candidates = BoardNotes()
             .Where(node => node.Kind == CanvasNodeKind.Text && !EntityCards.IsTable(node))
-            .Take(2)
             .ToList();
+
+        List<CanvasNode> notes;
+
+        if (candidates.Count < 2)
+        {
+            notes = candidates.Take(2).ToList();
+        }
+        else
+        {
+            notes = new List<CanvasNode>
+            {
+                candidates.OrderByDescending(node => (node.Text ?? string.Empty).Length).First(),
+                candidates.OrderBy(node => (node.Text ?? string.Empty).Length).First(),
+            }.DistinctBy(node => node.Id).ToList();
+        }
 
         if (notes.Count < 2)
         {
@@ -188,9 +204,9 @@ public sealed partial class MainWindow
 
             if (after.Count != notes.Count
                 || after.Select(node => node.Width).Distinct().Count() != 1
-                || after.Select(node => node.Height).Distinct().Count() != 1)
+                || (!bySmallest && after.Select(node => node.Height).Distinct().Count() != 1))
             {
-                problems.Add($"自检统一大小（{label}）: 两格没有变成同一框（{string.Join(" / ", after.Select(node => $"{node.Width:0}×{node.Height:0}"))}）");
+                problems.Add($"自检统一大小（{label}）: 宽没收成同一档，或按最大那档没给同一个框（{string.Join(" / ", after.Select(node => $"{node.Width:0}×{node.Height:0}"))}）");
             }
             else
             {
@@ -202,17 +218,30 @@ public sealed partial class MainWindow
                     problems.Add($"自检统一大小（{label}）: 宽统一到了 {width:0}，应取这群里的 {(bySmallest ? "最窄" : "最宽")} {want:0}");
                 }
 
+                var tallest = 0.0;
+
                 foreach (var node in after)
                 {
                     var need = MeasureTextHeight(node.Text ?? string.Empty, node.Width, _view.FontSizeFor(node.Id));
+
+                    tallest = Math.Max(tallest, need);
 
                     if (need > node.Height + 0.5)
                     {
                         problems.Add($"自检统一大小（{label}）: {node.Id} 统一后还差 {need - node.Height:0}px 放不下正文");
                     }
+
+                    // 按最小这一档的承诺是"各自贴正文"：谁也不许多占——多占一格，这一档就和按最大没区别了
+                    // （他 10-26 21:5x 就是这么否掉最小公框的）。
+                    if (bySmallest && node.Height - need > 0.5)
+                    {
+                        problems.Add($"自检统一大小（按最小）: {node.Id} 的框比自己正文高 {node.Height - need:0}px，这一档不该抬谁");
+                    }
                 }
 
-                Diagnostics.Write($"selftest 统一大小（{label}）: 这群里 {narrowest:0}–{widest:0} 宽，统一成 {width:0}×{after[0].Height:0}，两格正文都放得下");
+                Diagnostics.Write($"selftest 统一大小（{label}）: 这群里 {narrowest:0}–{widest:0} 宽，"
+                    + $"统一成 {(bySmallest ? $"{width:0} 宽 + 各自贴正文" : $"{width:0}×{after[0].Height:0} 同一个框")}"
+                    + $"（{string.Join(" / ", after.Select(node => $"{node.Width:0}×{node.Height:0}"))}，最高那格的正文要 {tallest:0}）");
             }
 
             // 两发都得从撤销栈上摘干净：栈是整块板共用的，留一枚在后面，
@@ -247,9 +276,9 @@ public sealed partial class MainWindow
             Rebuild();
         }
 
-        // 等宽那一发是他 10-26 21:4x 撞的：那批卡的宽本来就全一样，两档点出来一模一样，
-        // 他读到的就是"我按了最小，怎么按的最大"。语义（最小公框）他已定档不动，
-        // 要锁的是**回执得当场说清宽没变**——否则这一发下一次还得靠他来报。
+        // 等宽那一发是他 10-26 21:4x 撞的：那批卡的宽本来就全一样，最小公框和按最大点出来一模一样，
+        // 他读到的就是"我按了最小，怎么按的最大"，于是 21:5x 否掉了那个语义。
+        // 这一发锁的是新语义真正的那半边：**宽没得收时，高也得各自贴回自己的正文**，谁也不许多占。
         {
             var equal = ids.Select(NodeOf).Where(node => node is not null).Select(node => node!).ToList();
 
@@ -257,6 +286,11 @@ public sealed partial class MainWindow
             {
                 equal[0].Width = 200;
                 equal[1].Width = 200;
+
+                // 一枚抬到 500 高的空框（先挂手动标记，免得布局那一发把它按回去）：
+                // 这一档要是还取"这群里最高的那格"，500 会传染给另一格——那正是被他否掉的行为。
+                _view.MarkManualSize(equal[0].Id);
+                equal[0].Height = 500;
                 Rebuild();
 
                 _selection.Clear();
@@ -280,17 +314,27 @@ public sealed partial class MainWindow
                     problems.Add($"自检统一大小（宽本来就一样）: 不该动的宽动了（读到 {string.Join(" / ", same.Select(node => $"{node.Width:0}"))}）");
                 }
 
-                if (same.Any(node => MeasureTextHeight(node.Text ?? string.Empty, node.Width, _view.FontSizeFor(node.Id)) > node.Height + 0.5))
+                foreach (var node in same)
                 {
-                    problems.Add("自检统一大小（宽本来就一样）: 抬起来的高度还裁着某格的正文");
+                    var need = MeasureTextHeight(node.Text ?? string.Empty, node.Width, _view.FontSizeFor(node.Id));
+
+                    if (node.Height - need > 0.5)
+                    {
+                        problems.Add($"自检统一大小（宽本来就一样）: {node.Id} 还比自己的正文高 {node.Height - need:0}px——那一格 500 的空框没被收掉");
+                    }
                 }
 
-                if (!receipt.Contains("本来就都是 200 宽", StringComparison.Ordinal))
+                if (same.All(node => staged2.TryGetValue(node.Id, out var size) && node.Height >= size.Height - 0.5))
                 {
-                    problems.Add($"自检统一大小（宽本来就一样）: 回执没告诉他宽这一档没得收（读到「{receipt}」）");
+                    problems.Add("自检统一大小（宽本来就一样）: 一格都没缩（宽一样时这一档就没活干了）");
                 }
 
-                Diagnostics.Write($"selftest 统一大小（宽本来就一样）: 两档同框，回执说清了——{receipt}");
+                if (!receipt.Contains("本来就都 200 宽", StringComparison.Ordinal) || !receipt.Contains("原来", StringComparison.Ordinal))
+                {
+                    problems.Add($"自检统一大小（宽本来就一样）: 回执没说清「宽没得收、缩的是高」（读到「{receipt}」）");
+                }
+
+                Diagnostics.Write($"selftest 统一大小（宽本来就一样）: 宽 200 不动，高各自贴回正文——{receipt}");
 
                 // 这一步自己也要从撤销栈上摘掉：栈是整块板共用的，留一枚在这儿，
                 // 后面"左对齐"那一步的 Undo 就会撤到我这一发上（10-26 那发第一跑必红、重跑才绿就是这么来的）。
@@ -320,9 +364,12 @@ public sealed partial class MainWindow
     }
 
     /// <summary>右键菜单的「统一便签大小」：选中优先；没选中就对所有文字便签。</summary>
-    /// <param name="bySmallest">false＝按最大的统一（宽度取最宽的一格，再按这个宽度量每格正文取最高，
-    /// 最长那段也放得下）。true＝按最小的统一：宽度收到这群里**最窄**的一格，高度仍按"这个宽度下
-    /// 谁最高"取——一格都不被裁，但整摞比按最大小一圈。堆叠之前先用它，摞起来才不占地方。</param>
+    /// <param name="bySmallest">false＝按最大的统一：宽度取最宽的一格，再把这群收进**同一个框**，
+    /// 框高取这群里最长那段正文放得下的那一格，谁也不裁。
+    /// true＝按最小的统一：宽度收到这群里**最窄**的一格，高度**每格按自己的正文**贴——
+    /// 不抬谁，也不把整摞钉在最高那格上；摘掉手动框标记，之后改字框还跟着字走。
+    /// 他 10-26 21:5x 否掉了"最小公框"：那批卡宽本来就全一样，最小公框和按最大点出来一模一样，
+    /// 这一档要真有小圈可收，才配叫最小。</param>
     private void UniformNoteSizes(bool bySmallest = false)
     {
         var notes = SelectedNotes()
@@ -350,17 +397,41 @@ public sealed partial class MainWindow
             _view.FontSizeFor(node.Id)));
         var narrowest = notes.Min(node => node.Width);
         var widest = notes.Max(node => node.Width);
+        var beforeTotal = notes.Sum(node => node.Height);
 
         BeginGesture("统一便签大小");
 
         foreach (var node in notes)
         {
             node.Width = width;
-            node.Height = height;
-            _view.MarkManualSize(node.Id);
+
+            if (bySmallest)
+            {
+                // 先摘标记再量：FitNoteHeight 认"手动框过的高"不动，不摘就永远贴不上正文。
+                // 「随文字」那档被钉成固定框时（NoteSize=Fixed）FitNoteHeight 直接返回，
+                // 所以这里自己兜一层，别让这一发在固定框的板上又变成"什么都没动"。
+                _view.UnmarkManualSize(node.Id);
+                FitNoteHeight(node);
+
+                if (_view.NoteSize == NoteSizeMode.Fixed)
+                {
+                    node.Height = Math.Max(140, MeasureTextHeight(
+                        node.Text ?? string.Empty,
+                        width,
+                        _view.FontSizeFor(node.Id)));
+                }
+            }
+            else
+            {
+                node.Height = height;
+                _view.MarkManualSize(node.Id);
+            }
         }
 
         EndGesture();
+
+        // 两档的差用"占了多少屏高"说：按最小不再把整摞钉在最高那格上，省下来的那一截就是要给他看的实物读数。
+        var stacked = notes.Sum(node => node.Height);
 
         var ids = notes.Select(node => node.Id).ToHashSet(StringComparer.Ordinal);
 
@@ -368,12 +439,13 @@ public sealed partial class MainWindow
         Reselect(ids);
         SaveSoon();
         ProjectSelection();
-        Say($"已把 {notes.Count} 张便签统一到 {width:0}×{height:0}"
-            + $"（按{(bySmallest ? "最小" : "最大")}：宽取这群里{(bySmallest ? "最窄" : "最宽")}的 {width:0}，"
-            + $"高取这格里最长那段正文放得下的 {height:0}）"
-            + (narrowest == widest
-                ? $"——这群本来就都是 {widest:0} 宽，所以宽这一档两下点出来一样。"
-                : string.Empty));
+        Say(bySmallest
+            ? $"已把 {notes.Count} 张便签的宽收到最窄的 {width:0}，高各自贴正文（合计 {stacked:0}px，原来 {beforeTotal:0}px）"
+                + (narrowest == widest
+                    ? $"——这群本来就都 {widest:0} 宽，所以这一档缩的全是高。"
+                    : $"（这群原来 {narrowest:0}–{widest:0} 宽）")
+            : $"已把 {notes.Count} 张便签统一到 {width:0}×{height:0}"
+                + $"（按最大：宽取这群里最宽的 {width:0}，高取这格里最长那段正文放得下的 {height:0}）");
     }
 
     /// <summary>Every node on the board — the same call the keyboard's Ctrl+A makes.</summary>

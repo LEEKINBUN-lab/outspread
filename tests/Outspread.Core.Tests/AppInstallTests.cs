@@ -83,7 +83,8 @@ public sealed class AppInstallTests : IDisposable
     {
         Write("src\\Outspread.Board.exe", "exe");
 
-        Assert.Null(AppInstall.ReadSourceHint(AppInstall.SourceHintPath()));
+        // 老副本没记来源：读不到就是读不到（这一发不许碰 %LOCALAPPDATA% 里那份真的）。
+        Assert.Null(AppInstall.ReadSourceHint(Path.Combine(_root, "stable\\outspread-source.txt")));
 
         Assert.Null(AppInstall.Refresh(Path.Combine(_root, "src"), Path.Combine(_root, "dst")));
         Assert.Equal(Path.Combine(_root, "src"), AppInstall.ReadSourceHint(Path.Combine(_root, "dst", AppInstall.SourceHintFileName)));

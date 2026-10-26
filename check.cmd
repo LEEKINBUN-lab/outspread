@@ -78,8 +78,18 @@ echo [5/5] 跟上开始菜单那枚
 rem The Start Menu copy is a snapshot of a build, so it goes stale unless something refreshes
 rem it — and the only thing that can write into it is a build that is not itself running from
 rem it. Running the freshly built bin exe with --heal-install does exactly that, with no window.
+rem
+rem On a CI runner there is no Start Menu to keep current, and WScript.Shell is not guaranteed
+rem there, so this step is skipped out loud instead of going red over somebody else's desktop.
+if "%GITHUB_ACTIONS%"=="true" goto :skip_heal
 "%BOARD%" --heal-install
 if not "%ERRORLEVEL%"=="0" goto :fail
+goto :heal_done
+
+:skip_heal
+echo 跳过：CI 那台机器上没有他的开始菜单（本机 10-26 21:17 实测：旧副本点开就把窗口交给了新构建）
+
+:heal_done
 
 echo.
 echo 全过

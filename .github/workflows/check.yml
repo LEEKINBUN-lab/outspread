@@ -1,0 +1,25 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Core tests
+        run: dotnet test tests/Outspread.Core.Tests/Outspread.Core.Tests.csproj -c Debug --nologo
+
+      - name: CLI build
+        run: dotnet build src/Outspread.Cli/Outspread.Cli.csproj -c Debug --nologo
+
+      - name: Board build
+        run: dotnet build src/Outspread.Board/Outspread.Board.csproj -c Debug -p:Platform=x64 --nologo

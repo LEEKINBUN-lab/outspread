@@ -1,0 +1,27 @@
+name: 建议
+description: 提出一个新功能或交互改进
+title: "[建议] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题
+      description: 谁在什么场景下遇到什么困难；不要只写按钮名。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望怎么解决
+      description: 可以是草图、参考软件或一句话目标。
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考虑过的替代方案
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: 范围
+      options:
+        - label: 这会改变板子文件的格式或跨端同步语义（需要先讨论契约）。

@@ -1,0 +1,43 @@
+name: 问题
+description: 报告可复现的缺陷
+title: "[问题] "
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 你看到的和预期分别是什么。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从打开哪块板开始，一步一步写。
+      placeholder: |
+        1. 打开……
+        2. 选中……
+        3. 拖动……
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 环境
+      description: Windows 版本、显示器缩放比例、应用版本或提交号。
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: 日志
+      description: 相关行来自 %LOCALAPPDATA%\Outspread\board.log；请先去掉令牌和个人路径。
+      render: text
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 数据
+      options:
+        - label: 我确认没有把真实板子文件、同步令牌或个人信息贴进来。
+          required: true

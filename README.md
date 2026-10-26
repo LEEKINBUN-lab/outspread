@@ -1,4 +1,4 @@
-# 铺陈
+# 「铺陈」画板
 
 一块无限画板：随手把文字和图片贴上去，自由挪动和缩放。板子存成 **JSON Canvas 1.0** 的 `.canvas` 文本文件，人和 agent 同时改同一份文件。
 
@@ -117,3 +117,9 @@ outspread sync pair                把手机要的配对载荷画成二维码，
 浮层样式、markdown、标签与日期放在哪、左下角那排要不要常驻——**先调研后判决**，在 **[docs/research-chrome-and-properties.md](docs/research-chrome-and-properties.md)**（含一手来源与"没查到什么"）。
 
 其余：旋转（格式里没有）、多板切换与文件关联、便签字号调节。同步这边：`assets/` 里的图片**已经随板子走**（只搬被引用的；删掉引用会把仓里和本地那份一起清掉，2026-10-14 在真仓打过：远端回 404、本地空、清单里记着 `droppedAssets`），**还没做的**是便签本身的跨端删除墓碑（`.canvas` 说不出"我不再用了"，所以首轮仍分不出删除、离线期间的删除也无从判起），以及手机端按 docs/sync-contract.md 复刻那一份。
+
+## 参与
+
+- 环境、测试与提交约定：[CONTRIBUTING.md](CONTRIBUTING.md)。
+- 问题用 `.github/ISSUE_TEMPLATE` 里的模板；附 Windows 版本、缩放比例与相关日志行（不要贴令牌或真实板子）。
+- CI 在 Windows runner 上跑核心测试、CLI 构建和界面构建；合并前本地仍以 `check.cmd` 为准。

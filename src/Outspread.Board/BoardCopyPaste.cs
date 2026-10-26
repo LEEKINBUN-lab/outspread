@@ -167,7 +167,9 @@ public sealed partial class MainWindow
 
             if (Text(copy, "type") == "file" && Text(copy, "file") is { Length: > 0 } relative)
             {
-                var moved = CarryPicture(copy, relative, source);
+                var moved = EntityCards.LooksLikeImage(relative)
+                    ? CarryPicture(copy, relative, source)
+                    : CarryAttachment(copy, relative, source);
 
                 if (moved < 0)
                 {
@@ -240,8 +242,8 @@ public sealed partial class MainWindow
             + (lost == 0 ? string.Empty : $"、{lost} 张没跟来（源板 {source ?? "没写"}）"));
 
         Say(lost == 0
-            ? $"已粘贴 {pasted.Count} 个便签" + (carried > 0 ? $"（含图片 {carried} 张）" : string.Empty)
-            : $"已粘贴 {pasted.Count} 个便签 · {lost} 张图片未能复制（源文件不可读）");
+            ? $"已粘贴 {pasted.Count} 个便签" + (carried > 0 ? $"（含文件 {carried} 份）" : string.Empty)
+            : $"已粘贴 {pasted.Count} 个便签 · {lost} 个文件未能复制（源文件不可读）");
 
         return true;
     }
@@ -280,6 +282,38 @@ public sealed partial class MainWindow
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Diagnostics.Write($"paste 图没搬动 {from}: {ex.Message}");
+
+            return -1;
+        }
+    }
+
+    /// <summary>
+    /// 非图片的文件格跟着片段走：源文件在别的板旁边时，副本落到这块板的 attachments/。
+    /// </summary>
+    private int CarryAttachment(JsonObject copy, string relative, string? sourceBoard)
+    {
+        var boardForAsset = IsAllNotes(_boardPath) ? UnfiledPath : _boardPath ?? string.Empty;
+        var from = sourceBoard is { Length: > 0 }
+            ? Path.Combine(AssetStore.BoardDirectory(sourceBoard), relative.Replace('/', Path.DirectorySeparatorChar))
+            : null;
+
+        if (from is null || !File.Exists(from))
+        {
+            Diagnostics.Write($"paste 附件没处可取：{relative}（源板 {sourceBoard ?? "没写"}）");
+
+            return -1;
+        }
+
+        try
+        {
+            var written = AttachmentStore.WriteFile(boardForAsset, from, out var alreadyThere);
+            copy["file"] = written;
+
+            return alreadyThere ? 0 : 1;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Diagnostics.Write($"paste 附件没搬动 {from}: {ex.Message}");
 
             return -1;
         }

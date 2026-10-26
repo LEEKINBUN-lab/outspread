@@ -41,7 +41,7 @@ public sealed partial class MainWindow
     {
         var marks = Tags.Read(node.Text);
 
-        return NoteMarks.Shows(NoteMarks.StateOf(marks, _view.Today), marks.Tags, _view.TagFilter, _view.DueFilter);
+        return NoteMarks.Shows(NoteMarks.StateOf(marks, _view.Today), marks.Tags, marks.Done, _view.TagFilter, _view.DueFilter, _view.DoneFilter);
     }
 
     /// <summary>这一次算出来的画面状态；横幅那句"折进了几格"读的就是它。</summary>

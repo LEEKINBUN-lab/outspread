@@ -13,6 +13,8 @@ public enum IngestKind
     Text,
     Image,
     Files,
+    Link,
+    Table,
 }
 
 /// <summary>
@@ -30,7 +32,9 @@ public sealed record IngestResult(
     int Width = 0,
     int Height = 0,
     IReadOnlyList<string>? Files = null,
-    string? Failure = null)
+    string? Failure = null,
+    string? Url = null,
+    TableGrid? Table = null)
 {
     public bool Failed => Failure is not null;
 }
@@ -44,8 +48,9 @@ public sealed record IngestResult(
 /// <see cref="PastedImage.RepairBlankAlpha"/> before anything is written — a paste that
 /// produces an invisible note is the failure this exists to avoid.
 ///
-/// RTF and HTML are read never: storing them would put formatting this board cannot
-/// render into a file an agent has to edit.
+/// RTF is read never: storing it would put formatting this board cannot render into a file
+/// an agent has to edit. HTML is read for two things only — a table's structure, and the one
+/// <c>href</c> behind a copied link — and the markup itself is thrown away either way.
 /// </remarks>
 internal static class ClipboardIngest
 {
@@ -196,8 +201,8 @@ internal static class ClipboardIngest
         if (view.Contains(StandardDataFormats.StorageItems))
         {
             var paths = (await view.GetStorageItemsAsync())
-                .Where(item => item is IStorageFile)
                 .Select(item => item.Path)
+                .Where(path => !string.IsNullOrWhiteSpace(path))
                 .ToList();
 
             if (paths.Count > 0)
@@ -210,9 +215,8 @@ internal static class ClipboardIngest
                         $"{images.Count} 个图片文件", Files: images);
                 }
 
-                // Not an image: a file the board cannot show still belongs on it as a link.
                 return new IngestResult(IngestKind.Files,
-                    $"{paths.Count} 个文件（按链接放置）", Files: paths);
+                    $"{paths.Count} 个文件", Files: paths);
             }
         }
 
@@ -221,9 +225,48 @@ internal static class ClipboardIngest
             return await ReadBitmapAsync(view);
         }
 
+        string? html = null;
+
+        if (view.Contains(StandardDataFormats.Html))
+        {
+            html = await view.GetHtmlFormatAsync();
+            var table = TablePaste.ReadHtml(html);
+
+            if (table is not null)
+            {
+                return new IngestResult(IngestKind.Table,
+                    $"表格 {table.RowCount} 行 × {table.ColumnCount} 列", Table: table);
+            }
+        }
+
         if (view.Contains(StandardDataFormats.Text))
         {
             var (text, dropped) = PastedImage.TrimPastedText(await view.GetTextAsync());
+            var tsv = TablePaste.ReadTsv(text);
+
+            if (tsv is not null)
+            {
+                return new IngestResult(IngestKind.Table,
+                    $"表格 {tsv.RowCount} 行 × {tsv.ColumnCount} 列", Table: tsv);
+            }
+
+            if (WebAddress.TrySingleUrl(text, out var uri))
+            {
+                return new IngestResult(IngestKind.Link, "网页链接", Url: uri.AbsoluteUri);
+            }
+
+            // 一行路径（含资源管理器「复制文件地址」那种带引号的）和拖进来是同一件事：
+            // 走 Files 那一档，让 10 MB 那条线与文件夹的链接型只管一次。
+            if (LocalPath.TrySingle(text, out var local))
+            {
+                return new IngestResult(IngestKind.Files, $"本地路径 {Path.GetFileName(local)}", Files: [local]);
+            }
+
+            // 在网页上选中链接文字→右键「复制」：文本档给的是显示文字，地址在 href 里。
+            if (WebAddress.TryAnchoredUrl(html, text, out var anchored))
+            {
+                return new IngestResult(IngestKind.Link, "网页链接（取自所选文字的锚点）", Url: anchored.AbsoluteUri);
+            }
 
             return new IngestResult(
                 IngestKind.Text,

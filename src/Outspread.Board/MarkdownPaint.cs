@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Markup;
 using Microsoft.UI.Xaml.Media;
+using Windows.Foundation;
 
 namespace Outspread.Board;
 
@@ -131,6 +132,70 @@ internal static class MarkdownPaint
     /// measured rule behind <see cref="Markdown.LineHeight"/>.</summary>
     public static double Box(NoteType type, double zoom, MarkdownLine line)
         => Math.Max(4, Math.Round(type.Leading * zoom * line.Scale, MidpointRounding.AwayFromZero));
+
+    /// <summary>
+    /// Measures the block at the width it will actually be painted at, returning both the total and
+    /// each line's own height. The old source-line count treated a long paragraph as one row; at a
+    /// different zoom that paragraph wraps to several rows and the card clipped without ever showing
+    /// the fade. <see cref="Line"/> is the same element the paint uses, so the two cannot disagree.
+    /// </summary>
+    public static (double Total, List<double> Heights) Measured(
+        NoteType type,
+        double zoom,
+        IReadOnlyList<MarkdownLine> lines,
+        double widthScreen,
+        SolidColorBrush ink,
+        SolidColorBrush quoteBrush,
+        SolidColorBrush quoteBar,
+        XamlRoot? root)
+    {
+        var panel = new StackPanel
+        {
+            IsHitTestVisible = false,
+            Width = Math.Max(20, widthScreen),
+        };
+
+        if (root is not null)
+        {
+            panel.XamlRoot = root;
+        }
+
+        foreach (var line in lines)
+        {
+            panel.Children.Add(Line(type, zoom, line, ink, quoteBrush, quoteBar));
+        }
+
+        panel.Measure(new Size(Math.Max(20, widthScreen), double.PositiveInfinity));
+
+        var heights = new List<double>(lines.Count);
+
+        foreach (var child in panel.Children)
+        {
+            heights.Add(((FrameworkElement)child).DesiredSize.Height);
+        }
+
+        return (panel.DesiredSize.Height, heights);
+    }
+
+    /// <summary>Every block line, with no trimming: the card clips at its own edge and the fade
+    /// covers the cut. The old count-based trim is what made a markdown card end in a hard cut.</summary>
+    public static List<UIElement> PaintAll(
+        NoteType type,
+        double zoom,
+        IReadOnlyList<MarkdownLine> lines,
+        SolidColorBrush ink,
+        SolidColorBrush quoteBrush,
+        SolidColorBrush quoteBar)
+    {
+        var painted = new List<UIElement>(lines.Count);
+
+        foreach (var line in lines)
+        {
+            painted.Add(Line(type, zoom, line, ink, quoteBrush, quoteBar));
+        }
+
+        return painted;
+    }
 
     /// <summary>One painted line: a TextBlock, or a quoted line wrapped in the bar it is drawn with.</summary>
     public static FrameworkElement Line(

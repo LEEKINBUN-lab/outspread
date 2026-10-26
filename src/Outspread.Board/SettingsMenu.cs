@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
+using Outspread.Core;
 
 namespace Outspread.Board;
 
@@ -29,27 +30,88 @@ public sealed partial class MainWindow
     {
         var menu = new MenuFlyout();
 
-        var pair = new MenuFlyoutItem { Text = "配对手机…", Icon = SettingsMenuIcon("\uE717") };
+        var pair = new MenuFlyoutItem { Text = "配对手机…", Icon = SettingsMenuIcon(FluentIcons.Phone) };
         pair.Click += (_, _) => OpenPairingPanel();
         menu.Items.Add(pair);
 
         menu.Items.Add(new MenuFlyoutSeparator());
 
-        var restore = new MenuFlyoutItem { Text = "恢复…", Icon = SettingsMenuIcon("\uE81C") };
+        var restore = new MenuFlyoutItem { Text = "恢复…", Icon = SettingsMenuIcon(FluentIcons.History) };
         restore.Click += (_, _) => OpenRestorePanel();
         menu.Items.Add(restore);
 
-        var filter = new MenuFlyoutItem { Text = "筛选：日期与标签…", Icon = SettingsMenuIcon("\uE71C") };
+        var filter = new MenuFlyoutItem { Text = "筛选：日期与标签…", Icon = SettingsMenuIcon(FluentIcons.Filter) };
         filter.Click += (_, _) => SetFilterPanel(true);
         menu.Items.Add(filter);
+
+        menu.Items.Add(new MenuFlyoutSeparator());
+
+        // 左侧操作条的三枚静态钮可以先关掉；排列/标签是条件钮，不走这一列。
+        var rail = new MenuFlyoutSubItem { Text = "左侧按钮" };
+
+        foreach (var (name, label) in new[] { ("group", "分组"), ("color", "换色"), ("delete", "删除") })
+        {
+            var toggle = new ToggleMenuFlyoutItem
+            {
+                Text = label,
+                IsChecked = !_view.IsRailButtonHidden(name),
+            };
+
+            toggle.Click += (_, _) =>
+            {
+                _view.SetRailButtonHidden(name, !toggle.IsChecked);
+                ApplyRailVisibility();
+                SaveSoon();
+            };
+
+            rail.Items.Add(toggle);
+        }
+
+        menu.Items.Add(rail);
+
+        var size = new MenuFlyoutSubItem { Text = "便签尺寸" };
+
+        var autoSize = new ToggleMenuFlyoutItem
+        {
+            Text = "随文字（编辑时自动长高）",
+            IsChecked = _view.NoteSize == NoteSizeMode.Automatic,
+        };
+        autoSize.Click += (_, _) => SetNoteSizeMode(NoteSizeMode.Automatic);
+        size.Items.Add(autoSize);
+
+        var fixedSize = new ToggleMenuFlyoutItem
+        {
+            Text = "固定（只由手柄改）",
+            IsChecked = _view.NoteSize == NoteSizeMode.Fixed,
+        };
+        fixedSize.Click += (_, _) => SetNoteSizeMode(NoteSizeMode.Fixed);
+        size.Items.Add(fixedSize);
+
+        menu.Items.Add(size);
 
         return menu;
     }
 
-    private static FontIcon SettingsMenuIcon(string glyph) => new()
+    private static IconElement? SettingsMenuIcon(string path)
+        // 官方路径画在 20×20 的格子里；给 16 的 PathIcon 会把右下切掉。
+        => FluentIcons.Icon(path, 20, NoteStyling.ToColor(Badge.Muted(NoteStyling.IsDark)));
+
+    /// <summary>「随文字 / 固定」：换档时只动版面尺寸，不写文档。</summary>
+    private void SetNoteSizeMode(NoteSizeMode mode)
     {
-        Glyph = glyph,
-        FontFamily = new FontFamily("Segoe MDL2 Assets"),
-        FontSize = 16,
-    };
+        if (_view.NoteSize == mode)
+        {
+            return;
+        }
+
+        _view.NoteSize = mode;
+
+        if (mode == NoteSizeMode.Automatic)
+        {
+            RefitAutoHeights();
+        }
+
+        Rebuild();
+        SaveSoon();
+    }
 }

@@ -36,6 +36,7 @@ public sealed partial class MainWindow
     private Border? _railGroup;
     private Border? _railColor;
     private Border? _railArrange;
+    private Border? _railTag;
     private Border? _railDelete;
     private Grid? _railStack;
     private Canvas? _railHaloCanvas;
@@ -87,8 +88,17 @@ public sealed partial class MainWindow
 
         _rail ??= BuildRail();
 
-        // 排列钮只在选中多枚时插进来；先同步，外壳高度与落位都跟着这一发的钮数走。
-        SyncRailArrange(SelectedNotes().Count >= 2);
+        // 排列钮和批量标签钮只在选中多枚时插进来；先同步，外壳高度与落位都跟着这一发的钮数走。
+        var many = SelectedNotes().Count >= 2;
+        SyncRailArrange(many);
+        SyncRailTag(many);
+
+        if (RailButtons().Length == 0)
+        {
+            HideRail();
+
+            return;
+        }
 
         var cellCount = RailButtons().Length;
         var shellHeight = RailShellHeight(cellCount);
@@ -96,6 +106,11 @@ public sealed partial class MainWindow
         var flip = screenLeft < 60;
         // 外壳比圆盘宽 2×晕影：落位把这层内缩抵消掉，圆盘仍贴在原来那条 12 像素的缝上。
         var x = (flip ? _view.ToScreenX(box.Right) + 12 : screenLeft - 50) - ControlKit.VignetteSpreadPx;
+
+        // 夹回视口里：选区比视口还宽（放大到只剩两格横排、或全选）时，左缘和右缘**都**在屏幕外，
+        // 上面那一发翻到哪一侧都是贴到看不见的地方——选中状态还在，那列钮却再也够不着
+        // （他 10-26 的 @n8 同款：点完排序，选中框在、左侧没有按钮）。
+        x = Math.Clamp(x, 8, Math.Max(8, BoardArea.ActualWidth - RailShellWidthPx - 8));
         // 圆盘列的中心对准选区的中心（不是固定往下 64）：四枚时原来会整体偏低 27px。
         var y = Math.Clamp(
             _view.ToScreenY(box.Y + (box.Height / 2)) - RailTopInsetPx - (RailColumnHeight(cellCount) / 2),
@@ -140,6 +155,34 @@ public sealed partial class MainWindow
         }
     }
 
+    /// <summary>自检那把尺：操作条此刻亮不亮、有几枚钮。选中框与这一列必须同现同隐（@n8）。</summary>
+    internal bool RailIsShown => _railShown;
+
+    internal int RailButtonCount => RailButtons().Length;
+
+    /// <summary>自检那把尺：操作条亮着的时候，整列必须落在可视区里。选区比视口宽（放大到只剩
+    /// 两格横排、或全选）时，老算法会把它贴到屏幕外——选中状态还在，按钮却够不着（@n8 同款）。</summary>
+    internal bool RailInsideViewport
+    {
+        get
+        {
+            if (!_railShown || _rail is null)
+            {
+                return false;
+            }
+
+            var left = Canvas.GetLeft(_rail);
+            var top = Canvas.GetTop(_rail);
+
+            return !double.IsNaN(left)
+                && !double.IsNaN(top)
+                && left >= 0
+                && top >= 0
+                && (left + RailShellWidthPx) <= (BoardArea.ActualWidth + 0.5)
+                && (top + _rail.ActualHeight) <= (BoardArea.ActualHeight + 0.5);
+        }
+    }
+
     private void HideRail()
     {
         if (_rail is null || !_railShown)
@@ -151,6 +194,7 @@ public sealed partial class MainWindow
         _railHover = null;
         CloseGroupMenu();
         CloseArrangeMenu();
+        CloseTagMenu();
         CloseColorPopover();
 
         var fade = FadeTo(_rail, 0, Motion.BaseMs);
@@ -183,9 +227,14 @@ public sealed partial class MainWindow
         _railGroup = RoundButton("NoteRailGroup", GroupIcon(), "分组（点＝菜单，按住拖＝拖入/拖出）");
         _railColor = RoundButton("NoteRailColor", ColorWheelIcon(), "换色");
         _railArrange = RoundButton("NoteRailArrange", ArrangeIcon(), "排列（按颜色或标签；排选中的，没选中＝整板）");
+        _railTag = RoundButton("NoteRailTag", TagIcon(), "批量加标签（选中的便签；可新增标签）");
+
+        _railGroup.Visibility = _view.IsRailButtonHidden("group") ? Visibility.Collapsed : Visibility.Visible;
+        _railColor.Visibility = _view.IsRailButtonHidden("color") ? Visibility.Collapsed : Visibility.Visible;
 
         // 删的红现在长在图形本身，不再长在圈上——静止那一档根本没有圈。
         _railDelete = RoundButton("NoteRailDelete", TrashIcon(), "删掉这格");
+        _railDelete.Visibility = _view.IsRailButtonHidden("delete") ? Visibility.Collapsed : Visibility.Visible;
 
         host.Children.Add(_railGroup);
         host.Children.Add(_railColor);
@@ -254,8 +303,8 @@ public sealed partial class MainWindow
 
     private const double RailPitchPx = RailButtonPx + RailGapPx;
 
-    /// <summary>最多四枚：组、色、排列、删。排列只在选中 ≥2 时插进来，所以格子数是活的。</summary>
-    private const int RailMaxCells = 4;
+    /// <summary>最多五枚：组、色、排列、批量标签、删。排列/标签只在选中 ≥2 时插进来。</summary>
+    private const int RailMaxCells = 5;
 
     /// <summary>外壳：晕影那一圈在左右各扩 10；高度按此刻的钮数算（上下各扩 10）。</summary>
     private const double RailShellWidthPx = RailButtonPx + (2 * ControlKit.VignetteSpreadPx);
@@ -498,7 +547,21 @@ public sealed partial class MainWindow
     /// 于是它既没淡进画面（停在 Opacity 0）、也没刷过纸面色（连底圈都没有），看着就是凭空少一枚。
     /// </summary>
     private Border[] RailButtons()
-        => _railHost?.Children.OfType<Border>().ToArray() ?? [];
+        => _railHost?.Children.OfType<Border>().Where(button => button.Visibility == Visibility.Visible).ToArray() ?? [];
+
+    /// <summary>设置里改了"左侧按钮"之后，把三枚静态钮的可见性同步过来并重新落位。</summary>
+    private void ApplyRailVisibility()
+    {
+        _railGroup?.Visibility = _view.IsRailButtonHidden("group") ? Visibility.Collapsed : Visibility.Visible;
+        _railColor?.Visibility = _view.IsRailButtonHidden("color") ? Visibility.Collapsed : Visibility.Visible;
+        _railDelete?.Visibility = _view.IsRailButtonHidden("delete") ? Visibility.Collapsed : Visibility.Visible;
+
+        if (_rail is not null)
+        {
+            RelayoutRail();
+            EnsureRail();
+        }
+    }
 
     /// <summary>组钮的激活环（拖动中／菜单开着）。</summary>
     private void SetRailGroupActive(bool active)
@@ -531,6 +594,20 @@ public sealed partial class MainWindow
     // 色轮那一枚是**带颜色**的，任何线稿调色盘都没有颜色可看；垃圾桶那类通用符号
     // 本就该交给系统字体，它的字形是按字号调过 hinting 的。
     // 控件层（纸面圆盘、悬停/按压状态层与时长）保留，那部分他没说退。
+
+    /// <summary>批量标签＝官方 Fluent 的 Tag 形状；不自绘。</summary>
+    private static UIElement TagIcon()
+    {
+        var ink = NoteStyling.InkFor(NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark)));
+
+        return FluentIcons.Glyph(FluentIcons.Tag, 18, ink)
+            ?? new TextBlock
+            {
+                Text = "#",
+                FontSize = 18,
+                Foreground = new SolidColorBrush(ink),
+            };
+    }
 
     /// <summary>排列＝2×3 的方块矩阵：画的就是排完的样子（10-25 他选的 A 档）。</summary>
     private static UIElement ArrangeIcon()
@@ -734,15 +811,15 @@ public sealed partial class MainWindow
             return;
         }
 
-        // 排列钮的出现条件：选中一格＝三枚；再加一格＝四枚（10-25 他定的）。
+        // 动态钮的出现条件：选中一格＝三枚；再加一格＝五枚（排列＋批量标签）。
         SelectOnly(probe[0].Id);
         ProjectSelection();
 
         var single = RailButtons();
 
-        if (single.Length != 3 || single.Any(button => button.Name == "NoteRailArrange"))
+        if (single.Length != 3 || single.Any(button => button.Name is "NoteRailArrange" or "NoteRailTag"))
         {
-            problems.Add($"自检状态层: 选中 1 格时操作条应 3 枚、且没有排列钮，读到 {single.Length} 枚");
+            problems.Add($"自检状态层: 选中 1 格时操作条应 3 枚、且没有排列/标签钮，读到 {single.Length} 枚");
         }
 
         _selection.Add(probe[1].Id);
@@ -750,9 +827,11 @@ public sealed partial class MainWindow
 
         var buttons = RailButtons();
 
-        if (buttons.Length != 4 || buttons.All(button => button.Name != "NoteRailArrange"))
+        if (buttons.Length != 5
+            || buttons.All(button => button.Name != "NoteRailArrange")
+            || buttons.All(button => button.Name != "NoteRailTag"))
         {
-            problems.Add($"自检状态层: 选中 2 格时操作条应 4 枚、且含排列钮，读到 {buttons.Length} 枚");
+            problems.Add($"自检状态层: 选中 2 格时操作条应 5 枚、且含排列与标签钮，读到 {buttons.Length} 枚");
         }
 
         // 圆盘列的中心要落在选区中心上（四枚时原来会低 27px）。
@@ -774,7 +853,13 @@ public sealed partial class MainWindow
             var wanted = _view.ToScreenY(chosen.Y + (chosen.Height / 2));
             var got = (top + bottom) / 2;
 
-            if (Math.Abs(got - wanted) > 1.5)
+            // 五枚钮是一列很高的条：选区贴顶/贴底时它只能停进边界，中心天然对不上。
+            // 只有没被边界夹住时，"中心＝选区中心"才是这条尺该要求的事。
+            var railTop = _rail is null ? double.NaN : Canvas.GetTop(_rail);
+            var railBottom = BoardArea.ActualHeight - RailShellHeight(buttons.Length) - 8;
+            var clamped = Math.Abs(railTop - 8) < 0.5 || Math.Abs(railTop - railBottom) < 0.5;
+
+            if (!clamped && Math.Abs(got - wanted) > 1.5)
             {
                 problems.Add($"自检状态层: {buttons.Length} 枚钮的竖向中心 {got:0.#} 没对准选区中心 {wanted:0.#}（差 {got - wanted:0.#}）");
             }
@@ -792,6 +877,7 @@ public sealed partial class MainWindow
             "NoteRailGroup" => "组",
             "NoteRailColor" => "色",
             "NoteRailArrange" => "排列",
+            "NoteRailTag" => "标签",
             _ => "删",
         };
 
@@ -845,7 +931,7 @@ public sealed partial class MainWindow
         }
 
         Diagnostics.Write(
-            $"selftest 状态层: 选中 1 格＝3 枚、选中 2 格＝4 枚（排列钮）；每枚都是纸面＋悬停 {ControlKit.HoverAlpha:0.###}＋按压 {ControlKit.PressAlpha:0.###}＋环，静止时后三层全透明；" +
+            $"selftest 状态层: 选中 1 格＝3 枚、选中 2 格＝5 枚（排列＋标签）；每枚都是纸面＋悬停 {ControlKit.HoverAlpha:0.###}＋按压 {ControlKit.PressAlpha:0.###}＋环，静止时后三层全透明；" +
             $"进 {ControlKit.HoverInMs:0}ms／退 {ControlKit.HoverOutMs:0}ms／按 {ControlKit.PressMs:0}ms；删那枚 Path 端点圆头、描边 1.5；晕影 {ControlKit.VignetteAlpha:0.##}／深底 {ControlKit.VignetteAlphaDark:0.##}，四圈都装在外壳里");
 
         ClearSelection();
@@ -901,7 +987,7 @@ public sealed partial class MainWindow
             problems.Add($"自检状态层: 亮着的晕影 {visibleHalos} 圈，钮 {cells.Length} 枚——多一圈少一圈都会露边");
         }
 
-        // 排列钮只在选中 ≥2 时出现；这条与钮数、影数一起钉。
+        // 排列/标签钮只在选中 ≥2 时出现；这条与钮数、影数一起钉。
         var wantArrange = SelectedNotes().Count >= 2;
 
         if ((cells.Any(button => button.Name == "NoteRailArrange")) != wantArrange)
@@ -909,7 +995,12 @@ public sealed partial class MainWindow
             problems.Add($"自检状态层: 选中 {SelectedNotes().Count} 格时，排列钮{(wantArrange ? "应该出现却没有" : "不该出现却在")}");
         }
 
-        if (cells.Length != (wantArrange ? 4 : 3))
+        if ((cells.Any(button => button.Name == "NoteRailTag")) != wantArrange)
+        {
+            problems.Add($"自检状态层: 选中 {SelectedNotes().Count} 格时，标签钮{(wantArrange ? "应该出现却没有" : "不该出现却在")}");
+        }
+
+        if (cells.Length != (wantArrange ? 5 : 3))
         {
             problems.Add($"自检状态层: 操作条上有 {cells.Length} 枚钮（选中 {SelectedNotes().Count} 格）");
         }
@@ -1063,6 +1154,36 @@ public sealed partial class MainWindow
     /// 排列钮是第四枚、只在选中多枚时出现：插在"换色"和"删"之间，外壳/影层的高度跟着重算。
     /// 没有动画——一条已经在屏幕上的操作条里多一枚，突然出现比淡入更不容易被错过。
     /// </summary>
+    private void SyncRailTag(bool show)
+    {
+        if (_railHost is null || _railTag is null || _rail is null)
+        {
+            return;
+        }
+
+        var present = _railHost.Children.Contains(_railTag);
+
+        if (present == show)
+        {
+            return;
+        }
+
+        if (show)
+        {
+            _railTag.Opacity = 1;
+            _railTag.RenderTransform = new TranslateTransform { X = 0 };
+
+            // 排在排列钮后面、删除钮前面；排列钮是先插的，所以标签固定落在第 3 格。
+            _railHost.Children.Insert(Math.Min(3, _railHost.Children.Count), _railTag);
+        }
+        else
+        {
+            _railHost.Children.Remove(_railTag);
+        }
+
+        RelayoutRail();
+    }
+
     private void SyncRailArrange(bool show)
     {
         if (_railHost is null || _railArrange is null || _rail is null)
@@ -1235,6 +1356,18 @@ public sealed partial class MainWindow
             RailPress(_railArrange, down: false);
         };
 
+        _railTag!.PointerPressed += (_, e) =>
+        {
+            RailPress(_railTag, down: true);
+            ShowTagMenu();
+            e.Handled = true;
+        };
+
+        _railTag.PointerReleased += (_, e) =>
+        {
+            RailPress(_railTag, down: false);
+        };
+
         _railDelete!.PointerPressed += (_, e) =>
         {
             RailPress(_railDelete, down: true);
@@ -1247,7 +1380,7 @@ public sealed partial class MainWindow
             RailPress(_railDelete, down: false);
         };
 
-        foreach (var button in new[] { _railGroup!, _railColor!, _railArrange!, _railDelete! })
+        foreach (var button in new[] { _railGroup!, _railColor!, _railArrange!, _railTag!, _railDelete! })
         {
             var target = button;
 
@@ -1636,6 +1769,230 @@ public sealed partial class MainWindow
     {
         _arrangeMenu?.Hide();
         _arrangeMenu = null;
+    }
+
+    // ---------------------------------------------------------------------
+    // 批量加标签：多选时多一枚钮，菜单里列出板上已有的标签，也可以新增
+    // ---------------------------------------------------------------------
+
+    private MenuFlyout? _tagMenu;
+
+    private void ShowTagMenu()
+    {
+        if (_railTag is null || _selection.Count < 2)
+        {
+            return;
+        }
+
+        var menu = new MenuFlyout();
+        var tags = BoardNotes()
+            .SelectMany(node => Tags.Of(node.Text))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(tag => tag, StringComparer.Ordinal)
+            .ToList();
+
+        foreach (var tag in tags)
+        {
+            var item = new MenuFlyoutItem { Text = tag };
+            item.Click += (_, _) => ApplyTagToSelected(tag);
+            menu.Items.Add(item);
+        }
+
+        if (tags.Count > 0)
+        {
+            menu.Items.Add(new MenuFlyoutSeparator());
+        }
+
+        var add = new MenuFlyoutItem { Text = "新增标签…" };
+        add.Click += (_, _) => _ = PromptNewTagAsync();
+        menu.Items.Add(add);
+
+        _tagMenu = menu;
+        menu.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_tagMenu, menu))
+            {
+                _tagMenu = null;
+            }
+        };
+
+        menu.ShowAt(_railTag, new FlyoutShowOptions { Placement = FlyoutPlacementMode.RightEdgeAlignedTop });
+    }
+
+    private void CloseTagMenu()
+    {
+        _tagMenu?.Hide();
+        _tagMenu = null;
+    }
+
+    private async Task PromptNewTagAsync()
+    {
+        var box = new TextBox
+        {
+            PlaceholderText = "标签名（不用带 # 或 @t）",
+            FontSize = 14,
+        };
+
+        var dialog = new ContentDialog
+        {
+            Title = "新增标签",
+            Content = box,
+            PrimaryButtonText = "加到选中的便签",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = Root.XamlRoot,
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        var name = box.Text.Trim();
+
+        if (name.Length == 0)
+        {
+            Say("标签名不能为空");
+
+            return;
+        }
+
+        if (name.Any(char.IsWhiteSpace))
+        {
+            Say("标签名里不能有空格；一个标签是 @t 后面的一整段");
+
+            return;
+        }
+
+        ApplyTagToSelected(name);
+    }
+
+    /// <summary>批量标签的写分支：两格都真的多出牌子、正文没动；撤销以后逐字回到原样。</summary>
+    private void SelfTestBatchTag(List<string> problems)
+    {
+        var notes = BoardNotes()
+            .Where(node => node.Kind == CanvasNodeKind.Text && !EntityCards.IsTable(node))
+            .Take(2)
+            .ToList();
+
+        if (notes.Count < 2)
+        {
+            problems.Add("自检批量标签: 板上不足两格文字便签");
+
+            return;
+        }
+
+        var before = notes.ToDictionary(node => node.Id, node => node.Text ?? string.Empty, StringComparer.Ordinal);
+
+        _selection.Clear();
+
+        foreach (var node in notes)
+        {
+            _selection.Add(node.Id);
+        }
+
+        ProjectSelection();
+        ApplyTagToSelected("批量自检");
+
+        foreach (var id in before.Keys)
+        {
+            if (NodeOf(id) is not { } after)
+            {
+                problems.Add($"自检批量标签: {id} 加标签后不见了");
+
+                continue;
+            }
+
+            var marks = Tags.Read(after.Text);
+
+            if (!marks.Tags.Contains("#批量自检", StringComparer.Ordinal))
+            {
+                problems.Add($"自检批量标签: {id} 没读到 #批量自检");
+            }
+
+            if (marks.Body != Tags.Read(before[id]).Body)
+            {
+                problems.Add($"自检批量标签: {id} 的正文被改了");
+            }
+
+            if (string.Equals(after.Text, before[id], StringComparison.Ordinal))
+            {
+                problems.Add($"自检批量标签: {id} 的文本根本没变");
+            }
+
+            if (!_realized.TryGetValue(id, out var card) || !card.PaintsReadout)
+            {
+                problems.Add($"自检批量标签: {id} 加了标签但卡片上没画出牌子");
+            }
+        }
+
+        Undo();
+
+        foreach (var (id, text) in before)
+        {
+            if (NodeOf(id) is { } after && !string.Equals(after.Text, text, StringComparison.Ordinal))
+            {
+                problems.Add($"自检批量标签: {id} 撤销以后没回到原样");
+            }
+        }
+
+        ClearSelection();
+        ProjectSelection();
+    }
+
+    private void ApplyTagToSelected(string tag)
+    {
+        var notes = SelectedNotes()
+            .Where(node => node.Kind == CanvasNodeKind.Text && !EntityCards.IsTable(node))
+            .ToList();
+
+        if (notes.Count == 0)
+        {
+            Say("先选中便签，再加标签");
+
+            return;
+        }
+
+        BeginGesture("批量加标签");
+
+        foreach (var node in notes)
+        {
+            var heightBefore = node.Height;
+
+            node.Text = Tags.AddTag(node.Text, tag);
+
+            // 新牌子也要有地方站：自动高度的便签按"正文＋牌子带"重新量一次高。
+            // 只许长、不许缩——这一步只加牌子，正文没变；量矮了会把已有的牌子挤出卡外
+            // （自检里空正文那格就是从 80 被量成 44，牌子当场不画了）。
+            FitNoteHeight(node);
+
+            if (node.Height < heightBefore)
+            {
+                node.Height = heightBefore;
+            }
+        }
+
+        EndGesture();
+
+        Rebuild();
+        ClearSelection();
+        ProjectSelection();
+
+        // 标签是正文改动：立刻落盘，别等 0.5 秒定时器——关窗/切板时那一发可能还没到。
+        SaveNow();
+
+        var shown = tag.Trim();
+
+        if (shown.StartsWith('#'))
+        {
+            shown = shown[1..];
+        }
+        else if (shown.StartsWith("@t", StringComparison.OrdinalIgnoreCase))
+        {
+            shown = shown[2..];
+        }
+
+        Say($"已给 {notes.Count} 张便签加上 {shown}");
     }
 
     private static IconElement DotIcon(Brush brush)

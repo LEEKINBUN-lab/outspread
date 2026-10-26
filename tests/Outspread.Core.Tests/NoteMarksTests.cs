@@ -92,19 +92,28 @@ public class NoteMarksTests
     }
 
     [Fact]
-    public void Filtering_asks_both_questions_and_a_lens_that_matches_nothing_shows_nothing()
+    public void Filtering_asks_its_three_questions_and_a_lens_that_matches_nothing_shows_nothing()
     {
         var note = "@d2026-10-09 @t周会\n截止";
         var tags = Tags.Of(note);
         var late = NoteMarks.StateOf(note, Today);
 
-        Assert.True(NoteMarks.Shows(late, tags, tag: null, dueFilter: null));
-        Assert.True(NoteMarks.Shows(late, tags, "#周会", NoteMarks.DueState.Late));
-        Assert.False(NoteMarks.Shows(late, tags, "#别的", null));
-        Assert.False(NoteMarks.Shows(late, tags, null, NoteMarks.DueState.Today));
+        Assert.True(NoteMarks.Shows(late, tags, done: null, tag: null, dueFilter: null, doneFilter: null));
+        Assert.True(NoteMarks.Shows(late, tags, done: null, tag: "#周会", dueFilter: NoteMarks.DueState.Late, doneFilter: null));
+        Assert.False(NoteMarks.Shows(late, tags, done: null, tag: "#别的", dueFilter: null, doneFilter: null));
+        Assert.False(NoteMarks.Shows(late, tags, done: null, tag: null, dueFilter: NoteMarks.DueState.Today, doneFilter: null));
 
         // 牌子上写的是 #周会，文件里存的是 @t周会：筛选认前者，两边必须对得上。
-        Assert.True(NoteMarks.Shows(late, Tags.Read("@t周会\n正文").Tags, "#周会", null));
+        Assert.True(NoteMarks.Shows(late, Tags.Read("@t周会\n正文").Tags, done: null, tag: "#周会", dueFilter: null, doneFilter: null));
+
+        // 完成那一档：true 只放过 @b1；false 放过 @b0 **和压根没写的**——待办板上"没写"就是还没做完，
+        // 把它单开一档会筛出一块空白。
+        Assert.True(NoteMarks.Shows(late, tags, done: true, tag: null, dueFilter: null, doneFilter: true));
+        Assert.False(NoteMarks.Shows(late, tags, done: false, tag: null, dueFilter: null, doneFilter: true));
+        Assert.False(NoteMarks.Shows(late, tags, done: null, tag: null, dueFilter: null, doneFilter: true));
+        Assert.True(NoteMarks.Shows(late, tags, done: false, tag: null, dueFilter: null, doneFilter: false));
+        Assert.True(NoteMarks.Shows(late, tags, done: null, tag: null, dueFilter: null, doneFilter: false));
+        Assert.False(NoteMarks.Shows(late, tags, done: true, tag: null, dueFilter: null, doneFilter: false));
     }
 
     [Theory]

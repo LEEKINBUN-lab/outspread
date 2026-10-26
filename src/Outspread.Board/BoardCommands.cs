@@ -80,7 +80,9 @@ public sealed partial class MainWindow
         new("按序号排列", "Alt+N", "排列", () => ArrangeBySequence("按序号排列"), Menu: false),
         new("成组", "Ctrl+G", "组织", GroupOrDissolve),
         new("拆组", string.Empty, "组织", UngroupSelection, Sheet: false),
-        new("复制", "Ctrl+D", "组织", DuplicateSelection),
+        new("制作副本", "Ctrl+D", "组织", DuplicateSelection),
+        new("打开原件", string.Empty, "组织", OpenSelectedEntity, Dispatched: false, Sheet: false),
+        new("在文件夹中打开", string.Empty, "组织", RevealSelectedEntity, Dispatched: false, Sheet: false),
 
         // 连线按叠放次序把选中的串成一条链，全都在就是拆链（原型同一条命令两用）。
         new("连线", "Alt+C", "组织", ConnectSelection),
@@ -92,9 +94,14 @@ public sealed partial class MainWindow
         new("粘贴剪贴板", "Ctrl+V", "板子", () => _ = PasteFromClipboardAsync(), Dispatched: false, Sheet: false),
         new("取消选中", "Esc", "板子", () => { ClearSelection(); ProjectSelection(); }, Dispatched: false, Sheet: false),
         new("删掉选中", "Delete", "板子", RemoveSelection, Dispatched: false, Listed: false),
+        new("保存", "Ctrl+S", "板子", SaveAndConfirm, Sheet: false, Menu: false),
         new("撤回", "Ctrl+Z", "板子", Undo, Dispatched: false, Listed: false),
         new("重做", "Ctrl+Y", "板子", Redo, Dispatched: false, Listed: false),
         new("新建便签", "双击空白", "板子", NewNoteAtCentre, Dispatched: false, Sheet: false),
+
+        // 实体卡不能只靠"碰巧粘对形状"才建得出来：粘的是别家软件的剪贴板、或在触屏上，
+        // 这一条是唯一走得进去的门。识别与建卡那半和粘贴共用同一发，两条入口不可能认得不一样。
+        new("从路径或链接新建卡片", string.Empty, "板子", () => _ = NewCardFromLocationAsync()),
 
         // 查找与恢复没有第二个入口的要不得：查找是"贴进去的东西找得回来"，恢复是"改坏了还够得着"。
         new("查找", "Ctrl+F", "板子", OpenSearch, Listed: false),
@@ -111,6 +118,126 @@ public sealed partial class MainWindow
         new("看到全部", "Shift+1", "看", ZoomToFit, Dispatched: false),
         new("看到选中", "Shift+2", "看", ZoomToSelection, Dispatched: false),
     ];
+
+    /// <summary>保存按钮与 Ctrl+S 共用的那一发：板子本来就自动保存，这里给他一个明确的落定回执。</summary>
+    private void SaveAndConfirm()
+    {
+        SaveNow();
+        Say("保存成功");
+    }
+
+    /// <summary>统一大小的写分支：两格真的变成同一框，且每格正文都放得下；撤销逐格回到原框。</summary>
+    private void SelfTestUniformSize(List<string> problems)
+    {
+        var notes = BoardNotes()
+            .Where(node => node.Kind == CanvasNodeKind.Text && !EntityCards.IsTable(node))
+            .Take(2)
+            .ToList();
+
+        if (notes.Count < 2)
+        {
+            problems.Add("自检统一大小: 板上不足两格文字便签");
+
+            return;
+        }
+
+        var before = notes.ToDictionary(node => node.Id, node => (node.Width, node.Height), StringComparer.Ordinal);
+
+        _selection.Clear();
+
+        foreach (var node in notes)
+        {
+            _selection.Add(node.Id);
+        }
+
+        ProjectSelection();
+        UniformNoteSizes();
+
+        var after = notes.Select(node => NodeOf(node.Id)).Where(node => node is not null).Select(node => node!).ToList();
+
+        if (after.Count != notes.Count
+            || after.Select(node => node.Width).Distinct().Count() != 1
+            || after.Select(node => node.Height).Distinct().Count() != 1)
+        {
+            problems.Add($"自检统一大小: 两格没有变成同一框（{string.Join(" / ", after.Select(node => $"{node.Width:0}×{node.Height:0}"))}）");
+        }
+        else
+        {
+            foreach (var node in after)
+            {
+                var need = MeasureTextHeight(node.Text ?? string.Empty, node.Width, _view.FontSizeFor(node.Id));
+
+                if (need > node.Height + 0.5)
+                {
+                    problems.Add($"自检统一大小: {node.Id} 统一后还差 {need - node.Height:0}px 放不下正文");
+                }
+            }
+        }
+
+        Undo();
+
+        foreach (var (id, size) in before)
+        {
+            if (NodeOf(id) is { } node
+                && (Math.Abs(node.Width - size.Width) > 0.01 || Math.Abs(node.Height - size.Height) > 0.01))
+            {
+                problems.Add($"自检统一大小: {id} 撤销以后没回到 {size.Width:0}×{size.Height:0}");
+            }
+
+            _view.UnmarkManualSize(id);
+        }
+
+        ClearSelection();
+        ProjectSelection();
+    }
+
+    /// <summary>右键菜单的「统一便签大小」：选中优先；没选中就对所有文字便签。
+    /// 宽度取这群里最宽的一格，再按这个宽度量每格正文，取最高 —— 统一后最长的那段也放得下。</summary>
+    private void UniformNoteSizes()
+    {
+        var notes = SelectedNotes()
+            .Where(node => node.Kind == CanvasNodeKind.Text && !EntityCards.IsTable(node))
+            .ToList();
+
+        if (notes.Count == 0)
+        {
+            notes = BoardNotes()
+                .Where(node => node.Kind == CanvasNodeKind.Text && !EntityCards.IsTable(node))
+                .ToList();
+        }
+
+        if (notes.Count == 0)
+        {
+            Say("板上没有可统一的文字便签");
+
+            return;
+        }
+
+        var width = notes.Max(node => node.Width);
+        var height = notes.Max(node => MeasureTextHeight(
+            node.Text ?? string.Empty,
+            width,
+            _view.FontSizeFor(node.Id)));
+
+        BeginGesture("统一便签大小");
+
+        foreach (var node in notes)
+        {
+            node.Width = width;
+            node.Height = height;
+            _view.MarkManualSize(node.Id);
+        }
+
+        EndGesture();
+
+        var ids = notes.Select(node => node.Id).ToHashSet(StringComparer.Ordinal);
+
+        Rebuild();
+        Reselect(ids);
+        SaveSoon();
+        ProjectSelection();
+        Say($"已把 {notes.Count} 张便签统一到 {width:0}×{height:0}");
+    }
 
     /// <summary>Every node on the board — the same call the keyboard's Ctrl+A makes.</summary>
     private void SelectAll()
@@ -387,29 +514,29 @@ public sealed partial class MainWindow
             return;
         }
 
-        BeginGesture($"复制 {members.Count} 个便签");
+        BeginGesture($"制作 {members.Count} 个副本");
 
         foreach (var node in members)
         {
-            var copy = _document.Add(
-                node.Kind,
-                node.X + Aligning.MinGapPx,
-                node.Y + Aligning.MinGapPx,
-                node.Width,
-                node.Height,
-                node.Color);
+            // 整份节点原样带走：entity/label/table 这些新字段不在 Add 的六个参数里，
+            // 照旧手工搬会做出"副本丢格式"的第二种行为。
+            var copy = _document.AppendNode(node.Json);
 
-            copy.Text = node.Text;
-            copy.FilePath = node.FilePath;
-            copy.Url = node.Url;
-            copy.Label = node.Label;
+            copy.X = node.X + Aligning.MinGapPx;
+            copy.Y = node.Y + Aligning.MinGapPx;
+
+            // 组复制成空组：members 指着原件，照搬会让两个组同时认领同一批成员。
+            if (copy.Kind == CanvasNodeKind.Group)
+            {
+                copy.SetGroupMembers(null);
+            }
         }
 
         EndGesture();
         Rebuild();
         SaveSoon();
 
-        Say($"已复制 {members.Count} 个便签");
+        Say($"已制作 {members.Count} 个副本");
     }
 
     /// <summary>
@@ -780,6 +907,27 @@ public sealed partial class MainWindow
 
         ArrangeByKey("按标签排列", note => Tags.Of(note.Text).FirstOrDefault() ?? "#无标签", "#无标签");
 
+        // @n8：排完还是多选（选中框在），左侧那一列钮就必须也在——选中框和操作条是一件事的两半，
+        // 不许一半留着、一半收回去了。
+        BoardArea.UpdateLayout();
+
+        if (_selection.Count < 2)
+        {
+            problems.Add($"自检排列选中: 排完选中只剩 {_selection.Count} 枚——这一发要量的就是「多选还留着时操作条在不在」，缺正对照不算过");
+        }
+        else if (RailButtonCount < 2)
+        {
+            problems.Add($"自检排列选中: 排完仍选 {_selection.Count} 枚，左侧操作条只有 {RailButtonCount} 枚钮（排列钮与标签钮该在多选时插进来）");
+        }
+        else if (!RailIsShown)
+        {
+            problems.Add($"自检排列选中: 排完仍选 {_selection.Count} 枚、操作条有 {RailButtonCount} 枚钮，可它没亮（@n8：选中框在、左侧按钮没了）");
+        }
+        else
+        {
+            Diagnostics.Write($"selftest 排列选中: 排完仍选 {_selection.Count} 枚，操作条亮着、{RailButtonCount} 枚钮");
+        }
+
         foreach (var (id, (x, y)) in untouched)
         {
             if (NodeOf(id) is { } still && (Math.Abs(still.X - x) > 0.001 || Math.Abs(still.Y - y) > 0.001))
@@ -815,6 +963,48 @@ public sealed partial class MainWindow
         if (collisions > 0)
         {
             problems.Add($"自检排列选中: 排完压到了 {collisions} 个没选中的格子/组框");
+        }
+
+        // @n8 同款：排完还多选着，那列钮就必须够得着。把相机推到「选区比视口还宽」那一档再投影一次——
+        // 老算法在这档会把操作条贴到屏幕外（选中框在、按钮没了），夹回视口里才是他要的绑定。
+        var savedCamera = (_view.PanX, _view.PanY, _view.Zoom);
+
+        try
+        {
+            if (SelectionBox() is not { } wide || wide.Width <= 0)
+            {
+                problems.Add("自检排列选中: 量不到选区，这一发没测到操作条够不够得着");
+            }
+            else
+            {
+                _view.Zoom = Math.Max(1, (BoardArea.ActualWidth / wide.Width) * 2);
+                _view.PanX = (BoardArea.ActualWidth / 2) - ((wide.X + (wide.Width / 2)) * _view.Zoom);
+                _view.PanY = (BoardArea.ActualHeight / 2) - ((wide.Y + (wide.Height / 2)) * _view.Zoom);
+
+                ProjectSelection();
+                BoardArea.UpdateLayout();
+
+                var spans = wide.Width * _view.Zoom;
+
+                if (spans <= BoardArea.ActualWidth)
+                {
+                    problems.Add($"自检排列选中: 推到 {spans:0} 宽仍没超过视口 {BoardArea.ActualWidth:0}，这一发没量到那一档");
+                }
+                else if (!RailInsideViewport)
+                {
+                    problems.Add($"自检排列选中: 选区 {spans:0} 宽比视口 {BoardArea.ActualWidth:0} 还宽，操作条却没落在可视区里（@n8：选中框在、左侧按钮没了）");
+                }
+                else
+                {
+                    Diagnostics.Write($"selftest 排列选中: 选区 {spans:0} 宽 > 视口 {BoardArea.ActualWidth:0}，操作条夹在可视区内、{RailButtonCount} 枚钮");
+                }
+            }
+        }
+        finally
+        {
+            (_view.PanX, _view.PanY, _view.Zoom) = savedCamera;
+
+            ProjectSelection();
         }
 
         Undo();

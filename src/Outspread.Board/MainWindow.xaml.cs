@@ -11,6 +11,7 @@ using Windows.Storage.Streams;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Shapes;
 using System.Diagnostics;
+using System.Net.Http;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text.Json;
 using Outspread.Core;
@@ -103,7 +104,15 @@ public sealed partial class MainWindow : Window
     /// <summary>编辑中内容需要的高度（世界像素）：只长不缩，提交时再按卡片规则落定。</summary>
     private double _editorGrownWorld;
 
+    private double _editorHeaderWorld;
+
     private string? _editingId;
+
+    /// <summary>正在改表格的哪一格（null＝改的是这格的正文/备注）。编辑框盖到那一格自己的方框上。</summary>
+    private (int Row, int Column)? _editingCell;
+
+    /// <summary>那一格在世界坐标里的方框：跟着相机走，所以编辑中缩放/平移不会把框挪偏。</summary>
+    private Windows.Foundation.Rect _editorCellWorld;
 
     /// <summary>这一次编辑是从牌子点进来的"只改这枚标记"：收下标记行的回车应当直接收笔。</summary>
     private bool _markEditOnly;
@@ -146,7 +155,7 @@ public sealed partial class MainWindow : Window
 
         Diagnostics.Write($"startup: 皮与控件建好 +{App.SinceBoot():0}ms");
 
-        Title = "铺陈";
+        Title = "「铺陈」画板";
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1320, 840));
 
         // 不再用 ExtendsContentIntoTitleBar/SetTitleBar 把整条宿主交给 WinUI：它会在客户区
@@ -263,6 +272,15 @@ public sealed partial class MainWindow : Window
                 CloseSearchPanel();
                 CloseRestorePanel();
                 CollapseExpandedGroup();
+
+                // 下拉表与色板也算"手一离开就该收起"的那一类：只靠窗口里的按下事件，
+                // 点别的应用/桌面那一发接不到（他 10-26 报的"点其他地方不收起"）。
+                if (_boardManagerOpen)
+                {
+                    SetBoardManager(false);
+                }
+
+                CloseColorPopover();
 
                 // 手不见了，摊开的那一层也不能留着：它是 hover 叫出来的，只有这只手知道它为什么开着。
                 return;
@@ -508,6 +526,15 @@ public sealed partial class MainWindow : Window
                 ? $"{_document.Nodes.Count} 个便签 · {errors} 处格式问题（详见日志） · 缩放 {Percent()}"
                 : $"{_document.Nodes.Count} 个便签 · 缩放 {Percent()}");
 
+            // 「随文字」这一档先归位高度，再让组框去贴成员：顺序反了，组框会贴在一排还没长大的格子上。
+            var refittedAtOpen = RefitAutoHeights();
+
+            if (refittedAtOpen > 0)
+            {
+                Diagnostics.Write($"打开时按文字重算 {refittedAtOpen} 格高度（随文字那一档）");
+                SaveSoon();
+            }
+
             // 组框是派生的：开板时先把有成员的组框贴回成员包围盒。旧板/外部改动留下的
             // 旧框只在这一处归位一次，空组保持原样（渲染层会把它藏起来）。
             if (RefitLoadedGroups())
@@ -685,7 +712,7 @@ public sealed partial class MainWindow : Window
             }
 
             return AssetStore.ResolveExisting(basePath, relative);
-        });
+        }, DescribeEntity(node));
 
         visual.PointerPressed += OnNodePressed;
 
@@ -699,6 +726,8 @@ public sealed partial class MainWindow : Window
         // 不是视图状态。
         visual.RemoveMark = RemoveMarkFrom;
         visual.EditMark = EditMarkFrom;
+        visual.OpenEntity = OpenEntity;
+        visual.RevealEntity = RevealEntity;
 
         return visual;
     }
@@ -1599,6 +1628,13 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // The header's open button is a real button inside the card. Its press must not
+        // turn into a card drag before the click fires.
+        if (InsideButton(e.OriginalSource))
+        {
+            return;
+        }
+
         var point = e.GetCurrentPoint(visual);
 
         if (!point.Properties.IsLeftButtonPressed && !point.Properties.IsRightButtonPressed)
@@ -1915,7 +1951,7 @@ public sealed partial class MainWindow : Window
         // 一圈"白边"（其实是没画到的板底色）——他报的"图变小了边上却有白框"就是这个。
         // 文字格不锁：它的框就是要独立于内容。
         var single = gesture.Start.Values.Count == 1 ? gesture.Start.Values.First() : default;
-        var lockAspect = single.Node?.Kind == CanvasNodeKind.File;
+        var lockAspect = single.Node is { Kind: CanvasNodeKind.File } imageNode && EntityCards.LooksLikeImage(imageNode.FilePath);
 
         foreach (var (node, x, y, width, height) in gesture.Start.Values)
         {
@@ -2290,6 +2326,11 @@ public sealed partial class MainWindow : Window
                 Diagnostics.Write($"merged {fromOutside.NodeCount} outside change(s), {rejected} reported");
             }
 
+            // 外面改的常常是文字，而盘上那份高度是改之前量的：不重算就是"字进来了、框没长"，
+            // 多出来的行被渐隐吃掉。这一发与载入那一发同一把尺（随文字、非手动）。
+            // 必须走在撤销快照之前：不然撤销只回到"字改回去、框还是新的"那一半。
+            RefitAutoHeights();
+
             _baseJson = text;
             _history.Record($"并入外部改动（{fromOutside.NodeCount} 处）", before, _document.ToJson());
 
@@ -2383,6 +2424,22 @@ public sealed partial class MainWindow : Window
                 break;
             }
 
+            case IngestKind.Link when result.Url is { Length: > 0 } url && Uri.TryCreate(url, UriKind.Absolute, out var webUri):
+            {
+                var node = CreateWebCard(webUri, PasteWorld());
+                Say("已粘贴网页链接");
+                SelectOnly(node.Id);
+                break;
+            }
+
+            case IngestKind.Table when result.Table is { } table:
+            {
+                var node = CreateTableCard(table, PasteWorld());
+                Say($"已粘贴表格 {table.RowCount} 行 × {table.ColumnCount} 列");
+                SelectOnly(node.Id);
+                break;
+            }
+
             default:
                 // A paste that put nothing on the board says so; a silent no-op is the
                 // shape that makes people click it five times.
@@ -2393,17 +2450,37 @@ public sealed partial class MainWindow : Window
         EndGesture();
     }
 
-    private async Task PlaceFilesAsync(IReadOnlyList<string> files, Point worldAt)
+    private async Task PlaceFilesAsync(IReadOnlyList<string> files, Point worldAt, bool forceLink = false)
     {
-        BeginGesture($"放下 {files.Count} 个文件");
+        BeginGesture(forceLink ? $"放下 {files.Count} 个文件（只链接）" : $"放下 {files.Count} 个文件");
 
-        var placed = 0;
+        var images = 0;
+        var cached = 0;
         var links = 0;
+        var folders = 0;
+        var skipped = 0;
+        var missing = new List<string>();
+        var large = new List<(int Index, string Path, long Bytes)>();
 
         for (var index = 0; index < files.Count; index++)
         {
             var path = files[index];
             var spot = new Point(worldAt.X + (index * 24), worldAt.Y + (index * 24));
+
+            if (!Directory.Exists(path) && !File.Exists(path))
+            {
+                // 位置不在＝不建卡，并在回执里点名是哪一条。留一张戴「找不到」牌子的卡在这里，
+                // 等于把一次粘贴变成一块要人回头清的垃圾（10-25 他拍的：拒绝并说明原因）。
+                missing.Add(path);
+                continue;
+            }
+
+            if (Directory.Exists(path))
+            {
+                CreateFolderCard(path, spot);
+                folders++;
+                continue;
+            }
 
             if (ClipboardIngest.IsImage(path))
             {
@@ -2414,31 +2491,472 @@ public sealed partial class MainWindow : Window
                     if (read.ImageBytes is { Length: > 0 } bytes)
                     {
                         CreateImageNote(bytes, System.IO.Path.GetExtension(path), read.Width, read.Height, spot);
-                        placed++;
+                        images++;
                     }
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    Diagnostics.Write($"dropped file unreadable {path}: {ex.Message}");
+                    Diagnostics.Write($"dropped image unreadable {path}: {ex.Message}");
+                    skipped++;
+                }
+
+                continue;
+            }
+
+            try
+            {
+                var length = new FileInfo(path).Length;
+
+                if (forceLink || AttachmentStore.NeedsPrompt(length))
+                {
+                    // 按住 Ctrl 放下＝一件都不复制，只留链接；超过 10 MB 的那些也不再问。
+                    large.Add((index, path, length));
+                }
+                else if (CreateCachedFileCard(path, spot) is not null)
+                {
+                    cached++;
+                }
+                else
+                {
+                    skipped++;
                 }
             }
-            else
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // The format's file node is for something inside the board folder. A file
-                // that stayed where it was becomes a link node, which is what the spec means.
-                var node = _document.Add(CanvasNodeKind.Link, spot.X, spot.Y, 260, 60);
-                node.Url = new Uri(path).AbsoluteUri;
-                node.Label = System.IO.Path.GetFileName(path);
-                links++;
+                if (CreateLinkedFileCard(path, spot) is not null)
+                {
+                    links++;
+                }
+                else
+                {
+                    skipped++;
+                }
+            }
+        }
+
+        if (large.Count > 0)
+        {
+            var choice = forceLink || App.SelfTest
+                ? LargeFileChoice.Link
+                : await AskLargeFilesAsync(large.Select(item => (item.Path, item.Bytes)).ToList());
+
+            foreach (var (index, path, _) in large)
+            {
+                var spot = new Point(worldAt.X + (index * 24), worldAt.Y + (index * 24));
+
+                if (choice == LargeFileChoice.Cache && CreateCachedFileCard(path, spot) is not null)
+                {
+                    cached++;
+                }
+                else if (choice == LargeFileChoice.Link && CreateLinkedFileCard(path, spot) is not null)
+                {
+                    links++;
+                }
+                else
+                {
+                    skipped++;
+                }
             }
         }
 
         EndGesture();
         Rebuild();
 
-        Say(placed + links == 0
-            ? "拖入的内容均未放置（详情见日志）"
-            : $"已放置 {placed} 张图片、{links} 个链接");
+        var parts = new List<string>();
+
+        if (images > 0)
+        {
+            parts.Add($"{images} 张图片");
+        }
+
+        if (cached > 0)
+        {
+            parts.Add($"{cached} 个已收纳");
+        }
+
+        if (links > 0)
+        {
+            parts.Add($"{links} 个链接");
+        }
+
+        if (folders > 0)
+        {
+            parts.Add($"{folders} 个文件夹");
+        }
+
+        var receipt = parts.Count == 0
+            ? "放下的内容均未建卡（详情见日志）"
+            : $"已放置 {string.Join("、", parts)}" + (skipped > 0 ? $"；{skipped} 个未放置" : string.Empty);
+
+        Say(missing.Count == 0
+            ? receipt
+            : $"{receipt}；{missing.Count} 条路径在这个位置不存在，未建卡：{string.Join("、", missing.Take(3))}");
+    }
+
+    private enum LargeFileChoice
+    {
+        Cache,
+        Link,
+        Skip,
+    }
+
+    private async Task<LargeFileChoice> AskLargeFilesAsync(IReadOnlyList<(string Path, long Bytes)> files)
+    {
+        var total = files.Sum(file => file.Bytes);
+        var dialog = new ContentDialog
+        {
+            Title = "这批文件超过 10 MB",
+            Content = $"{files.Count} 个文件 · {AttachmentStore.FormatSize(total)}。收纳会把副本放进本板；只链接则留在原处。",
+            PrimaryButtonText = "收纳到本板",
+            SecondaryButtonText = "只放链接",
+            CloseButtonText = "跳过",
+            DefaultButton = ContentDialogButton.Secondary,
+            XamlRoot = Root.XamlRoot,
+        };
+
+        var answer = await dialog.ShowAsync();
+
+        return answer switch
+        {
+            ContentDialogResult.Primary => LargeFileChoice.Cache,
+            ContentDialogResult.Secondary => LargeFileChoice.Link,
+            _ => LargeFileChoice.Skip,
+        };
+    }
+
+    /// <summary>
+    /// 那一行字要建哪张卡。<b>粘贴与「从路径或链接新建」共用这一发</b>：两条入口认得一样宽，
+    /// 才不会长出"菜单里那条建得出、粘却建不出"（或反过来）的孤岛。
+    /// </summary>
+    /// <param name="reason">建不出来时写在回执／弹框里的那句原因——点名是哪一条路径不在。</param>
+    private static bool TryReadLocation(string? text, out Uri? web, out string? path, out string reason)
+    {
+        web = null;
+        path = null;
+        reason = string.Empty;
+
+        var value = (text ?? string.Empty).Trim();
+
+        if (value.Length == 0)
+        {
+            reason = "请先粘贴或输入一行路径／网址";
+            return false;
+        }
+
+        if (WebAddress.TrySingleUrl(value, out var uri))
+        {
+            web = uri;
+            return true;
+        }
+
+        if (!LocalPath.TrySingle(value, out var local))
+        {
+            reason = $"这一行既不是网址（http/https 或 www.），也不是一行绝对路径：{value}";
+            return false;
+        }
+
+        if (!Directory.Exists(local) && !File.Exists(local))
+        {
+            reason = $"这个位置不存在，未建卡：{local}";
+            return false;
+        }
+
+        path = local;
+
+        return true;
+    }
+
+    /// <summary>把一行字变成一张卡。建不出来就把原因写在回执里，板上什么都不留。</summary>
+    private async Task CreateCardFromLocationAsync(string? text, Point worldAt)
+    {
+        if (!TryReadLocation(text, out var web, out var path, out var reason))
+        {
+            Say(reason);
+            return;
+        }
+
+        if (web is not null)
+        {
+            var card = CreateWebCard(web, worldAt);
+            Say("已新建网页卡片");
+            SelectOnly(card.Id);
+            return;
+        }
+
+        // 放下那一发自己管撤销快照与重画：10 MB 那条线、文件夹的链接型都只在这一处判。
+        await PlaceFilesAsync([path!], worldAt);
+    }
+
+    /// <summary>
+    /// 「从路径或链接新建卡片」的弹框：只负责收那一行字，认与建都在 <see cref="TryReadLocation"/> 里。
+    /// 拆成"建框"与"弹框"两半，是因为自检弹不起模态框（会把后面每一步卡死），但一枚建不起来的框
+    /// 也不该等他点下去才被发现。
+    /// </summary>
+    private ContentDialog BuildLocationDialog(out TextBox entry, out TextBlock problem)
+    {
+        // 先落在局部变量上：out 参数不能被事件那两枚 lambda 捕获（CS1628）。
+        var box = new TextBox
+        {
+            Header = "一行路径或一条网址",
+            PlaceholderText = @"D:\资料\方案.pdf ｜ \\nas\共享 ｜ https://example.com",
+        };
+        var reasonLine = new TextBlock
+        {
+            Visibility = Visibility.Collapsed,
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
+        };
+
+        var dialog = new ContentDialog
+        {
+            Title = "从路径或链接新建卡片",
+            Content = new StackPanel { Spacing = 8, Children = { box, reasonLine } },
+            PrimaryButtonText = "建卡",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = Root.XamlRoot,
+        };
+
+        dialog.PrimaryButtonClick += (_, args) =>
+        {
+            if (TryReadLocation(box.Text, out Uri? web, out string? path, out var reason))
+            {
+                return;
+            }
+
+            // 框不关：那行字还在里面，改一个字母就能再来一次。
+            reasonLine.Text = reason;
+            reasonLine.Visibility = Visibility.Visible;
+            args.Cancel = true;
+        };
+        dialog.Opened += (_, _) => box.Focus(FocusState.Programmatic);
+
+        entry = box;
+        problem = reasonLine;
+
+        return dialog;
+    }
+
+    private async Task NewCardFromLocationAsync()
+    {
+        if (_boardPath is null)
+        {
+            Say("没有可写入的文件，无法新建卡片");
+            return;
+        }
+
+        var dialog = BuildLocationDialog(out var entry, out _);
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        await CreateCardFromLocationAsync(entry.Text, PasteWorld());
+    }
+
+    private CanvasNode? CreateCachedFileCard(string sourcePath, Point worldAt)
+    {
+        const double width = 280;
+        const double height = 180;
+
+        try
+        {
+            var boardForAsset = IsAllNotes(_boardPath) ? UnfiledPath : _boardPath!;
+            var relative = AttachmentStore.WriteFile(boardForAsset, sourcePath, out var reused);
+
+            Diagnostics.Write(reused ? $"attachment reused: {relative}" : $"attachment cached: {relative}");
+
+            var node = _document.Add(CanvasNodeKind.File, worldAt.X - (width / 2), worldAt.Y - (height / 2), width, height);
+
+            if (IsAllNotes(_boardPath))
+            {
+                node.Id = BoardMerge.MergeId(UnfiledPath, node.Id);
+            }
+
+            node.FilePath = relative;
+            node.Label = System.IO.Path.GetFileName(sourcePath);
+            EntityCards.SetHint(node, "file");
+            node.Text = string.Empty;
+            FitEntityHeight(node);
+
+            return node;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Diagnostics.Write($"attachment write failed {sourcePath}: {ex.Message}");
+            return null;
+        }
+    }
+
+    private CanvasNode? CreateLinkedFileCard(string sourcePath, Point worldAt)
+    {
+        const double width = 280;
+        const double height = 180;
+
+        try
+        {
+            var node = _document.Add(CanvasNodeKind.Link, worldAt.X - (width / 2), worldAt.Y - (height / 2), width, height);
+
+            if (IsAllNotes(_boardPath))
+            {
+                node.Id = BoardMerge.MergeId(UnfiledPath, node.Id);
+            }
+
+            node.Url = new Uri(sourcePath).AbsoluteUri;
+            node.Label = System.IO.Path.GetFileName(sourcePath);
+            EntityCards.SetHint(node, "file");
+            node.Text = string.Empty;
+            FitEntityHeight(node);
+
+            return node;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UriFormatException)
+        {
+            Diagnostics.Write($"file link failed {sourcePath}: {ex.Message}");
+            return null;
+        }
+    }
+
+    private CanvasNode CreateFolderCard(string path, Point worldAt)
+    {
+        const double width = 280;
+        const double height = 180;
+
+        var node = _document.Add(CanvasNodeKind.Link, worldAt.X - (width / 2), worldAt.Y - (height / 2), width, height);
+
+        if (IsAllNotes(_boardPath))
+        {
+            node.Id = BoardMerge.MergeId(UnfiledPath, node.Id);
+        }
+
+        node.Url = new Uri(path.EndsWith(System.IO.Path.DirectorySeparatorChar) ? path : path + System.IO.Path.DirectorySeparatorChar).AbsoluteUri;
+        node.Label = System.IO.Path.GetFileName(path.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar));
+        EntityCards.SetHint(node, "folder");
+        node.Text = string.Empty;
+        FitEntityHeight(node);
+
+        return node;
+    }
+
+    private CanvasNode CreateWebCard(Uri uri, Point worldAt)
+    {
+        const double width = 280;
+        const double height = 180;
+
+        var node = _document.Add(CanvasNodeKind.Link, worldAt.X - (width / 2), worldAt.Y - (height / 2), width, height);
+
+        if (IsAllNotes(_boardPath))
+        {
+            node.Id = BoardMerge.MergeId(UnfiledPath, node.Id);
+        }
+
+        node.Url = uri.AbsoluteUri;
+        node.Label = WebAddress.FallbackTitle(uri);
+        EntityCards.SetHint(node, "web");
+        node.Text = string.Empty;
+        FitEntityHeight(node);
+
+        if (!App.SelfTest)
+        {
+            _ = FetchWebTitleAsync(node.Id, uri);
+        }
+
+        // 建完就重画：这一发是"粘贴一条网址"唯一的落点，不重画的话格子进了文档却不上屏，
+        // 看上去就是"粘贴没反应"（CreateTextNote 一直是这个形状，这两枚实体卡漏了）。
+        Rebuild();
+
+        return node;
+    }
+
+    private CanvasNode CreateTableCard(TableGrid table, Point worldAt)
+    {
+        var width = Math.Clamp(table.ColumnCount * 110d, 280, 760);
+
+        // 卡高＝表格自己的高 + 一行备注。表格上面不再压一条卡头：他要的是一张表，
+        // 不是一份关于这张表的说明（几列几行、从哪粘来的、XLS 牌子都不画）。
+        var height = Math.Clamp(EntityCardLayout.TableWorld(table) + 44, 160, 900);
+        var node = _document.Add(CanvasNodeKind.Text, worldAt.X - (width / 2), worldAt.Y - (height / 2), width, height);
+
+        if (IsAllNotes(_boardPath))
+        {
+            node.Id = BoardMerge.MergeId(UnfiledPath, node.Id);
+        }
+
+        node.Label = table.Title;
+        node.Text = table.ToMarkdown();
+        node.Json[EntityCards.TableField] = table.ToJson();
+
+        Rebuild();
+
+        return node;
+    }
+
+    private void FitEntityHeight(CanvasNode node)
+    {
+        node.Height = Math.Max(140, MeasureTextHeight(
+            node.Text ?? string.Empty,
+            node.Width,
+            _view.FontSizeFor(node.Id),
+            paintsChips: true) + EntityCardLayout.HeaderWorldFor(DescribeEntity(node)!));
+    }
+
+    private async Task FetchWebTitleAsync(string nodeId, Uri uri)
+    {
+        try
+        {
+            using var http = new HttpClient();
+            http.Timeout = TimeSpan.FromSeconds(4);
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("Outspread/0.1");
+
+            using var response = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead);
+
+            if (!response.IsSuccessStatusCode
+                || response.Content.Headers.ContentType?.MediaType is not ("text/html" or "application/xhtml+xml"))
+            {
+                return;
+            }
+
+            var html = await ReadLimitedAsync(response.Content, 256 * 1024);
+            var title = WebAddress.TitleFromHtml(html);
+
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (string.IsNullOrWhiteSpace(title) || NodeOf(nodeId) is not { } node || node.Url != uri.AbsoluteUri)
+                {
+                    return;
+                }
+
+                node.Label = title;
+                Rebuild();
+                SaveSoon();
+            });
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException)
+        {
+            Diagnostics.Write($"web title failed {uri}: {ex.Message}");
+        }
+    }
+
+    private static async Task<string> ReadLimitedAsync(HttpContent content, int limit)
+    {
+        await using var stream = await content.ReadAsStreamAsync();
+        var buffer = new byte[limit];
+        var read = 0;
+
+        while (read < limit)
+        {
+            var got = await stream.ReadAsync(buffer.AsMemory(read, limit - read));
+
+            if (got == 0)
+            {
+                break;
+            }
+
+            read += got;
+        }
+
+        return System.Text.Encoding.UTF8.GetString(buffer, 0, read);
     }
 
     private CanvasNode CreateTextNote(string text, Point worldAt)
@@ -2589,7 +3107,7 @@ public sealed partial class MainWindow : Window
         var repaired = 0;
 
         foreach (var node in _document.Nodes
-            .Where(node => node.Kind == CanvasNodeKind.Text && _view.IsManualSize(node.Id))
+            .Where(node => node.Kind == CanvasNodeKind.Text && !EntityCards.IsTable(node) && _view.IsManualSize(node.Id))
             .ToList())
         {
             var need = MeasureTextHeight(node.Text ?? string.Empty, node.Width, _view.FontSizeFor(node.Id));
@@ -2606,6 +3124,45 @@ public sealed partial class MainWindow : Window
         return repaired;
     }
 
+    /// <summary>
+    /// 「随文字」这一档的承诺是<b>框高跟着字走</b>——那么盘上那份高度也得对得上：载入与外部并入
+    /// 这两发都要重算一遍，不然 agent 或另一台设备加的两行字会一直卡在旧框里被渐隐吞掉
+    /// （他 10-25 报的：粘一行路径不认，改完字框也不长）。
+    /// </summary>
+    /// <remarks>
+    /// 只碰文字格（表格卡算的是卡下面那几行备注）。手动拖过手柄的那格由 <see cref="FitNoteHeight"/>
+    /// 自己挡掉，"固定尺寸"整档不跑这一发。实体卡不在里面：它们的高度还牵着缩略图与表，
+    /// 一起改会把"悬停不许动高度"那条尺带进来。
+    /// </remarks>
+    private int RefitAutoHeights()
+    {
+        if (_view.NoteSize == NoteSizeMode.Fixed)
+        {
+            return 0;
+        }
+
+        var refitted = 0;
+
+        foreach (var node in _document.Nodes)
+        {
+            if (node.Kind != CanvasNodeKind.Text)
+            {
+                continue;
+            }
+
+            var before = node.Height;
+
+            FitNoteHeight(node);
+
+            if (!double.IsNaN(before) && Math.Abs(before - node.Height) > 0.01)
+            {
+                refitted++;
+            }
+        }
+
+        return refitted;
+    }
+
     private void FitNoteHeight(CanvasNode node)
     {
         if (_view.NoteSize == NoteSizeMode.Fixed || _view.IsManualSize(node.Id))
@@ -2613,11 +3170,16 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // 表格卡的"正文"是卡下面那几行备注：卡高＝表格自己的高 + 备注的高，
+        // 所以备注写长了会把整张卡顶大，而不是把表格挤掉或越出卡外。
+        var body = EntityCards.IsTable(node) ? EntityCards.NoteOf(node) : node.Text ?? string.Empty;
+
         node.Height = MeasureTextHeight(
-            node.Text ?? string.Empty,
+            body,
             node.Width,
             _view.FontSizeFor(node.Id),
-            paintsChips: node.Kind != CanvasNodeKind.Group);
+            paintsChips: node.Kind != CanvasNodeKind.Group)
+            + EntityCardLayout.ContentTopWorld(node, DescribeEntity(node));
     }
 
     private void OnDragOver(object sender, DragEventArgs e)
@@ -2656,7 +3218,8 @@ public sealed partial class MainWindow : Window
 
             if (paths.Count > 0)
             {
-                await PlaceFilesAsync(paths, PasteWorld());
+                // 按住 Ctrl 放下＝切换到链接型；默认那条"小于 10 MB 自动收纳、删卡后清理"照旧。
+                await PlaceFilesAsync(paths, PasteWorld(), KeyDownIs(Windows.System.VirtualKey.Control));
             }
             else
             {
@@ -2735,6 +3298,14 @@ public sealed partial class MainWindow : Window
                 _pullOwnsSelection = true;
                 StartPull(hit.Id, side!);
             }
+            else if (_realized.TryGetValue(hit.Id, out var card)
+                     && card.IsTableCard
+                     && card.TableCellAt(at, BoardArea) is { } cell)
+            {
+                // 双击落在表格的某一格上＝改那一格。判据用卡片自己画出来的那些框，
+                // 所以"看见的那一格"和"改掉的那一格"不会是两格。
+                BeginEditCell(hit.Id, cell.Row, cell.Column, cell.Bounds);
+            }
             else
             {
                 BeginEdit(hit.Id);
@@ -2793,13 +3364,15 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (node.Kind != CanvasNodeKind.Text)
+        if (!EntityCards.CanEditBody(node))
         {
-            Say($"该便签类型为 {CanvasNode.NameOfKind(node.Kind)}，仅文字便签可编辑");
+            Say("这一格没有可编辑的正文");
             return;
         }
 
         _editingId = id;
+        _editingCell = null;
+        _editorHeaderWorld = EntityCardLayout.ContentTopWorld(node, DescribeEntity(node));
 
         var surface = NoteStyling.SurfaceFor(node.Color);
 
@@ -2824,7 +3397,8 @@ public sealed partial class MainWindow : Window
         };
 
         // 文本栏里看到的是正文；标记那几行由 _editorProps 保管，提交时原样接回去。
-        var seededMarks = Tags.Read(node.Text);
+        // 表格卡这一格编辑的是卡下面那几行备注（表的 markdown 由单元格那一路维护）。
+        var seededMarks = Tags.Read(EntityCards.IsTable(node) ? EntityCards.NoteOf(node) : node.Text);
 
         _editorProps = seededMarks.Props;
 
@@ -2872,6 +3446,88 @@ public sealed partial class MainWindow : Window
         Say("按 Ctrl＋Enter 或点击其他位置提交，按 Esc 取消");
     }
 
+    /// <summary>
+    /// 双击表格里的某一格＝就地改那一格，编辑框盖到那一格自己画出来的方框上。
+    /// 表格不该只有"在 Excel 改好后重新粘贴"这一条路：那意味着板子上那张表永远是上次粘贴的复印件。
+    /// </summary>
+    private void BeginEditCell(string id, int row, int column, Windows.Foundation.Rect bounds)
+    {
+        CloseEditor(commit: true);
+
+        _markEditOnly = false;
+
+        if (NodeOf(id) is not { } node
+            || TableGrid.FromJson(node.Json[EntityCards.TableField]) is not { } grid
+            || grid.CellAt(row, column) is not { } cell)
+        {
+            return;
+        }
+
+        _editingId = id;
+        _editingCell = (row, column);
+        _editorHeaderWorld = 0;
+        _editorProps = string.Empty;
+        _editorGrownWorld = 0;
+
+        // 记住的是**世界坐标**里的那一格：编辑中途缩放或平移，框会跟着相机重新算，不会留在原地。
+        _editorCellWorld = new Windows.Foundation.Rect(
+            _view.ToWorldX(bounds.X),
+            _view.ToWorldY(bounds.Y),
+            bounds.Width / _view.Zoom,
+            bounds.Height / _view.Zoom);
+
+        var surface = NoteStyling.SurfaceFor(node.Color);
+
+        var editor = new TextBox
+        {
+            AcceptsReturn = false,
+            TextWrapping = TextWrapping.NoWrap,
+            FontFamily = NoteStyling.NoteFont,
+            Text = cell.Text,
+            Foreground = new SolidColorBrush(NoteStyling.InkFor(node.Color, surface)),
+            Background = new SolidColorBrush(surface),
+            BorderBrush = new SolidColorBrush(NoteStyling.LineFor(node.Color, surface)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(0),
+            IsSpellCheckEnabled = false,
+            UseLayoutRounding = false,
+        };
+
+        editor.KeyDown += OnEditorKeyDown;
+        editor.LostFocus += (_, _) => CloseEditor(commit: true);
+
+        // 模板自带的那枚清除钮（×）在单行输入框里会亮：它吃掉一格的一半宽度，居中的字就偏了。
+        // 标签改名框那边收过它一次，这里同一条路（他 10-25 第二条）。
+        editor.Loaded += (_, _) => HideTextBoxClearButton(editor);
+        editor.TextChanged += (_, _) => HideTextBoxClearButton(editor);
+
+        // 右键仍然先收这一格、再开菜单：不提交就开菜单，菜单里的动作会把没落盘的字连带丢掉。
+        editor.PointerPressed += (_, args) =>
+        {
+            var at = args.GetCurrentPoint(BoardArea);
+
+            if (!at.Properties.IsRightButtonPressed)
+            {
+                return;
+            }
+
+            args.Handled = true;
+
+            CloseEditor(commit: true);
+            ShowBoardMenu(at.Position);
+        };
+
+        _editor = editor;
+
+        EditorLayer.Children.Add(editor);
+        PlaceEditor();
+
+        editor.Focus(FocusState.Programmatic);
+        editor.Select(0, editor.Text.Length);
+
+        Say("改完按回车收下这一格，按 Esc 取消");
+    }
+
     private void PlaceEditor()
     {
         if (_editor is null || _editingId is null || NodeOf(_editingId) is not { } node)
@@ -2879,15 +3535,56 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        Canvas.SetLeft(_editor, _view.ToScreenX(node.X));
-        Canvas.SetTop(_editor, _view.ToScreenY(node.Y));
-        _editor.Width = node.Width * _view.Zoom;
-        _editor.Height = Math.Max(node.Height, _editorGrownWorld) * _view.Zoom;
         var editorType = NoteTypography.For(_view.FontSizeFor(node.Id));
+        var inset = Math.Clamp(editorType.Padding * _view.Zoom, 0, 60);
+        var header = _editorHeaderWorld * _view.Zoom;
+
+        if (_editingCell is not null)
+        {
+            // 改表格的一格：框就盖在那一格上，不改整格大小、也不长高——盖住邻格会让人改错一格。
+            var cell = _editorCellWorld;
+
+            Canvas.SetLeft(_editor, _view.ToScreenX(cell.X));
+            Canvas.SetTop(_editor, _view.ToScreenY(cell.Y));
+            // 框就是那一格那么大：宽出一像素、高出一像素都会盖住邻格，而"改错了哪一格"是这张卡最贵的错。
+            _editor.Width = Math.Max(1, cell.Width * _view.Zoom);
+            _editor.Height = Math.Max(1, cell.Height * _view.Zoom);
+            _editor.Padding = new Thickness(3 * _view.Zoom, 0, 3 * _view.Zoom, 0);
+            _editor.BorderThickness = new Thickness(1);
+            _editor.VerticalContentAlignment = VerticalAlignment.Center;
+            _editor.TextAlignment = TextAlignment.Center;
+            _editor.FontSize = Math.Max(4, 12 * _view.Zoom);
+
+            return;
+        }
+
+        if (header > 0)
+        {
+            // 实体卡的编辑框只盖正文那一块：上面那排名字、大小和「打开」还在，用户不会
+            // 误以为自己在改文件名。
+            Canvas.SetLeft(_editor, _view.ToScreenX(node.X) + inset);
+            Canvas.SetTop(_editor, _view.ToScreenY(node.Y) + inset + header);
+            _editor.Width = Math.Max(20, (node.Width * _view.Zoom) - (inset * 2));
+
+            // 输入框的高度是**正文那一块**的高度：原来这里给的是整张卡的高度，于是底部比卡底多出
+            // 一条卡头加一圈内距（他 10-25 那句"太大了，而且超出了卡片本身的大小"）。
+            _editor.Height = Math.Max(1, (Math.Max(node.Height, _editorGrownWorld) * _view.Zoom) - inset - header);
+            _editor.Padding = new Thickness(0, 0, 0, inset);
+            _editor.BorderThickness = new Thickness(0);
+        }
+        else
+        {
+            Canvas.SetLeft(_editor, _view.ToScreenX(node.X));
+            Canvas.SetTop(_editor, _view.ToScreenY(node.Y));
+            _editor.Width = node.Width * _view.Zoom;
+            _editor.Height = Math.Max(node.Height, _editorGrownWorld) * _view.Zoom;
+            _editor.Padding = new Thickness(inset);
+            _editor.BorderThickness = new Thickness(1);
+        }
+
         // TextBox carries no LineHeight (it is a TextBlock property), so the editor wraps at the
         // platform default while the card itself uses the frozen leading. Recorded as a gap, not fixed here.
         _editor.FontSize = Math.Max(4, editorType.Size * _view.Zoom);
-        _editor.Padding = new Thickness(Math.Clamp(editorType.Padding * _view.Zoom, 0, 60));
     }
 
     /// <summary>
@@ -2896,7 +3593,8 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void GrowEditorToFit()
     {
-        if (_editor is null || _editingId is null || NodeOf(_editingId) is not { } node)
+        // 改表格里那一格时不长框：编辑框就得盖在**那一格**上，长高了会盖住邻格。
+        if (_editor is null || _editingCell is not null || _editingId is null || NodeOf(_editingId) is not { } node)
         {
             return;
         }
@@ -2911,7 +3609,7 @@ public sealed partial class MainWindow : Window
         var type = NoteTypography.For(fontSize);
 
         // 多留一行给 TextBox 的平台行高：卡片按冻结的 leading 量，编辑框并不吃这个属性。
-        var needed = Math.Ceiling(MeasureTextHeight(text, node.Width, fontSize, paintsChips: true) + type.Leading);
+        var needed = Math.Ceiling(MeasureTextHeight(text, node.Width, fontSize, paintsChips: true) + type.Leading + _editorHeaderWorld);
 
         if (needed <= _editorGrownWorld + 0.5)
         {
@@ -2923,7 +3621,10 @@ public sealed partial class MainWindow : Window
             $"({_editor.Text.Length} chars, node {node.Height:0.#})");
 
         _editorGrownWorld = needed;
-        _editor.Height = Math.Max(node.Height, _editorGrownWorld) * _view.Zoom;
+
+        // 长的是**编辑框在正文区里的高度**，不是整张卡的高度：他 10-25 那张截图里输入区越出卡片
+        // 下沿，就是这里把整框高当成编辑框高，多出了卡头那一条。
+        PlaceEditor();
         PaintEditorChips();
     }
 
@@ -2950,10 +3651,14 @@ public sealed partial class MainWindow : Window
     {
         var editor = _editor;
         var id = _editingId;
+        var cell = _editingCell;
 
         _editor = null;
         _editingId = null;
         _markEditOnly = false;
+        _editorHeaderWorld = 0;
+        _editingCell = null;
+        _editorCellWorld = default;
 
         if (editor is null)
         {
@@ -2993,7 +3698,7 @@ public sealed partial class MainWindow : Window
 
         var node = NodeOf(id);
 
-        if (node is null || node.Kind != CanvasNodeKind.Text)
+        if (node is null || !EntityCards.CanEditBody(node))
         {
             return;
         }
@@ -3001,6 +3706,29 @@ public sealed partial class MainWindow : Window
         var text = NoteProperties.WithProps(_editorProps, JsonText.NormalizeTextNewlines(editor.Text));
 
         _editorProps = string.Empty;
+
+        // 改的是表格里的某一格：落回那一格，并把整张表的 markdown 备份重算一遍。
+        if (cell is { } spot)
+        {
+            if (TableGrid.FromJson(node.Json[EntityCards.TableField]) is not { } grid
+                || !grid.TrySetCellText(spot.Row, spot.Column, JsonText.NormalizeTextNewlines(editor.Text))
+                || string.Equals(grid.ToMarkdown(), node.Text, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            BeginGesture("改了表格的一格");
+
+            node.Json[EntityCards.TableField] = grid.ToJson();
+            node.Text = grid.ToMarkdown();
+
+            EndGesture();
+            Rebuild();
+            SaveSoon();
+            DrainPendingReload();
+
+            return;
+        }
 
         if (provisional && text.Trim().Length == 0)
         {
@@ -3011,14 +3739,25 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (string.Equals(text, node.Text, StringComparison.Ordinal))
+        // 表格卡的正文是卡下面那几行备注；那张表自己的 markdown 只由上面那一路改。
+        var isTable = EntityCards.IsTable(node);
+
+        if (string.Equals(text, isTable ? EntityCards.NoteOf(node) : node.Text, StringComparison.Ordinal))
         {
             return;
         }
 
         BeginGesture("改了一格文字");
 
-        node.Text = text;
+        if (isTable)
+        {
+            EntityCards.SetNote(node, text);
+        }
+        else
+        {
+            node.Text = text;
+        }
+
         FitNoteHeight(node);
 
         EndGesture();
@@ -3368,6 +4107,12 @@ public sealed partial class MainWindow : Window
         }
 
         var count = _selection.Count;
+        var owned = _selection
+            .Select(NodeOf)
+            .OfType<CanvasNode>()
+            .Where(node => node.Kind == CanvasNodeKind.File && AttachmentStore.IsOwnedPath(node.FilePath))
+            .Select(node => AssetStore.NormalizeRelativePath(node.FilePath)!)
+            .ToList();
 
         BeginGesture($"删掉 {count} 格");
 
@@ -3392,7 +4137,10 @@ public sealed partial class MainWindow : Window
         Rebuild();
         SaveSoon();
 
-        Say($"已删除 {count} 个便签（可按 Ctrl＋Z 撤销）");
+        var cleaned = RecycleOwnedAttachmentsAfterCardRemoval(owned);
+
+        Say($"已删除 {count} 个便签（可按 Ctrl＋Z 撤销）"
+            + (cleaned > 0 ? $"；{cleaned} 个本板副本已移到回收站" : string.Empty));
     }
 
     /// <summary>
@@ -3464,12 +4212,20 @@ public sealed partial class MainWindow : Window
 
     /// <summary>Commands that would lie about their target: 成组/拆组 need a pile, and the arranging
     /// verbs need two cards. On empty board only the whole-board and view commands survive.</summary>
-    private static bool CommandApplies(Command command, MenuWhere where) => where switch
+    private bool CommandApplies(Command command, MenuWhere where) => where switch
     {
-        // 空板上只剩"能对整块板做、又不要求选中"的两件：粘贴、恢复。
-        // （新建与排列分别去了双击和圆钮，10-25 他点名的；菜单不许因此变成一张空白纸。）
-        MenuWhere.Empty => command.Section == "板子" && command.Label is "粘贴剪贴板" or "恢复…",
-        MenuWhere.OneNote => command.Label is not ("成组" or "拆组"),
+        // 空板上只留"能对整块板做、又不要求选中"的三件：粘贴、从路径或链接新建、恢复。
+        // （新建便签与排列分别去了双击和圆钮，10-25 他点名的；菜单不许因此变成一张空白纸。）
+        MenuWhere.Empty => command.Section == "板子"
+            && command.Label is "粘贴剪贴板" or "从路径或链接新建卡片" or "恢复…",
+        // 单格：两枚原件动作只在"这一格真有原件"时出现——菜单里躺一条按了只会说"找不到"的行，
+        // 和画一格按不动的按钮是同一种错。
+        MenuWhere.OneNote => command.Label switch
+        {
+            "打开原件" => SelectedEntity()?.CanOpen == true,
+            "在文件夹中打开" => SelectedEntity()?.CanReveal == true,
+            _ => command.Label is not ("成组" or "拆组"),
+        },
         _ => true,
     };
 
@@ -3520,6 +4276,10 @@ public sealed partial class MainWindow : Window
             menu.Items.Add(submenu);
         }
 
+        var uniform = new MenuFlyoutItem { Text = "统一便签大小" };
+        uniform.Click += (_, _) => UniformNoteSizes();
+        menu.Items.Add(uniform);
+
         if (where != MenuWhere.Empty)
         {
             var delete = new MenuFlyoutItem { Text = $"删掉这 {_selection.Count} 格", KeyboardAcceleratorTextOverride = "Delete" };
@@ -3558,9 +4318,9 @@ public sealed partial class MainWindow : Window
 
         var emptyMenu = Texts(BuildBoardMenu(MenuWhere.Empty));
 
-        if (!emptyMenu.Contains("粘贴剪贴板") || !emptyMenu.Contains("恢复…"))
+        if (!emptyMenu.Contains("粘贴剪贴板") || !emptyMenu.Contains("恢复…") || !emptyMenu.Contains("从路径或链接新建卡片"))
         {
-            problems.Add($"空板右键菜单应至少留着粘贴与恢复，读到 {string.Join(" / ", emptyMenu)}");
+            problems.Add($"空板右键菜单应留着粘贴、从路径或链接新建、恢复这三件，读到 {string.Join(" / ", emptyMenu)}");
         }
         string[] gone = ["叠放", "提到最前", "压到最后", "上移一格", "下移一格", "左移一格", "右移一格", "从边缘拉一根线", "回到 100%", "新建便签", "按颜色排列", "按标签排列"];
         var leaked = gone.Where(all.Contains).Distinct().ToList();
@@ -3573,6 +4333,11 @@ public sealed partial class MainWindow : Window
         if (!all.Contains("堆叠") || !all.Contains("成组"))
         {
             problems.Add("右键菜单里读不到排布/组织命令——删过头了");
+        }
+
+        if (!all.Contains("统一便签大小"))
+        {
+            problems.Add("右键菜单里读不到『统一便签大小』");
         }
 
         if (!all.Any(text => text.StartsWith("删掉这 ", StringComparison.Ordinal)))
@@ -3654,6 +4419,93 @@ public sealed partial class MainWindow : Window
     // -------------------------------------------------------------------------
 
     /// <summary>
+    /// Fluent 20_regular 的形状画在 20×20 网格上，墨迹只占 2…18。Viewbox 若按几何包围盒
+    /// （16×16）缩放，右边和下边各少 2 个单位——他 10-26 报的"图标被截断"。这里钉住
+    /// Path 的占位必须是整张设计网格。
+    /// </summary>
+    private void SelfTestIconsUseDesignGrid(List<string> problems)
+    {
+        if (FluentIcons.Glyph(FluentIcons.Tag, 16, Microsoft.UI.Colors.Black) is not Viewbox { Child: Microsoft.UI.Xaml.Shapes.Path path })
+        {
+            problems.Add("自检图标: FluentIcons.Glyph 没有给出 Viewbox＋Path");
+
+            return;
+        }
+
+        if (Math.Abs(path.Width - FluentIcons.DesignSize) > 0.01
+            || Math.Abs(path.Height - FluentIcons.DesignSize) > 0.01)
+        {
+            problems.Add(
+                $"自检图标: Path 占位 {path.Width:0.#}×{path.Height:0.#}，应按 {FluentIcons.DesignSize} 的设计网格"
+                + "（按 16×16 墨迹包围盒缩放会把右下各裁掉 2 个单位）");
+
+            return;
+        }
+
+        Diagnostics.Write($"selftest 图标: Path 占 {path.Width:0.#}×{path.Height:0.#} 设计网格，Viewbox 按整张纸缩放");
+    }
+
+    /// <summary>
+    /// 缩放一换，牌子就必须按新缩放重画。它只在"内容变了"时才重建，所以缓存键里不带缩放时，
+    /// 牌子会停在上一次缩放的字号上——正文已经放大，牌子还是小字，看着像另一套东西（他 10-26 报的
+    /// "缩放时显示的内容会变化／标签和正文不一样"）。
+    /// </summary>
+    private void SelfTestChipScalesWithZoom(List<string> problems)
+    {
+        var card = _realized.Values.FirstOrDefault(visual =>
+            visual.Visibility == Visibility.Visible && visual.PaintsReadout && visual.PaintedChipFontSize > 0);
+
+        if (card is null)
+        {
+            Diagnostics.Write("selftest 牌子缩放: 这一屏没有带牌子的便签，这一发不适用");
+
+            return;
+        }
+
+        var expected = NoteType.ChipFont(_view.Zoom);
+        var actual = card.PaintedChipFontSize;
+
+        if (Math.Abs(actual - expected) > 0.51)
+        {
+            problems.Add($"自检牌子缩放: 缩放 {Percent()} 下牌子字号 {actual:0.##}，应 {expected:0.##}（牌子停在旧缩放档）");
+        }
+        else
+        {
+            Diagnostics.Write($"selftest 牌子缩放: 缩放 {Percent()} 下牌子字号 {actual:0.##} = 12×缩放");
+        }
+
+        // 牌宽＝字的自然宽（× 不占位，只在悬停时压在牌尾）。这一发钉住两半：
+        // × 回到横排里 → 牌子比字宽一截；× 不在树上 → 悬停点不到，删不掉。
+        BoardArea.UpdateLayout();
+
+        var (inFlow, overlay) = card.PaintedChipCrossPlacement;
+        var chipCount = card.PaintedChipCount;
+
+        if (inFlow != 0 || overlay != chipCount)
+        {
+            problems.Add($"自检牌子宽度: {chipCount} 枚牌子里 × 在横排里 {inFlow} 处、在牌面层上 {overlay} 处——应 0/{chipCount}");
+        }
+        else
+        {
+            var (chipWidth, labelWidth) = card.PaintedChipWidths;
+            var pad = 2 * NoteType.ChipPadX * (expected / NoteType.ChipFontPx);
+
+            if (chipWidth <= 0 || labelWidth <= 0)
+            {
+                problems.Add($"自检牌子宽度: 量不到宽度（牌 {chipWidth:0.##}／字 {labelWidth:0.##}）——没排过版不算通过");
+            }
+            else if (Math.Abs(chipWidth - labelWidth - pad) > 1.5)
+            {
+                problems.Add($"自检牌子宽度: 牌 {chipWidth:0.##} − 字 {labelWidth:0.##} = {chipWidth - labelWidth:0.##}，只该是左右内距 {pad:0.##}（× 还在占位）");
+            }
+            else
+            {
+                Diagnostics.Write($"selftest 牌子宽度: 牌 {chipWidth:0.##} = 字 {labelWidth:0.##} + 内距 {pad:0.##}，× 全在牌面层上（{overlay}/{chipCount}）");
+            }
+        }
+    }
+
+    /// <summary>
     /// Exercises the camera, the realisation and the adorner without a mouse, so the
     /// parts that can be measured alone are measured on every run rather than only when
     /// somebody happens to drag.
@@ -3674,9 +4526,14 @@ public sealed partial class MainWindow : Window
         ProjectSelection();
 
         // 组框与空组的读数要取在这一拍：后面的排布/拖拽会真的改动成员。
+        SelfTestChipScalesWithZoom(problems);
+        SelfTestIconsUseDesignGrid(problems);
         SelfTestGroups(problems);
         SelfTestMarkChipEdits(problems);
         SelfTestMarkEditEnter(problems);
+        SelfTestDoneChip(problems);
+        SelfTestBatchTag(problems);
+        SelfTestUniformSize(problems);
         SelfTestCulledVisuals(problems);
         SelfTestFreshNoteIsFree(problems);
 
@@ -4172,6 +5029,31 @@ public sealed partial class MainWindow : Window
             marked.Text = textBefore;
             marked.Height = heightBefore;
             Rebuild();
+
+            // @b1 那一档（@n2 的续）：筛「已完成」这格必须亮，筛「还没做完」必须暗，
+            // 横幅要说清是哪一档——三样各一条，缺一样都算红。
+            marked.Text = "@b1\n" + (textBefore ?? string.Empty);
+
+            _view.DoneFilter = true;
+            Rebuild();
+
+            var doneLit = _realized.TryGetValue(marked.Id, out var doneCard) && doneCard!.Opacity > 0.99;
+            var doneWords = _bannerRow.Text;
+
+            _view.DoneFilter = false;
+            Rebuild();
+
+            var stillOpenLit = _realized.TryGetValue(marked.Id, out var openCard) && openCard!.Opacity > 0.99;
+
+            _view.DoneFilter = null;
+            marked.Text = textBefore;
+            Rebuild();
+
+            if (!doneLit || stillOpenLit || doneWords is not { } words || !words.Contains("只看已完成", StringComparison.Ordinal))
+            {
+                problems.Add(
+                    $"自检完成筛选: 「已完成」下{(doneLit ? "亮" : "没亮")}、「还没做完」下{(stillOpenLit ? "还亮着（该暗）" : "暗")}、横幅『{doneWords}』");
+            }
 
             if (FilterBanner.Visibility == Visibility.Visible)
             {
@@ -4745,6 +5627,101 @@ public sealed partial class MainWindow : Window
                         || (moreBelow is not null && moreBelow.Visibility != Visibility.Collapsed))
                     {
                         problems.Add($"拉长到全放得下（可见 {grown.Visible} / 共 {grown.Total}）以后渐隐遮罩还压着");
+                    }
+                    // @n7：上面那一整段量的都是"没有牌子"的那一格，而他报的恰恰是有牌子那一档——
+                    // 遮罩贴着卡片外沿，盖住的是牌子的下沿，正文被裁的那条边却在它上面一截：
+                    // 于是"硬切没有渐隐"和"牌子被渐隐抹掉"两个读数同一个根因。这一发把两半都钉住。
+                    probe.Text = "@t自检\n" + string.Join("\n", Enumerable.Range(1, 12).Select(n => $"第 {n} 行"));
+                    probe.Height = 96;
+
+                    Rebuild();
+                    ArrangeAll();
+                    BoardArea.UpdateLayout();
+
+                    if (_realized.TryGetValue(probe.Id, out var chipCard))
+                    {
+                        if (!chipCard.PaintsReadout)
+                        {
+                            problems.Add("加了 @t自检 以后那排牌子没画出来——这一发量的是牌子与渐隐的关系，缺正对照不算过");
+                        }
+                        else if (!chipCard.PaintsOverflowBelow)
+                        {
+                            problems.Add($"带牌子的格子压到 {probe.Height:0}px，底部渐隐却没亮：文字会从中间硬切（@n7 第一半）");
+                        }
+                        else if (!chipCard.FadeClearsChips())
+                        {
+                            problems.Add("底部渐隐遮罩压在牌子那一排上：牌子该始终完整，渐隐只吃正文（@n7 第二半）");
+                        }
+                        else if (chipCard.OverflowFadeBelowShape is not (>= 0.95, >= 0.45))
+                        {
+                            var fade = chipCard.OverflowFadeBelowShape;
+
+                            problems.Add($"底部渐隐这条带子：高 {fade.HeightInLines:0.###} 行、只抬到最后一行底边以上 {fade.OverLastLineInLines:0.###} 行——"
+                                + "带子整条躺在字底下的空隙里，一个字都没淡到（他 10-26 的第一条）");
+                        }
+                        else if (!chipCard.OverflowFadeMatchesPaper)
+                        {
+                            problems.Add("底部渐隐的颜色不等于卡面纸在同一高度的颜色：那条带子会在纸上分出第二层（他 10-26 放大看的那道分层）");
+                        }
+                        else if (!chipCard.ClipsOverflowAtChips())
+                        {
+                            problems.Add("有牌子时正文没裁在牌子顶边：渐隐带下面还会露出半行实字（@n7 第三半）");
+                        }
+
+                        // Markdown 便签的溢出也必须走同一条渐隐：教程里全是 ### 标题 + 长段落，
+                        // 旧计数把一段长句当成一行，内容已经截断却判“全放得下”，于是完全没有渐隐。
+                        probe.Text = "@t自检\n### 标题\n"
+                            + string.Concat(Enumerable.Repeat("这是一段很长的正文，用来验证 Markdown 便签在换行后仍然会渐隐。", 8));
+                        probe.Height = 96;
+
+                        Rebuild();
+                        ArrangeAll();
+                        BoardArea.UpdateLayout();
+
+                        if (!_realized.TryGetValue(probe.Id, out var mdCard))
+                        {
+                            problems.Add("Markdown 渐隐自检：重画以后找不到那一格");
+                        }
+                        else if (!mdCard.PaintsMarkdown)
+                        {
+                            problems.Add("Markdown 渐隐自检：这格没有走 Markdown 块渲染");
+                        }
+                        else if (!mdCard.PaintsOverflowBelow)
+                        {
+                            problems.Add("Markdown 便签溢出却没有底部渐隐：教程里的长段落会硬切");
+                        }
+                        else if (mdCard.OverflowFadeBelowShape is not (>= 0.95, >= 0.45))
+                        {
+                            var fade = mdCard.OverflowFadeBelowShape;
+
+                            problems.Add($"Markdown 便签的底部渐隐：高 {fade.HeightInLines:0.###} 行、抬进最后一行 {fade.OverLastLineInLines:0.###} 行——"
+                                + "窄于行距或没吃进字里，看着就像没开渐隐");
+                        }
+                        else if (!mdCard.ClipsOverflowAtChips())
+                        {
+                            problems.Add("Markdown 便签的正文没裁在牌子上沿：渐隐带下面还会露出字");
+                        }
+                        else if (mdCard.PaintedMarkdownLines < 2)
+                        {
+                            problems.Add($"Markdown 渐隐自检只画了 {mdCard.PaintedMarkdownLines} 行，量不到换行");
+                        }
+                    }
+                    // A 那一发：盘上那份高度多半是别人量的（agent、另一台设备、或旧版的量法），
+                    // 载入与并入这两发必须按现在的字重算一遍——这一发量的就是那一句。
+                    probe.Text = string.Join("\n", Enumerable.Range(1, 12).Select(n => $"第 {n} 行"));
+                    probe.Height = 96;
+
+                    var sizeMode = _view.NoteSize;
+
+                    _view.NoteSize = NoteSizeMode.Automatic;
+
+                    var refitted = RefitAutoHeights();
+
+                    _view.NoteSize = sizeMode;
+
+                    if (refitted < 1 || probe.Height <= 96)
+                    {
+                        problems.Add($"载入/并入那两发的重算没生效：重算 {refitted} 格，这一格还停在 {probe.Height:0}px（12 行装不下）");
                     }
                 }
 
@@ -5716,6 +6693,7 @@ public sealed partial class MainWindow : Window
         SelfTestTwoLineNoteAtFractionalZoom(problems);
         SelfTestOverflowCue(problems);
         SelfTestRepairs(problems);
+        SelfTestEntityCards(problems);
 
         // 双击组名＝改名（不是空白新建）。
         SelfTestGroupLabelHit(problems);
@@ -6317,6 +7295,7 @@ public sealed partial class MainWindow : Window
         var savedSearch = _searchOpen;
         var savedRestore = _restoreOpen;
         var savedRename = _renamingPath;
+        var savedManager = _boardManagerOpen;
         var panelsOpened = false;
         string? savedPanelTagFilter = null;
         Box? framedBox = null;
@@ -6399,6 +7378,11 @@ public sealed partial class MainWindow : Window
                 {
                     case "filter":
                         SetFilterPanel(true);
+                        break;
+
+                    case "boards":
+                        // 画板表要能取证：贴没贴住标签栏、列宽对不对、状态牌画没画出来，只能看图。
+                        SetBoardManager(true);
                         break;
 
                     case "cheat":
@@ -6547,6 +7531,14 @@ public sealed partial class MainWindow : Window
             // 已有的对比读数（点阵、板底、浮层）都锚在 BoardArea 上。
             FrameworkElement surface = mode == "chrome" ? Root : BoardArea;
 
+            // 浮层是刚刚才变可见的：`UpdateLayout` 只排好版，合成器还没提交这一帧，
+            // 这时 RenderAsync 会拍出一张"没有浮层"的图（同一份代码时灵时不灵就是这么来的）。
+            // 取证那一发先让出一帧再拍；产品自己的路径没有这个等待。
+            if (request.Panel is { Length: > 0 })
+            {
+                await Task.Delay(90);
+            }
+
             surface.UpdateLayout();
 
             var bitmap = new RenderTargetBitmap();
@@ -6647,6 +7639,9 @@ public sealed partial class MainWindow : Window
             {
                 // 取证不能留下痕迹：面板开过就要按开之前的样子收回去。
                 SetFilterPanel(savedFilterPanel);
+
+                // 画板表也是取证借去的一层：拍完要按拍之前开/关收回去。
+                SetBoardManager(savedManager);
 
                 if (savedCheatsheet)
                 {

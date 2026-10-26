@@ -472,11 +472,11 @@ public class GroupingAndTagsTests
         Assert.Equal("@n2", marks.SequenceSource);
         Assert.Equal("第二件", marks.Body);
         Assert.True(marks.HasMarks);
-        Assert.Equal("2 号", NoteMarks.Readout(marks, new DateOnly(2026, 10, 11)));
+        Assert.Equal("NO.2", NoteMarks.Readout(marks, new DateOnly(2026, 10, 11)));
 
         var chip = NoteMarks.Chips(marks, new DateOnly(2026, 10, 11)).Single(item => !item.IsDate);
 
-        Assert.Equal("2 号", chip.Label);
+        Assert.Equal("NO.2", chip.Label);
         Assert.Equal("@n2", chip.Source);
     }
 

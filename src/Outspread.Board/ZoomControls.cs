@@ -77,6 +77,19 @@ public sealed partial class MainWindow
         }
 
         ZoomLevelText.Text = Percent();
+
+        // 开板时那句「N 个便签 · 缩放 X%」如果还亮着，也要跟着改：右上角已经写着 80%，
+        // 中间那句还停在 125%，就是两块牌子互相打脸（10-26 取证图里读到的这一格）。
+        if (SayHost.Visibility == Visibility.Visible)
+        {
+            var said = _sayRow.Text;
+            var at = said.LastIndexOf("缩放 ", StringComparison.Ordinal);
+
+            if (at >= 0 && said.Contains("个便签", StringComparison.Ordinal))
+            {
+                _sayRow.Text = string.Concat(said.AsSpan(0, at), "缩放 ", Percent());
+            }
+        }
     }
 
     /// <summary>

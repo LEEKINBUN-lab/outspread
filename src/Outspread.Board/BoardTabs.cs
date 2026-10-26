@@ -3,6 +3,7 @@ using Microsoft.UI;
 using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
@@ -71,6 +72,9 @@ public sealed partial class MainWindow
     /// <summary>标题栏里哪些矩形算客户区（标签与加号）。不标的话双击会被当成"最大化"、右键会弹系统窗口菜单。</summary>
     private InputNonClientPointerSource? _tabPassthrough;
 
+    /// <summary>标题栏保存入口：XAML 里没有，建窗时和「画板」入口同路加到宿主。</summary>
+    private Button? _saveButton;
+
     private string? _passthroughSignature;
 
     /// <summary>平台 Caption 区上一次写进去的物理尺寸；窗口没变就不重设，免得每次布局都动输入区。</summary>
@@ -83,12 +87,17 @@ public sealed partial class MainWindow
     /// </summary>
     private void BuildBoardTabs()
     {
+        BuildSaveButton();
         StyleTabStripChrome();
 
         TitleBarHost.ContextFlyout = BuildStripFlyout();
         AddBoardButton.ContextFlyout = BuildStripFlyout();
         AddBoardButton.Click += (_, _) => CreateNewBoard();
+        _saveButton!.Click += (_, _) => SaveAndConfirm();
         SettingsButton.Click += (_, _) => OpenSettingsMenu();
+
+        // 标签栏最左、所有便签左侧那枚「画板」图标钮：开合那张表（也是唯一能删掉一块板的地方）。
+        BuildBoardManagerEntry();
 
         // 加号的位置跟着最后一枚标签走：标题、语言、DPI 一变就要重量。LayoutUpdated 会在
         // 排版之后发，量到的 item.ActualWidth 才是真的；PositionAddBoardButton 自己带防自激门闩。
@@ -192,8 +201,65 @@ public sealed partial class MainWindow
         };
 
         StyleAddBoardButton(dark);
+        StyleSaveButton(dark);
         StyleSettingsButton(dark);
         PositionAddBoardButton();
+    }
+
+    private void BuildSaveButton()
+    {
+        if (_saveButton is not null)
+        {
+            return;
+        }
+
+        _saveButton = new Button
+        {
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Width = 30,
+            Height = 30,
+            MinWidth = 0,
+            Margin = new Thickness(0, 4, 42, 0),
+            Padding = new Thickness(0),
+            BorderThickness = new Thickness(0),
+            Background = new SolidColorBrush(Colors.Transparent),
+        };
+
+        AutomationProperties.SetName(_saveButton, "保存");
+        ToolTipService.SetToolTip(_saveButton, "保存 · Ctrl+S");
+        TitleBarHost.Children.Add(_saveButton);
+    }
+
+    /// <summary>保存入口：与设置同一套外皮，图标用官方 Fluent 磁盘形状。</summary>
+    private void StyleSaveButton(bool dark)
+    {
+        if (_saveButton is not { } save)
+        {
+            return;
+        }
+
+        var transparent = new SolidColorBrush(Colors.Transparent);
+        var hover = Alpha(TabStrip.Hover(dark), TabStrip.HoverAlpha(dark));
+        var pressed = Alpha(TabStrip.Line(dark), TabStrip.HoverAlpha(dark) * 1.8);
+        var muted = NoteStyling.ToColor(TabStrip.InactiveInk(dark));
+
+        save.Width = TabStrip.SettingsPx;
+        save.Height = TabStrip.SettingsPx;
+        save.CornerRadius = new CornerRadius(TabStrip.SettingsRadius);
+        save.Padding = new Thickness(0);
+        save.BorderThickness = new Thickness(0);
+        save.Background = transparent;
+        save.Content = FluentIcons.Glyph(FluentIcons.Save, 16, muted);
+
+        save.Resources["ButtonBackground"] = transparent;
+        save.Resources["ButtonBackgroundPointerOver"] = hover;
+        save.Resources["ButtonBackgroundPressed"] = pressed;
+        save.Resources["ButtonBackgroundDisabled"] = transparent;
+        save.Resources["ButtonBorderBrush"] = transparent;
+        save.Resources["ButtonBorderBrushPointerOver"] = transparent;
+        save.Resources["ButtonBorderBrushPressed"] = transparent;
+        save.Resources["ButtonBorderBrushDisabled"] = transparent;
     }
 
     /// <summary>
@@ -324,7 +390,7 @@ public sealed partial class MainWindow
 
         // 右端那枚设置入口也占地方：加号最多停到它左边 8px，别在标签多的时候钻到它底下。
         var available = TitleBarHost.ActualWidth - TitleBarHost.Padding.Right
-            - TabStrip.SettingsInsetPx - TabStrip.SettingsPx - 8;
+            - TabStrip.SettingsInsetPx - (TabStrip.SettingsPx * 2) - 14;
         left = Math.Clamp(left, 8, Math.Max(8, available - TabStrip.AddPx - 4));
 
         var top = (TabStrip.StripHeight - TabStrip.AddPx) / 2 + TabStrip.AddOpticalDropPx;
@@ -478,8 +544,31 @@ public sealed partial class MainWindow
             $"标题栏: 自绘按钮 3×{TabStrip.CaptionButtonWidth:0.#}={width:0.#} 布局像素，右侧让出 {width:0.#}");
     }
 
+    /// <summary>
+    /// 同一块板的判据：路径写法不同也算同一块。只比原字符串时，命令行给的相对路径
+    /// （<c>boards\快速入门.canvas</c>）和盘上枚举/记忆里的绝对路径会判成两块，于是同名的两枚标签
+    /// 并排出现（他 10-26 报的"有两个快速入门"）。哨兵「所有便签」不是合法路径，靠上面的原串
+    /// 相等那一条先接住，落不到 GetFullPath。
+    /// </summary>
     private static bool SameBoard(string left, string right)
-        => string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+    {
+        if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        try
+        {
+            return string.Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
 
     private int CurrentBoardIndex()
         => _boardPath is null
@@ -565,7 +654,7 @@ public sealed partial class MainWindow
             ApplyCloseButtonOverlayMode();
 
             // 任务栏与 Alt+Tab 上认得出是哪件事；界面上不重复说一遍。
-            Title = _boardPath is null ? "铺陈" : $"铺陈 · {BoardName(_boardPath)}";
+            Title = _boardPath is null ? "「铺陈」画板" : $"「铺陈」画板 · {BoardName(_boardPath)}";
         }
         finally
         {
@@ -769,6 +858,17 @@ public sealed partial class MainWindow
         }
 
         Add(AddBoardButton);
+
+        if (_saveButton is not null)
+        {
+            Add(_saveButton);
+        }
+
+        if (_managerEntry is not null)
+        {
+            Add(_managerEntry);
+        }
+
         Add(SettingsButton);
         Add(MinimizeButton);
         Add(MaximizeButton);
@@ -813,7 +913,7 @@ public sealed partial class MainWindow
         _passthroughSignature = signature;
 
         Diagnostics.Write(
-            $"标题栏: 交互区 {rects.Count} 块（标签 {BoardTabs.TabItems.Count} 枚 + 加号 + 设置 + 3 枚标题按钮），" +
+            $"标题栏: 交互区 {rects.Count} 块（标签 {BoardTabs.TabItems.Count} 枚 + 画板 + 加号 + 保存 + 设置 + 3 枚标题按钮），" +
             $"第一块 {rects[0].X},{rects[0].Y} {rects[0].Width}×{rects[0].Height}");
 
         void Add(FrameworkElement element)
@@ -1128,6 +1228,72 @@ public sealed partial class MainWindow
         Diagnostics.Write($"selftest 标签悬停: {items.Count} 枚悬停前后表头与格位都未变（两把尺各测一次）");
     }
 
+    /// <summary>
+    /// 同一段名字下，活动标签与旁边几枚的宽度必须一样。10-26 他点的那一格：活动那枚的字重曾是
+    /// Medium，点一下它比邻近的宽几像素、× 像是从边上"长出来"——换墨色足够区分，不该换字重。
+    /// </summary>
+    private void SelfTestTabSelectionDoesNotResize(List<string> problems)
+    {
+        var items = BoardTabs.TabItems.OfType<TabViewItem>().Where(item => item.IsClosable).ToList();
+
+        if (items.Count < 2)
+        {
+            Diagnostics.Write("selftest 标签选中宽度: 可关标签不足两枚，这一发不适用");
+
+            return;
+        }
+
+        var labels = items
+            .Select(item => (item.Header as Grid)?.Children.OfType<TextBlock>().FirstOrDefault())
+            .ToList();
+        var saved = labels.Select(label => label?.Text).ToList();
+
+        foreach (var label in labels)
+        {
+            if (label is not null)
+            {
+                label.Text = "同名字宽度自检";
+            }
+        }
+
+        BoardTabs.UpdateLayout();
+
+        var widths = items.Select(item => item.ActualWidth).ToList();
+        var offWeight = labels
+            .Where(label => label is not null && label.FontWeight.Weight != Microsoft.UI.Text.FontWeights.Normal.Weight)
+            .Count();
+
+        for (var index = 0; index < labels.Count; index++)
+        {
+            if (labels[index] is { } label && saved[index] is { } original)
+            {
+                label.Text = original;
+            }
+        }
+
+        BoardTabs.UpdateLayout();
+
+        var spread = widths.Max() - widths.Min();
+
+        if (spread > 0.01)
+        {
+            problems.Add(
+                "自检标签选中宽度: 同一段名字下宽度不等（活动那枚会变宽）："
+                + string.Join("、", widths.Select(width => $"{width:0.##}")));
+        }
+
+        if (offWeight > 0)
+        {
+            problems.Add($"自检标签选中宽度: {offWeight} 枚标签的字重不是恒定 Normal——选中/悬停不该改字重");
+        }
+
+        if (spread <= 0.01 && offWeight == 0)
+        {
+            Diagnostics.Write(
+                $"selftest 标签选中宽度: 同名字下 {items.Count} 枚宽 {widths.Min():0.##}–{widths.Max():0.##}（差 {spread:0.##}）、字重恒定 Normal");
+        }
+    }
+
     private void PaintHeader(TabViewItem item, bool hovered)
     {
         if (item.Header is not Grid header || item.Tag is not string path)
@@ -1142,7 +1308,10 @@ public sealed partial class MainWindow
         {
             text.Foreground = new SolidColorBrush(
                 NoteStyling.ToColor(active || hovered ? TabStrip.ActiveInk(dark) : TabStrip.InactiveInk(dark)));
-            text.FontWeight = active ? Microsoft.UI.Text.FontWeights.Medium : Microsoft.UI.Text.FontWeights.Normal;
+
+            // 字重恒定：活动/悬停只换墨色，不换字重。10-26 他点的"按钮大小变来变去很廉价"是这一格：
+            // 活动标签曾被设成 Medium，点一枚标签它就比旁边的宽几像素，× 看起来是"长出来"的。
+            text.FontWeight = Microsoft.UI.Text.FontWeights.Normal;
         }
 
         if (header.Children.OfType<Button>().FirstOrDefault() is { } close)
@@ -1394,7 +1563,11 @@ public sealed partial class MainWindow
         }
     }
 
-    private async void CloseCurrentBoard()
+    /// <summary>
+    /// 关掉当前这块画板＝**只从标签栏上拿下来**：文件、相机记录、历史快照一个都不动（10-26 他拍的）。
+    /// 会动盘的只有一条路——标签栏左端那枚「画板」表里每行的删除，且要确认。
+    /// </summary>
+    private void CloseCurrentBoard()
     {
         if (_boardPath is null)
         {
@@ -1403,13 +1576,14 @@ public sealed partial class MainWindow
 
         if (IsAllNotes(_boardPath))
         {
-            Say("“所有便签”是固定总览页，无法关闭");
+            Say("「所有便签」是固定总览页，无法关闭");
+
             return;
         }
 
         if (RealBoardCount <= 1)
         {
-            Say("无法关闭最后一块板：请先按 Ctrl+N 新建一块；关闭板将从本机删除该板");
+            Say("无法关闭最后一块画板：请先新建一块");
 
             return;
         }
@@ -1419,15 +1593,6 @@ public sealed partial class MainWindow
         var closing = CurrentBoardIndex();
         var closingPath = _openBoards[closing];
         var closedName = BoardName(closingPath);
-
-        if (!await ConfirmBoardDeleteAsync([closingPath]))
-        {
-            Say($"已取消关闭，{closedName} 仍保留");
-
-            return;
-        }
-
-        var syncWasOn = _sync?.Enabled == true;
         var neighbour = NeighbourBoard(closing);
 
         SwitchToBoard(neighbour);
@@ -1437,27 +1602,24 @@ public sealed partial class MainWindow
             return;
         }
 
-        var error = DeleteBoard(closingPath);
-
-        if (error is not null)
-        {
-            Say($"未能删除 {closedName}：{error}；板仍保持打开");
-
-            return;
-        }
-
         _openBoards.RemoveAt(closing);
         RebuildTabs();
-        Say(
-            $"已删除 {closedName}（本机文件与历史已删除{(syncWasOn ? "；远端仓库中的副本不在本次范围内" : "")}），" +
-            $"已切换到 {BoardName(neighbour)}");
+        Say($"已关闭「{closedName}」· 文件保留在本机（{ShortBoardPath(closingPath)}）");
     }
 
-    private async void CloseTab(string path)
+    /// <summary>回执里说"文件在哪"用的短路径：`boards\\待办事项.canvas` 这种，不写整条盘符路径。</summary>
+    private static string ShortBoardPath(string path)
+    {
+        var folder = Path.GetFileName(Path.GetDirectoryName(path) ?? string.Empty);
+
+        return string.IsNullOrEmpty(folder) ? Path.GetFileName(path) : $"{folder}\\\\{Path.GetFileName(path)}";
+    }
+
+    private void CloseTab(string path)
     {
         if (IsAllNotes(path))
         {
-            Say("“所有便签”是固定总览页，无法关闭");
+            Say("「所有便签」是固定总览页，无法关闭");
             return;
         }
 
@@ -1468,7 +1630,7 @@ public sealed partial class MainWindow
 
         if (RealBoardCount <= 1)
         {
-            Say("无法关闭最后一块板：请先按 Ctrl+N 新建一块；关闭板将从本机删除该板");
+            Say("无法关闭最后一块画板：请先新建一块");
 
             return;
         }
@@ -1484,33 +1646,16 @@ public sealed partial class MainWindow
 
         var closedName = BoardName(path);
 
-        if (!await ConfirmBoardDeleteAsync([path]))
-        {
-            Say($"已取消关闭，{closedName} 仍保留");
-
-            return;
-        }
-
-        var syncWasOn = _sync?.Enabled == true;
-        var error = DeleteBoard(path);
-
-        if (error is not null)
-        {
-            Say($"未能删除 {closedName}：{error}");
-
-            return;
-        }
-
         _openBoards.RemoveAll(open => SameBoard(open, path));
         RebuildTabs();
-        Say($"已删除 {closedName}（本机文件与历史已删除{(syncWasOn ? "；远端仓库中的副本不在本次范围内" : "")}）");
+        Say($"已关闭「{closedName}」· 文件保留在本机（{ShortBoardPath(path)}）");
     }
 
-    private async void CloseOtherBoards(string path)
+    private void CloseOtherBoards(string path)
     {
         if (RealBoardCount <= 1)
         {
-            Say("当前仅打开一块板，没有其他板可关闭");
+            Say("当前仅打开一块画板，没有其他画板可关闭");
 
             return;
         }
@@ -1531,45 +1676,15 @@ public sealed partial class MainWindow
 
         if (closedPaths.Count == 0)
         {
-            Say("没有其他板可关闭");
+            Say("没有其他画板可关闭");
 
             return;
         }
 
-        if (!await ConfirmBoardDeleteAsync(closedPaths))
-        {
-            Say("已取消，其他板仍保留");
-
-            return;
-        }
-
-        var syncWasOn = _sync?.Enabled == true;
-        var deleted = new List<string>();
-        var failures = new List<string>();
-
-        foreach (var closing in closedPaths)
-        {
-            var name = BoardName(closing);
-            var error = DeleteBoard(closing);
-
-            if (error is null)
-            {
-                deleted.Add(closing);
-            }
-            else
-            {
-                failures.Add($"{name}：{error}");
-            }
-        }
-
-        _openBoards.RemoveAll(open => deleted.Exists(gone => SameBoard(gone, open)));
+        _openBoards.RemoveAll(open => closedPaths.Exists(gone => SameBoard(gone, open)));
         RebuildTabs();
 
-        var suffix = syncWasOn ? "；远端仓库中的副本不在本次范围内" : string.Empty;
-
-        Say(failures.Count == 0
-            ? $"已删除 {deleted.Count} 块板（本机文件与历史已删除{suffix}），保留 {BoardName(path)}"
-            : $"已删除 {deleted.Count} 块板，{failures.Count} 块未能删除：{string.Join("；", failures)}；保留 {BoardName(path)}");
+        Say($"已关闭 {closedPaths.Count} 块画板 · 文件都保留在本机；当前仍是「{BoardName(path)}」");
     }
 
     /// <summary>
@@ -1578,8 +1693,18 @@ public sealed partial class MainWindow
     /// </summary>
     private string? DeleteBoard(string path)
     {
+        // 画板表已经不列它了，这一发是最后一道：容器被删掉，「所有便签」里那些没归家的格子就没了着落。
+        if (IsUnfiledBoard(path))
+        {
+            Diagnostics.Write($"board delete refused: {path} 是「所有便签」的未归档容器");
+
+            return "「未归档」是「所有便签」的容器，不是一块画板，删不掉";
+        }
+
         try
         {
+            var owned = OwnedAttachmentPathsOfBoardFile(path);
+
             if (File.Exists(path))
             {
                 File.Delete(path);
@@ -1608,6 +1733,8 @@ public sealed partial class MainWindow
                     }
                 }
             }
+
+            RecycleOwnedAttachmentsAfterBoardRemoval(path, owned);
 
             Diagnostics.Write($"board deleted on close: {path}");
 
@@ -1806,8 +1933,8 @@ public sealed partial class MainWindow
         // 不在 Border* 上，所以那几枚主题资源管不着。真机截图里它就长在标签的改名框里，既吃宽度又像
         // 一个能一键清空名字的按钮——这里按模板件的名字把它收掉，不重写整份模板。
         // 收两次：状态机在"有字/没字"翻转时会把 Visibility 设回去，而打字正是它翻转的那一拍。
-        box.Loaded += (_, _) => HideRenameClearButton(box);
-        box.TextChanged += (_, _) => HideRenameClearButton(box);
+        box.Loaded += (_, _) => HideTextBoxClearButton(box);
+        box.TextChanged += (_, _) => HideTextBoxClearButton(box);
 
         // 入树前先试一次（双击路径通常已经挂上表头了），再走异步焦点那条路。
         box.Focus(FocusState.Keyboard);
@@ -1815,7 +1942,7 @@ public sealed partial class MainWindow
     }
 
     /// <summary>把改名框模板里那枚清除按钮收掉（模板件要到第一次排版之后才在树里）。</summary>
-    private static void HideRenameClearButton(DependencyObject root)
+    private static void HideTextBoxClearButton(DependencyObject root)
     {
         if (root is FrameworkElement { Name: "DeleteButton" } clear)
         {
@@ -1828,7 +1955,7 @@ public sealed partial class MainWindow
 
         for (var index = 0; index < children; index++)
         {
-            HideRenameClearButton(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, index));
+            HideTextBoxClearButton(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, index));
         }
     }
 
@@ -2696,6 +2823,9 @@ public sealed partial class MainWindow
             problems.Add($"两块板开着时标签条读到 {BoardTabs.TabItems.Count} 枚标签、列表里 {_openBoards.Count} 块（应为 2 块板 + 固定『所有便签』=3）");
         }
 
+        // 此刻条上有两枚可关标签：正是量"活动那枚有没有因为字重变宽"的时机。
+        SelfTestTabSelectionDoesNotResize(problems);
+
         if (BoardTabs.SelectedIndex != 2)
         {
             problems.Add($"切过去以后选中的不是第二块板那枚标签（哨兵占 0，第二块在 2），读到第 {BoardTabs.SelectedIndex} 枚");
@@ -2802,9 +2932,9 @@ public sealed partial class MainWindow
             problems.Add($"关掉第二块以后应只剩『所有便签』＋第一块：标签 {BoardTabs.TabItems.Count} 枚、列表 {_openBoards.Count} 块，_boardPath {_boardPath}");
         }
 
-        if (File.Exists(secondPath) || File.Exists(CanvasStore.SidecarPath(secondPath)))
+        if (!File.Exists(secondPath) || !File.Exists(CanvasStore.SidecarPath(secondPath)))
         {
-            problems.Add("关掉第二块没把文件/sidecar 删掉");
+            problems.Add("关掉第二块把文件或 sidecar 删掉了：关闭只该拿走标签，盘上那份必须留着");
         }
 
         if (!File.Exists(firstPath) || _document.Nodes.Count != nodesOnFirst)
@@ -2821,9 +2951,143 @@ public sealed partial class MainWindow
             }
         }
 
-        if (!_sayRow.Text.Contains("已删除", StringComparison.Ordinal))
+        if (!_sayRow.Text.Contains("已关闭", StringComparison.Ordinal) || !_sayRow.Text.Contains("文件保留", StringComparison.Ordinal))
         {
-            problems.Add($"关板子没说删：回执『{_sayRow.Text}』");
+            problems.Add($"关板子的回执没说清「只关不删」：回执『{_sayRow.Text}』");
+        }
+
+        // 画板表：行数＝盘上那几块，开合只切可见性，不动盘。
+        SetBoardManager(true);
+
+        var managerFolder = Path.GetDirectoryName(_boardPath ?? string.Empty) ?? string.Empty;
+
+        // 「未归档」是「所有便签」的容器，不是一块等着被管理的画板：表里不列它，删除也得拒它。
+        EnsureUnfiled();
+
+        var unfiledOnDisk = File.Exists(UnfiledPath);
+        var boardsOnDisk = BoardLocator.BoardsIn(managerFolder)
+            .Count(candidate => File.Exists(candidate) && !IsUnfiledBoard(candidate));
+
+        // 同一条路径的两种写法必须是同一块板：相对路径与绝对路径各判一块时，
+        // 启动时那条"补回教程板"会再加一枚同名标签（他 10-26 报的"有两个快速入门"）。
+        if (_boardPath is { Length: > 0 } currentBoard)
+        {
+            var fullPath = Path.GetFullPath(currentBoard);
+            var relative = Path.GetRelativePath(Directory.GetCurrentDirectory(), fullPath);
+
+            if (!SameBoard(fullPath, relative))
+            {
+                problems.Add($"同板判据: 绝对路径与相对路径『{relative}』被判成两块板");
+            }
+        }
+
+        if (_managerPanel is null || _managerPanel.Visibility != Visibility.Visible
+            || _managerRows is null || _managerRows.Children.Count != boardsOnDisk)
+        {
+            problems.Add($"画板表：可见 {_managerPanel?.Visibility}、行 {_managerRows?.Children.Count}、盘上 {boardsOnDisk} 块");
+        }
+        else
+        {
+            _managerPanel.UpdateLayout();
+            _managerRows.UpdateLayout();
+
+            if (_managerPanel.BorderThickness.Bottom != 1 || _managerPanel.Padding.Bottom != 0
+                || _managerPanel.Padding.Top != 0)
+            {
+                problems.Add(
+                    $"画板表边距读到 border={_managerPanel.BorderThickness.Bottom}、padding={_managerPanel.Padding}：" +
+                    "面板自己的线要保持一条，表头上方不许再留白带，末行不许再画");
+            }
+
+            if (_managerPanel.Background is not SolidColorBrush { Color.A: 255 })
+            {
+                problems.Add("画板表底色不是实色：底下的便签会透出来");
+            }
+
+            if (_managerRows.Children[^1] is not Border lastRow || lastRow.BorderThickness.Bottom != 0)
+            {
+                problems.Add("画板表末行还画着底边：会和面板底边叠成两层边缘");
+            }
+
+            if (_managerPanel.Child is Grid body
+                && body.Children.Count > 0
+                && body.Children[0] is Border header
+                && header.Child is Grid headerGrid
+                && headerGrid.ColumnDefinitions.Count == 6)
+            {
+                for (var column = 0; column < 5; column++)
+                {
+                    if (headerGrid.ColumnDefinitions[column].Width.GridUnitType != GridUnitType.Star)
+                    {
+                        problems.Add($"画板表第 {column + 1} 列不是星号列：窗口一窄就会把右侧挤出可视区");
+                    }
+                }
+
+                if (headerGrid.ColumnDefinitions[5].Width.GridUnitType != GridUnitType.Pixel
+                    || Math.Abs(headerGrid.ColumnDefinitions[5].Width.Value - ManagerActionsWidth) > 0.5)
+                {
+                    problems.Add($"画板表动作列不是固定 {ManagerActionsWidth:0}px");
+                }
+
+                if (Math.Abs(headerGrid.ColumnSpacing - 20) > 0.01)
+                {
+                    problems.Add($"画板表列间距读到 {headerGrid.ColumnSpacing:0.#}，应为 20");
+                }
+
+                var expectedBody = Math.Min(_managerPanel.ActualWidth, ManagerBodyMaxWidth);
+
+                if (_managerPanel.ActualWidth > 0
+                    && (body.Width <= 0 || Math.Abs(body.Width - expectedBody) > 0.5))
+                {
+                    problems.Add(
+                        $"画板表内容宽 {body.Width:0.#}，应铺到 min(面板 {_managerPanel.ActualWidth:0.#}, {ManagerBodyMaxWidth:0})"
+                        + $"＝{expectedBody:0.#}（窄在中间、左右一大片空就是他 10-26 报的那一格）");
+                }
+
+                if (headerGrid.ActualWidth > body.ActualWidth + 0.5)
+                {
+                    problems.Add(
+                        $"画板表内容 {headerGrid.ActualWidth:0} 宽于容器 {body.ActualWidth:0}：右侧会被裁掉");
+                }
+
+                if (header.Height != 32 || _managerRows.Children[^1] is not Border { Height: 40 })
+                {
+                    problems.Add(
+                        $"画板表行高读到表头 {header.Height:0.#}、末行 {(_managerRows.Children[^1] as Border)?.Height:0.#}，应为 32/40");
+                }
+            }
+            else
+            {
+                problems.Add("画板表找不到表头那一行，量不了列宽");
+            }
+        }
+
+        // 容器不能被删：删掉了，父集里那些没归家的格子就没了着落。这一发也当上面那条行数的正对照——
+        // 盘上没有它，"表里不列它"就只是句空话。
+        var refusal = DeleteBoard(UnfiledPath);
+
+        if (!unfiledOnDisk)
+        {
+            problems.Add("画板表自检：盘上没有「未归档」那块，「表里不列它／删不掉它」两把尺都没有正对照");
+        }
+        else if (refusal is null)
+        {
+            problems.Add("「未归档」被 DeleteBoard 删掉了：它是「所有便签」的容器，这一发必须拒");
+        }
+        else if (!File.Exists(UnfiledPath))
+        {
+            problems.Add($"「未归档」的删除被拒了（{refusal}），可文件却不在了：拒绝不能顺手删一半");
+        }
+        else
+        {
+            Diagnostics.Write($"selftest 未归档: 盘上有它、表里 {boardsOnDisk} 行不含它、删除被拒（{refusal}）");
+        }
+
+        SetBoardManager(false);
+
+        if (_managerPanel?.Visibility != Visibility.Collapsed)
+        {
+            problems.Add("画板表关不掉");
         }
 
         CloseCurrentBoard();
@@ -2879,12 +3143,32 @@ public sealed partial class MainWindow
 
         var passthrough = _tabPassthrough?.GetRegionRects(NonClientRegionKind.Passthrough) ?? [];
         var caption = _tabPassthrough?.GetRegionRects(NonClientRegionKind.Caption) ?? [];
-        var expectedRegions = BoardTabs.TabItems.Count + 5;
+        var expectedRegions = BoardTabs.TabItems.Count + 7;
 
         if (passthrough.Length < expectedRegions)
         {
             problems.Add(
-                $"标题栏交互区只标了 {passthrough.Length} 块，应至少 {expectedRegions} 块（{BoardTabs.TabItems.Count} 枚标签 + 加号 + 设置 + 3 枚标题按钮）：输入会被非客户区吞掉");
+                $"标题栏交互区只标了 {passthrough.Length} 块，应至少 {expectedRegions} 块（{BoardTabs.TabItems.Count} 枚标签 + 画板 + 加号 + 保存 + 设置 + 3 枚标题按钮）：输入会被非客户区吞掉");
+        }
+
+        if (_managerEntry is { ActualWidth: > 0.5 } managerEntry && Root.XamlRoot is { } xamlRoot)
+        {
+            var scale = xamlRoot.RasterizationScale;
+            var managerBounds = managerEntry.TransformToVisual(null).TransformBounds(
+                new Rect(0, 0, managerEntry.ActualWidth, managerEntry.ActualHeight));
+            var managerRect = new RectInt32(
+                (int)Math.Round(managerBounds.X * scale),
+                (int)Math.Round(managerBounds.Y * scale),
+                (int)Math.Round(managerBounds.Width * scale),
+                (int)Math.Round(managerBounds.Height * scale));
+
+            if (!passthrough.Any(region => Math.Abs(region.X - managerRect.X) <= 2
+                    && Math.Abs(region.Y - managerRect.Y) <= 2
+                    && Math.Abs(region.Width - managerRect.Width) <= 2
+                    && Math.Abs(region.Height - managerRect.Height) <= 2))
+            {
+                problems.Add("「画板」钮没被标成标题栏交互区：双击会被系统读成双击标题栏最大化");
+            }
         }
 
         if (caption.Length == 0)
@@ -2913,12 +3197,20 @@ public sealed partial class MainWindow
         foreach (var (button, name) in new[]
                  {
                      (MinimizeButton, "最小化"), (MaximizeButton, "最大化"), (CloseButton, "关闭"),
+                     (SettingsButton, "设置"),
                  })
         {
             if (!button.IsLoaded || button.ActualWidth <= 0 || button.ActualHeight <= 0)
             {
                 problems.Add($"标题按钮『{name}』没长出来：loaded={button.IsLoaded} {button.ActualWidth:0.#}×{button.ActualHeight:0.#}");
             }
+        }
+
+        if (_saveButton is not { IsLoaded: true } saveButton
+            || saveButton.ActualWidth <= 0 || saveButton.ActualHeight <= 0)
+        {
+            problems.Add(
+                $"标题按钮『保存』没长出来：loaded={_saveButton?.IsLoaded} {_saveButton?.ActualWidth:0.#}×{_saveButton?.ActualHeight:0.#}");
         }
 
         var selectedIndex = BoardTabs.SelectedIndex;
@@ -3161,14 +3453,25 @@ public sealed partial class MainWindow
             problems.Add($"设置菜单缺行：读到 {string.Join(" / ", settingsLabels)}");
         }
 
-        if (settingsSeparators != 1)
+        if (settingsSeparators != 2)
         {
-            problems.Add($"设置菜单的分隔读到 {settingsSeparators} 条，应 1 条（配对与板面两件之间）");
+            problems.Add($"设置菜单的分隔读到 {settingsSeparators} 条，应 2 条（配对 / 板面两件 / 左侧按钮三组之间）");
         }
 
         if (settings.Items.OfType<MenuFlyoutItem>().Any(row => row.Icon is null))
         {
             problems.Add("设置菜单有行没图标：浏览器图标式是他 10-23 选的");
+        }
+
+        var railMenu = settings.Items.OfType<MenuFlyoutSubItem>()
+            .FirstOrDefault(sub => sub.Text == "左侧按钮");
+
+        if (railMenu is null
+            || railMenu.Items.OfType<ToggleMenuFlyoutItem>().Select(toggle => toggle.Text).OrderBy(text => text, StringComparer.Ordinal)
+                is not { } railToggles
+            || string.Join("|", railToggles) != "分组|删除|换色")
+        {
+            problems.Add("设置菜单里的『左侧按钮』应有三枚开关：分组 / 换色 / 删除");
         }
 
         Diagnostics.Write(
@@ -3476,45 +3779,43 @@ public sealed partial class MainWindow
                 $"关掉未命名板以后没回到出发那块：标签 {BoardTabs.TabItems.Count} 枚、列表 {_openBoards.Count} 块、_boardPath {_boardPath}");
         }
 
-        if (File.Exists(expectedPath))
+        // 关＝只关：文件和 sidecar 都必须留在盘上（10-26 他拍的），回执要说清这一点。
+        if (!File.Exists(expectedPath) || !File.Exists(CanvasStore.SidecarPath(expectedPath)))
         {
-            var afterClose = CanvasDocument.Parse(CanvasStore.ReadAllText(expectedPath), expectedPath);
-
-            problems.Add($"关掉板子没删文件：文件还在，{afterClose.Nodes.Count} 格");
+            problems.Add($"关掉画板把文件或 sidecar 删掉了：{expectedName}");
         }
 
-        if (File.Exists(CanvasStore.SidecarPath(expectedPath)))
+        if (!_sayRow.Text.Contains("已关闭", StringComparison.Ordinal) || !_sayRow.Text.Contains("文件保留", StringComparison.Ordinal))
         {
-            problems.Add("关掉板子没删相机 sidecar");
+            problems.Add($"关掉画板的回执没说清「只关不删」：回执『{_sayRow.Text}』");
         }
 
-        if (!_sayRow.Text.Contains("已删除", StringComparison.Ordinal))
-        {
-            problems.Add($"关掉板子没删掉：回执『{_sayRow.Text}』");
-        }
-
+        // 再点加号：上一块还在盘上，所以新板是**下一号**，不会复用旧名。
         ((IInvokeProvider)addPeer).Invoke();
 
-        if (!SameBoard(_boardPath ?? string.Empty, expectedPath) || BoardName(expectedPath) != expectedName)
+        if (SameBoard(_boardPath ?? string.Empty, expectedPath))
         {
-            problems.Add($"再点加号没回到 {expectedName}：读到 {_boardPath}");
+            problems.Add($"上一块画板还在盘上，加号却又落回 {expectedName}");
         }
 
-        if (!File.Exists(expectedPath) || _document.Nodes.Count != 0)
+        var secondPath = _boardPath ?? string.Empty;
+        var secondName = BoardName(secondPath);
+
+        if (!File.Exists(secondPath) || _document.Nodes.Count != 0)
         {
-            problems.Add($"重新建出的 {expectedName} 不对：文件 {File.Exists(expectedPath)}、{_document.Nodes.Count} 格");
+            problems.Add($"新建的 {secondName} 不对：文件 {File.Exists(secondPath)}、{_document.Nodes.Count} 格");
         }
 
         CloseCurrentBoard();
 
-        if (File.Exists(expectedPath))
+        if (!File.Exists(secondPath))
         {
-            problems.Add("第二次关掉板子没删文件");
+            problems.Add($"第二次关掉画板也没留下文件：{secondName}");
         }
 
         Diagnostics.Write(
-            $"selftest 删板: 建出 {expectedName}、放一格并落盘、关掉后文件与 sidecar 已删；" +
-            $"再点加号重新建出 {BoardName(expectedPath)}（0 格）；标签 {BoardTabs.TabItems.Count} 枚");
+            $"selftest 关板: 关掉 {expectedName} 后文件与 sidecar 都留在盘上；再点加号建出下一号 {secondName}；" +
+            $"再关一次同样只拿标签；标签 {BoardTabs.TabItems.Count} 枚");
 
         foreach (var leftover in new[] { expectedPath, CanvasStore.SidecarPath(expectedPath) })
         {

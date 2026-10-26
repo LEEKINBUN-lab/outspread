@@ -27,6 +27,13 @@ public sealed partial class MainWindow
 
     private static bool IsAllNotes(string? path) => path == AllNotesKey;
 
+    /// <summary>「所有便签」的容器文件：不属于任何子页的格子落在这里。它是父集机制的一部分，
+    /// 不是一块等着被管理、被删除的画板。</summary>
+    internal const string UnfiledBoardFileName = "未归档.canvas";
+
+    internal static bool IsUnfiledBoard(string path)
+        => string.Equals(System.IO.Path.GetFileName(path), UnfiledBoardFileName, StringComparison.Ordinal);
+
     /// <summary>真实板子的数量（哨兵不算）——"最后一块不给关"按这个数。</summary>
     private int RealBoardCount => _openBoards.Count(open => !IsAllNotes(open));
 
@@ -61,7 +68,7 @@ public sealed partial class MainWindow
                 ? System.IO.Path.Combine(AppContext.BaseDirectory, "boards")
                 : BoardLocator.BoardDirectory(anchor);
 
-            return System.IO.Path.Combine(dir, "未归档.canvas");
+            return System.IO.Path.Combine(dir, UnfiledBoardFileName);
         }
     }
 

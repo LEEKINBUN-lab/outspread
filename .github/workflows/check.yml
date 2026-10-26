@@ -21,5 +21,8 @@ jobs:
       - name: CLI build
         run: dotnet build src/Outspread.Cli/outspread.csproj -c Debug --nologo
 
+      - name: MCP build
+        run: dotnet build src/Outspread.Mcp/outspread-mcp.csproj -c Debug --nologo
+
       - name: Board build
         run: dotnet build src/Outspread.Board/Outspread.Board.csproj -c Debug -p:Platform=x64 --nologo

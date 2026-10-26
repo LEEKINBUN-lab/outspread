@@ -1,0 +1,11 @@
+# 逐字节比对的资料：checkout 一律不许改行尾。
+#
+# CI 那台 runner 的 core.autocrlf 与本机不同，它把 LF 换成 CRLF 检出——
+# golden/renames/vectors.json 的 sha256 当场变了，"桌面与安卓各存一份逐字节相同的副本"
+# 这句话就作废（2026-10-26 那条 CI 红灯：钉的 9fae4944…，检出算出 2665b77e…）。
+# 板子本体与 sidecar 同理：它们是应用自己写的字节，不是谁手打的文本。
+golden/** -text
+*.canvas -text
+*.canvas.view.json -text
+*.canvas.conflict-* -text
+*.json -text

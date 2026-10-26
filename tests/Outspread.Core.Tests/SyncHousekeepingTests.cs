@@ -31,7 +31,12 @@ public class SyncHousekeepingTests
 
             var released = SyncHousekeeping.ReleaseUntitledLedgers(tree, root, keepStems: ["未命名板2"]);
 
-            Assert.Equal(["未命名板1", "selftest-rename"], released.OrderBy(name => name));
+            // 释放了哪几本是这一发的断言，顺序不是。两边都按序号序排：
+            // 默认那把尺跟着机器区域设置走，CI 上「selftest-rename」会排到「未命名板1」前面，
+            // 红的是判据不是产品（10-26 那条 CI 红灯就是这个）。
+            Assert.Equal(
+                new[] { "未命名板1", "selftest-rename" }.OrderBy(name => name, StringComparer.Ordinal),
+                released.OrderBy(name => name, StringComparer.Ordinal));
             Assert.False(Directory.Exists(Path.Combine(root, "未命名板1")));
             Assert.False(Directory.Exists(Path.Combine(root, "selftest-rename")));
             Assert.True(Directory.Exists(Path.Combine(root, "未命名板2")));   // 还开着：名字不能动

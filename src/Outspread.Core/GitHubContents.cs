@@ -440,7 +440,7 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
         => (int)response.StatusCode == 409;
 
     private string CommitMessage(string path)
-        => $"铺陈同步 {Path.GetFileName(path)}";
+        => $"「铺陈」画板同步 {Path.GetFileName(path)}";
 
     /// <summary>Percent-encodes one path segment; the separators between them stay literal.</summary>
     private static string EscapePath(string path)

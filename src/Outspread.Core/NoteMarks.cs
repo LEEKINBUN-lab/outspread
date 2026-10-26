@@ -103,7 +103,12 @@ public static class NoteMarks
 
         if (marks.Sequence is { } ordinal)
         {
-            parts.Add($"{ordinal} 号");
+            parts.Add($"NO.{ordinal}");
+        }
+
+        if (marks.Done is { } done)
+        {
+            parts.Add(done ? "已完成" : "未完成");
         }
 
         parts.AddRange(marks.Tags);
@@ -120,7 +125,9 @@ public static class NoteMarks
     /// edge bar agrees with).</param>
     /// <param name="State">The date's own reading, so the mark can carry the state colour the edge bar
     /// already carries. Tags leave it <see cref="DueState.None"/> — they have no state to show.</param>
-    public readonly record struct Mark(string Label, string Source, bool IsDate, DueState State = DueState.None);
+    /// <param name="Done">完成标记的那一枚：true＝已完成、false＝未完成、null＝别的牌子。
+    /// 牌子要据此换色与换形状（绿勾／红叉），不能再和标签长一样。</param>
+    public readonly record struct Mark(string Label, string Source, bool IsDate, DueState State = DueState.None, bool? Done = null);
 
     /// <summary>The chips a card's bottom-left corner is made of: the date first, then its tags.</summary>
     public static IReadOnlyList<Mark> Chips(NoteProperties marks, DateOnly today)
@@ -134,7 +141,13 @@ public static class NoteMarks
 
         if (marks.Sequence is { } ordinal && marks.SequenceSource is { } sequenceSource)
         {
-            chips.Add(new Mark($"{ordinal} 号", sequenceSource, false));
+            chips.Add(new Mark($"NO.{ordinal}", sequenceSource, false));
+        }
+
+        if (marks.Done is { } done && marks.DoneSource is { } doneSource)
+        {
+            // 文案就是那两个字：牌子点下去是切换（见 NoteMarksPanel.EditMarkFrom），不是改名。
+            chips.Add(new Mark(done ? "已完成" : "未完成", doneSource, false, NoteMarks.DueState.None, done));
         }
 
         foreach (var tag in marks.Tags)
@@ -171,13 +184,22 @@ public static class NoteMarks
     /// already parsed its text once for the bar and the readout.</param>
     /// <param name="actual">The note's due state, computed once by the caller — the state needs
     /// "today", and re-deriving it here would mean every filtered note re-parses its own text.</param>
-    public static bool Shows(DueState actual, IReadOnlyList<string> tags, string? tag, DueState? dueFilter)
+    /// <param name="done">这一格自己写的完成状态：true＝@b1、false＝@b0、null＝没写。</param>
+    /// <param name="doneFilter">null＝不按完成状态筛；true＝只看已完成；false＝只看"还没做完"——
+    /// 那**包含没写 @b 的**：待办板上"没写"就是"还没做完"，只留明确 @b0 的那几格会让一整块
+    /// 没标记的板子在筛选后变成空白。</param>
+    public static bool Shows(DueState actual, IReadOnlyList<string> tags, bool? done, string? tag, DueState? dueFilter, bool? doneFilter)
     {
         if (tag is { Length: > 0 } wanted && !tags.Contains(wanted, StringComparer.Ordinal))
         {
             return false;
         }
 
-        return dueFilter is null || actual == dueFilter.Value;
+        if (dueFilter is not null && actual != dueFilter.Value)
+        {
+            return false;
+        }
+
+        return doneFilter is null || (done == true) == doneFilter.Value;
     }
 }

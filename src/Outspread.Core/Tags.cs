@@ -31,8 +31,15 @@ public sealed record NoteProperties(
     /// <summary>序号的原文 span（删牌子时要从正文里拿掉的那一段）。</summary>
     public string? SequenceSource { get; init; }
 
+    /// <summary>完成状态：<c>@b1</c> 已完成、<c>@b0</c> 未完成，没写就是 null（@n2，他 10-25 加的）。
+    /// 真身在正文那两枚字符里，牌子只是它的一种画法——所以 agent 与手机写 <c>@b1</c> 就够了。</summary>
+    public bool? Done { get; init; }
+
+    /// <summary>完成标记的原文 span（点 × 时要从正文里拿掉的那一段）。</summary>
+    public string? DoneSource { get; init; }
+
     /// <summary>Whether a card earns the mark strip.</summary>
-    public bool HasMarks => Due is not null || MalformedDue is not null || Sequence is not null || Tags.Count > 0;
+    public bool HasMarks => Due is not null || MalformedDue is not null || Sequence is not null || Done is not null || Tags.Count > 0;
 
     /// <summary>The exact span that produced <see cref="Due"/> (or the unreadable one that produced
     /// <see cref="MalformedDue"/>) — what a delete on the card has to take out of the text.</summary>
@@ -94,7 +101,7 @@ public static class Tags
     /// can hold several, and both <c>-</c> and <c>/</c> are accepted inside a date because that is how
     /// people actually type one.
     /// </summary>
-    private static readonly Regex TokenShort = new(@"@(?<key>[dtn])(?<value>\S*)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex TokenShort = new(@"@(?<key>[dtnb])(?<value>\S*)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     /// <summary>The next token at the head of the remainder, or <see cref="Match.Empty"/>.</summary>
     private static Match NextToken(string rest)
@@ -136,6 +143,8 @@ public static class Tags
         string? dueSource = null;
         int? sequence = null;
         string? sequenceSource = null;
+        bool? done = null;
+        string? doneSource = null;
         var tags = new List<string>();
         var sources = new Dictionary<string, string>(StringComparer.Ordinal);
         var kept = new List<string>();
@@ -149,9 +158,11 @@ public static class Tags
                 continue;
             }
 
-            // @n 后面必须是数字：@nfoo 不是序号，整行照样是正文——别把人家的话吃掉。
+            // @n 后面必须是数字、@b 后面必须是 0 或 1：@nfoo、@b2 都不算标记，整行照样是正文——别把人家的话吃掉。
             if (tokens.Any(token => token.Groups["key"].Value.Equals("n", StringComparison.OrdinalIgnoreCase)
-                && !int.TryParse(token.Groups["value"].Value.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out _)))
+                    && !int.TryParse(token.Groups["value"].Value.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out _)
+                || token.Groups["key"].Value.Equals("b", StringComparison.OrdinalIgnoreCase)
+                    && !(token.Groups["value"].Value.Trim() is "0" or "1")))
             {
                 kept.Add(line);
                 continue;
@@ -165,6 +176,18 @@ public static class Tags
                 var value = token.Groups["value"].Value.Trim();
                 var isDate = key.Equals("d", StringComparison.OrdinalIgnoreCase);
                 var isSequence = key.Equals("n", StringComparison.OrdinalIgnoreCase);
+
+                if (key.Equals("b", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 第一个 @b 说了算（和日期、序号同一条规矩）：一张卡不置两个完成状态。
+                    if (done is null && value is "0" or "1")
+                    {
+                        done = value == "1";
+                        doneSource = token.Value;
+                    }
+
+                    continue;
+                }
 
                 if (isSequence)
                 {
@@ -236,6 +259,8 @@ public static class Tags
             DueSource = dueSource,
             Sequence = sequence,
             SequenceSource = sequenceSource,
+            Done = done,
+            DoneSource = doneSource,
             TagSources = sources,
             Props = string.Join('\n', props),
         };
@@ -300,6 +325,62 @@ public static class Tags
         return index < 0
             ? text
             : NoteProperties.WithProps(read.Props, read.Body.Remove(index, token.Length));
+    }
+
+    /// <summary>
+    /// 给一张便签补一个标签：已有同一个标签就不动，否则在属性块末尾补 <c>@t名</c>。
+    /// 批量加标签只改正文里的这一行，牌子和手机读取的是同一份文件。
+    /// </summary>
+    public static string AddTag(string? text, string? tag)
+    {
+        var name = (tag ?? string.Empty).Trim();
+
+        if (name.StartsWith('#'))
+        {
+            name = name[1..].Trim();
+        }
+        else if (name.StartsWith("@t", StringComparison.OrdinalIgnoreCase))
+        {
+            name = name[2..].Trim();
+        }
+
+        if (name.Length == 0 || name.Any(char.IsWhiteSpace))
+        {
+            return text ?? string.Empty;
+        }
+
+        var read = Read(text);
+        var canonical = $"#{name}";
+
+        if (read.Tags.Contains(canonical, StringComparer.Ordinal))
+        {
+            return text ?? string.Empty;
+        }
+
+        var token = $"@t{name}";
+        var props = read.Props.Length == 0 ? token : read.Props + "\n" + token;
+
+        return NoteProperties.WithProps(props, read.Body);
+    }
+
+    /// <summary>
+    /// 把完成状态写成 <c>@b1</c>／<c>@b0</c>：属性块里已有 <c>@b</c> 就原地换值，没有就补上一枚。
+    /// 改的是文件里那份文本——牌子上的字只是它的一种画法，所以撤销、同步与手机那侧读的都是同一件事。
+    /// </summary>
+    public static string SetDone(string? text, bool done)
+    {
+        var token = done ? "@b1" : "@b0";
+        var read = Read(text);
+
+        if (read.DoneSource is { Length: > 0 } existing)
+        {
+            return NoteProperties.WithProps(
+                read.Props.Replace(existing, token, StringComparison.Ordinal), read.Body);
+        }
+
+        var props = read.Props.Length == 0 ? token : read.Props + "\n" + token;
+
+        return NoteProperties.WithProps(props, read.Body);
     }
 
     /// <summary>

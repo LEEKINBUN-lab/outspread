@@ -136,7 +136,7 @@ public static class SyncCredentials
                 Flags = 0,
                 Type = CredentialTypeGeneric,
                 TargetName = target,
-                Comment = "铺陈板子的同步令牌（只认这一个仓库）",
+                Comment = "「铺陈」画板的同步令牌（只认这一个仓库）",
                 LastWritten = 0,
                 CredentialBlobSize = bytes.Length,
                 CredentialBlob = blob,

@@ -25,6 +25,7 @@ public sealed class BoardViewState
 
     private readonly Dictionary<string, double> _fontSizes = new(StringComparer.Ordinal);
     private readonly HashSet<string> _manualSizes = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _hiddenRailButtons = new(StringComparer.Ordinal);
 
     public double PanX { get; set; } = 24;
 
@@ -48,6 +49,21 @@ public sealed class BoardViewState
     /// <summary>把"手动定过大小"的标记摘掉（只在确认那几像素是误触时用）。</summary>
     public void UnmarkManualSize(string id) => _manualSizes.Remove(id);
 
+    /// <summary>左侧操作条上被用户关掉的钮（group / color / delete）。版面状态，随面板存。</summary>
+    public bool IsRailButtonHidden(string name) => _hiddenRailButtons.Contains(name);
+
+    public void SetRailButtonHidden(string name, bool hidden)
+    {
+        if (hidden)
+        {
+            _hiddenRailButtons.Add(name);
+        }
+        else
+        {
+            _hiddenRailButtons.Remove(name);
+        }
+    }
+
     /// <summary>
     /// Today, as far as the marks care. A property rather than a call to <c>DateTime.Now</c> so the
     /// due arithmetic is testable and so a board left open past midnight can be told to re-evaluate.
@@ -63,7 +79,10 @@ public sealed class BoardViewState
 
     public NoteMarks.DueState? DueFilter { get; set; }
 
-    public bool Filtering => TagFilter is { Length: > 0 } || DueFilter is not null;
+    /// <summary>完成状态那一档：null＝不筛、true＝只看已完成、false＝只看还没做完的（含没写 @b 的）。</summary>
+    public bool? DoneFilter { get; set; }
+
+    public bool Filtering => TagFilter is { Length: > 0 } || DueFilter is not null || DoneFilter is not null;
 
     public double ToScreenX(double worldX) => (worldX * Zoom) + PanX;
 
@@ -188,6 +207,18 @@ public sealed class BoardViewState
             root["manualSize"] = manual;
         }
 
+        if (_hiddenRailButtons.Count > 0)
+        {
+            var hidden = new JsonArray();
+
+            foreach (var name in _hiddenRailButtons.OrderBy(name => name, StringComparer.Ordinal))
+            {
+                hidden.Add(name);
+            }
+
+            root["railHidden"] = hidden;
+        }
+
         var stream = new MemoryStream();
 
         using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
@@ -245,6 +276,17 @@ public sealed class BoardViewState
                 if (item is JsonValue value && value.TryGetValue(out string? id) && !string.IsNullOrWhiteSpace(id))
                 {
                     state._manualSizes.Add(id);
+                }
+            }
+        }
+
+        if (root["railHidden"] is JsonArray hiddenRail)
+        {
+            foreach (var item in hiddenRail)
+            {
+                if (item is JsonValue value && value.TryGetValue(out string? name) && !string.IsNullOrWhiteSpace(name))
+                {
+                    state._hiddenRailButtons.Add(name);
                 }
             }
         }

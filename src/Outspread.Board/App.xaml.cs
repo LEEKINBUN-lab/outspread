@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.UI.Xaml;
+using Outspread.Core;
 
 namespace Outspread.Board;
 
@@ -45,6 +46,39 @@ public partial class App : Application
 
         _window = window;
         window.Activate();
+
+        // 窗口已经出来了再补稳定目录和开始菜单那枚：它们是给用户找入口用的，不该排在首帧前面；
+        // 对齐一次构建是 42MB 的拷贝，更不能挡开板子。自检那一发跑在 %TEMP% 的副本上，两样都不动。
+        if (!SelfTestMode)
+        {
+            var runningExe = Environment.ProcessPath ?? string.Empty;
+
+            _ = Task.Run(() =>
+            {
+                if (AppInstall.NeedsRefresh(runningExe, AppInstall.StableExePath()))
+                {
+                    if (AppInstall.Refresh(Path.GetDirectoryName(runningExe) ?? string.Empty, AppInstall.StableDirectory()) is { } why)
+                    {
+                        Diagnostics.Write($"install: 稳定目录没对齐（{why}），快捷方式这一发仍指现有那份");
+                    }
+                    else
+                    {
+                        Diagnostics.Write($"install: 稳定目录已对齐到 {runningExe}");
+                    }
+                }
+
+                var target = AppInstall.PreferredLaunchTarget(runningExe, File.Exists(AppInstall.StableExePath()));
+
+                if (StartMenuShortcut.Ensure(target) is { } reason)
+                {
+                    Diagnostics.Write($"shortcut: 没补上 {reason}");
+                }
+                else
+                {
+                    Diagnostics.Write($"shortcut: 开始菜单那枚指着 {target}");
+                }
+            });
+        }
 
         if (SelfTestMode)
         {

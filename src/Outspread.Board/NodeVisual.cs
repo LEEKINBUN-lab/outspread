@@ -153,6 +153,16 @@ public sealed class NodeVisual : ContentControl
     /// the layout a card has not changed.</summary>
     private string _mdKey = string.Empty;
 
+    /// <summary>Markdown measure cache: the same lines at the same width/zoom keep their heights.</summary>
+    private string _mdMeasureKey = string.Empty;
+    private double _mdTotalHeight;
+    private List<double> _mdHeights = [];
+
+    /// <summary>Screen y of the last fully visible text line's bottom — where the bottom fade starts.
+    /// The old fixed-height band fell inside a large paragraph gap and looked like no fade at all.</summary>
+    private double _belowFadeTop;
+    private double _belowFadeLeading;
+
     /* 整行窗口：格子被压得比内容矮时（只有人手动拖小、或整块板子切到"固定"才会这样），
        后面的行不许变成"看不见也够不着"。以前的做法是截到看得下的行数加一枚省略号——
        它诚实地说了"后面还有"，可没有任何办法把还有的那部分调出来。
@@ -176,6 +186,48 @@ public sealed class NodeVisual : ContentControl
 
     /// <summary>自检读的第三个数：实际允许画几行（有溢出时会比可见行多一行半行）。</summary>
     internal int RenderedMaxLines => _label.MaxLines;
+
+    internal string? EntityTitle => _entity?.Title;
+
+    internal string? EntityBadge => _entity?.Badge;
+
+    internal string? EntityTip => _entity?.Tip;
+
+    /// <summary>悬停那一排的两档透明度与牌子释义：静止时动作必须是藏着的。</summary>
+    internal double EntityActionsOpacity => _entityHeader?.ActionsOpacity ?? -1;
+
+    internal double EntityMetaOpacity => _entityHeader?.MetaOpacity ?? -1;
+
+    internal string EntityBadgeTip => _entityHeader?.BadgeTip ?? string.Empty;
+
+    /// <summary>自检直接按悬停那一拍：卡头高度在淡入前后必须一个像素都不动。</summary>
+    internal void RevealEntityHeader(bool on) => _entityHeader?.Reveal(on);
+
+    internal int EntityThumbCount => _entity?.Thumbnails.Count ?? 0;
+
+    internal double EntityHeaderHeight => _headerHost.Height;
+
+    internal bool IsTableCard => _entity?.Table is not null;
+
+    internal int TablePlacements => _entity?.Table?.Placements().Count ?? 0;
+
+    /// <summary>双击落在表格的哪一格上，连同那一格画出来的方框（板子握着指针捕获，卡片自己的手势收不到，
+    /// 所以只能由窗口来问；问的就是画出来的那一份，看见的和改掉的不会差开）。</summary>
+    internal (int Row, int Column, Windows.Foundation.Rect Bounds)? TableCellAt(Windows.Foundation.Point at, UIElement relativeTo) => _table.CellAt(at, relativeTo);
+
+    /// <summary>自检读的那句占位提示（备注为空时才亮）。</summary>
+    internal bool PaintsNoteHint => _noteHint.Visibility == Visibility.Visible;
+
+    /// <summary>自检没亮时读这一句：占位提示的四个条件里，是哪一条把它按下去的。</summary>
+    internal string NoteHintDebug
+        => $"visible={_noteHint.Visibility}|ShowText={ShowText}|entity={_entity is not null}"
+        + $"|body={_label.Text.Length}|md={_md.Visibility == Visibility.Visible}";
+
+    internal string NoteBody => _entity?.Table is null ? string.Empty : _label.Text;
+
+    internal string GroupName => Kind == CanvasNodeKind.Group ? _label.Text : string.Empty;
+
+    internal double GroupNameMaxWidth => Kind == CanvasNodeKind.Group ? _label.MaxWidth : 0;
 
 
     private int _totalLines = 1;
@@ -210,6 +262,25 @@ public sealed class NodeVisual : ContentControl
     /// <summary>Set by the window: (node id, the exact span) → open the editor with that mark selected.</summary>
     internal Action<string, string>? EditMark;
 
+    /// <summary>Set by the window: the card header's open button asks the host where this entity lives.</summary>
+    internal Action<string>? OpenEntity;
+
+    /// <summary>Set by the window: the folder button asks the host to reveal the original in Explorer.</summary>
+    internal Action<string>? RevealEntity;
+
+    /// <summary>那格还没有备注时，在可编辑的位置亮一句淡色提示；一开始打字就没了。</summary>
+    private readonly TextBlock _noteHint = new()
+    {
+        Text = "双击键入备注",
+        TextWrapping = TextWrapping.NoWrap,
+        TextTrimming = TextTrimming.CharacterEllipsis,
+        MaxLines = 1,
+        VerticalAlignment = VerticalAlignment.Top,
+        HorizontalAlignment = HorizontalAlignment.Left,
+        IsHitTestVisible = false,
+        Visibility = Visibility.Collapsed,
+    };
+
     /// <summary>The chips are rebuilt only when their content changed: re-making them every frame of a
     /// pan would drop the hover state the × depends on.</summary>
     private string _chipKey = string.Empty;
@@ -217,6 +288,16 @@ public sealed class NodeVisual : ContentControl
     /// <summary>Body on top, marks under it, in one row each — so the two cannot overlap and the band
     /// reserved for the marks is the band they actually take.</summary>
     private readonly Grid _textHost = new();
+
+    private readonly Grid _content = new();
+
+    private readonly Grid _headerHost = new() { Visibility = Visibility.Collapsed };
+
+    private readonly TableCardView _table = new() { Visibility = Visibility.Collapsed };
+
+    private readonly EntityHeader? _entityHeader;
+
+    private readonly EntityCardInfo? _entity;
 
     private readonly Image _image;
 
@@ -231,6 +312,12 @@ public sealed class NodeVisual : ContentControl
     /// so the three stops are pre-composited — which also keeps the text contrast testable in
     /// Core against the colour the card is actually painted with at the line's height.
     /// </summary>
+    /// <remarks>
+    /// The stops come from <see cref="NoteSurface.PaperAt"/>, the one place that says what colour
+    /// the card is at a given height. The overflow fade reads it from the same place: when it was
+    /// painted with the flat fill colour instead, the strip it covers sat a few levels off the
+    /// paper around it and read as a second sheet laid on the first (2026-10-26, "放大看颜色会分层").
+    /// </remarks>
     private LinearGradientBrush PaperFor(Color surface)
     {
         if (_paper is not null && _paperKey.R == surface.R && _paperKey.G == surface.G && _paperKey.B == surface.B)
@@ -240,13 +327,12 @@ public sealed class NodeVisual : ContentControl
 
         _paperKey = surface;
 
-        var (top, bottom) = NoteSurface.PaperLight(NoteStyling.IsDark);
         var back = new Rgb(surface.R, surface.G, surface.B);
 
         _paper = new LinearGradientBrush { StartPoint = new Windows.Foundation.Point(0, 0), EndPoint = new Windows.Foundation.Point(0, 1) };
-        _paper.GradientStops.Add(new GradientStop { Color = NoteStyling.ToColor(NoteSurface.Over(back, new Rgb(255, 255, 255), top)), Offset = 0 });
+        _paper.GradientStops.Add(new GradientStop { Color = NoteStyling.ToColor(NoteSurface.PaperAt(back, 0, NoteStyling.IsDark)), Offset = 0 });
         _paper.GradientStops.Add(new GradientStop { Color = surface, Offset = NoteSurface.PaperMiddleOffset });
-        _paper.GradientStops.Add(new GradientStop { Color = NoteStyling.ToColor(NoteSurface.Over(back, new Rgb(0, 0, 0), bottom)), Offset = 1 });
+        _paper.GradientStops.Add(new GradientStop { Color = NoteStyling.ToColor(NoteSurface.PaperAt(back, 1, NoteStyling.IsDark)), Offset = 1 });
 
         return _paper;
     }
@@ -260,10 +346,16 @@ public sealed class NodeVisual : ContentControl
     /// 直接打死（<c>Border.set_Child</c> 抛 ArgumentException）。</summary>
     private TextBlock? _missing;
 
-    public NodeVisual(CanvasNode node, Func<string, string?> resolveAsset)
+    internal NodeVisual(CanvasNode node, Func<string, string?> resolveAsset, EntityCardInfo? entity = null)
     {
         NodeId = node.Id;
         Kind = node.Kind;
+        _entity = entity;
+
+        // 表格卡不吃卡头：它要的是一张表，不是一份关于这张表的说明。
+        _entityHeader = entity is null || entity.Table is not null
+            ? null
+            : new EntityHeader(entity, () => OpenEntity?.Invoke(NodeId), () => RevealEntity?.Invoke(NodeId));
 
         UseLayoutRounding = false;
         IsHitTestVisible = true;
@@ -289,7 +381,6 @@ public sealed class NodeVisual : ContentControl
         Grid.SetRow(_chips, 1);
         _textHost.Children.Add(_md);
         _textHost.Children.Add(_chips);
-
         if (Kind == CanvasNodeKind.Group)
         {
             // 组的整片区域不吃命中：单击要落在里面的那枚便签上。名字戴上顶边上方的名牌，
@@ -304,7 +395,9 @@ public sealed class NodeVisual : ContentControl
         else
         {
             Grid.SetRow(_label, 0);
+            Grid.SetRow(_noteHint, 0);
             _textHost.Children.Add(_label);
+            _textHost.Children.Add(_noteHint);
         }
 
         _image = new Image
@@ -313,9 +406,28 @@ public sealed class NodeVisual : ContentControl
             IsHitTestVisible = false,
         };
 
-        ShowText = Kind != CanvasNodeKind.File || !LooksLikeImage(node.FilePath);
+        if (_entityHeader is not null)
+        {
+            _headerHost.Children.Add(_entityHeader);
+            _headerHost.Visibility = Visibility.Visible;
+        }
 
-        _surface.Child = ShowText ? _textHost : _image;
+        // 卡头（实体卡）在上、表格（表格卡）在中、正文在下——三者都是"这一格上面的东西"，
+        // 所以放在同一枚 Grid 的三行里，而不是再套一层宿主。
+        _content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        Grid.SetRow(_headerHost, 0);
+        Grid.SetRow(_table, 1);
+        Grid.SetRow(_textHost, 2);
+        _content.Children.Add(_headerHost);
+        _content.Children.Add(_textHost);
+        _content.Children.Add(_table);
+
+        ShowText = Kind != CanvasNodeKind.File || !LooksLikeImage(node.FilePath);
+        _table.Visibility = entity?.Table is null ? Visibility.Collapsed : Visibility.Visible;
+
+        _surface.Child = ShowText ? _content : _image;
 
         var paint = new Grid();
         paint.Children.Add(_bands);
@@ -333,6 +445,11 @@ public sealed class NodeVisual : ContentControl
         // already a child, and XAML answers that with 0x800F1000. Visibility is what Update changes.
         paint.Children.Add(_dueBar);
         Content = paint;
+
+        // 第二行（元信息＋动作）由悬停决定亮不亮。选中不跟着亮：选中那一拍右侧会浮出操作条，
+        // 两样叠在同一列上；键盘与触屏走的是右键菜单里那两条"打开原件 / 在文件夹中打开"。
+        PointerEntered += (_, _) => _entityHeader?.Reveal(true);
+        PointerExited += (_, _) => _entityHeader?.Reveal(false);
 
         // 滚轮先问这一格要不要窗口：藏着的行归它，走到头了再让板子接手去缩放。
         PointerWheelChanged += (_, args) =>
@@ -583,6 +700,79 @@ public sealed class NodeVisual : ContentControl
 
     internal bool PaintsReadout => _chips.Visibility == Visibility.Visible && _chips.Children.Count > 0;
 
+    /// <summary>Self-test reading: the font size the painted chips were built with. It has to follow
+    /// the camera — a chip repainted only when its text changes keeps the size of whichever zoom it
+    /// was born at, and the marks then disagree with the正文 on the same card.</summary>
+    internal double PaintedChipFontSize => ChipRows()
+        .Select(row => row.Children.OfType<TextBlock>().FirstOrDefault())
+        .FirstOrDefault(label => label is not null)?.FontSize ?? 0;
+
+    /// <summary>自检那把尺：牌子树里 × 住在哪一格，返回（横排里, 牌面层上）两个计数。
+    /// 前者必须 0——它一住进横排，每枚牌子都比那几个字宽一截空档（他 10-26 的第二条）；
+    /// 后者必须等于牌子数——× 还得真在树上，点得到才删得掉。两个数一起读，
+    /// 免得"树里找不到 ×"被当成通过。</summary>
+    internal (int InFlow, int Overlay) PaintedChipCrossPlacement
+    {
+        get
+        {
+            var inFlow = 0;
+            var overlay = 0;
+
+            foreach (var chip in _chips.Children.OfType<Border>())
+            {
+                if (chip.Child is not Grid face)
+                {
+                    continue;
+                }
+
+                inFlow += face.Children.OfType<StackPanel>()
+                    .SelectMany(row => row.Children)
+                    .OfType<TextBlock>()
+                    .Count(text => text.Text == "×");
+                overlay += face.Children.OfType<Border>()
+                    .Select(cap => cap.Child)
+                    .OfType<TextBlock>()
+                    .Count(text => text.Text == "×");
+            }
+
+            return (inFlow, overlay);
+        }
+    }
+
+    internal int PaintedChipCount => _chips.Children.Count;
+
+    /// <summary>自检那把尺之一：牌子宽 − 字宽 ≈ 左右内距。多出一格就是 × 还在占位。
+    /// 取字最长的那枚：短牌的宽度由 MinWidth 兜底，量不出这条关系。</summary>
+    internal (double ChipWidth, double LabelWidth) PaintedChipWidths
+    {
+        get
+        {
+            (double Chip, double Label) best = (0, 0);
+
+            foreach (var chip in _chips.Children.OfType<Border>())
+            {
+                var label = ChipRow(chip)?.Children.OfType<TextBlock>().FirstOrDefault();
+
+                if (label is { ActualWidth: > 0 } && label.ActualWidth > best.Label)
+                {
+                    best = (chip.ActualWidth, label.ActualWidth);
+                }
+            }
+
+            return best;
+        }
+    }
+
+    private IEnumerable<StackPanel> ChipRows() => _chips.Children.OfType<Border>().Select(ChipRow).Where(row => row is not null)!;
+
+    private static StackPanel? ChipRow(Border chip)
+        => chip.Child switch
+        {
+            StackPanel row => row,
+            Grid face => face.Children.OfType<StackPanel>().FirstOrDefault(),
+            _ => null,
+        };
+
     /// <summary>For the interface self-test: the block path is what the card is drawing, and how many
     /// lines it drew. A note that measures one shape and paints another only shows up when both are
     /// read from the same realized card.</summary>
@@ -642,12 +832,13 @@ public sealed class NodeVisual : ContentControl
 
         // Once per node per frame: the bar, the readout and the filter all read this same result,
         // and a pan re-runs it for every note on the board.
-        var marks = Tags.Read(node.Text);
+        // 表格卡的标记读的是卡下面那几行字，不是表格自己那份 markdown——否则一格"@d"能把整张表读成日期。
+        var marks = Tags.Read(_entity?.Table is not null ? EntityCards.NoteOf(node) : node.Text);
         var due = NoteMarks.StateOf(marks, view.Today);
 
         // 筛选是视图层的事：被滤掉的格子压暗但仍在原处，绝不移动、也不改文档（所以不进撤销栈）。
         // 组里那些没命中的是唯一的例外——它们被**折进**命中的那一格背后，但那也只是这一枚变换。
-        var shows = display.Revealed || !view.Filtering || NoteMarks.Shows(due, marks.Tags, view.TagFilter, view.DueFilter);
+        var shows = display.Revealed || !view.Filtering || NoteMarks.Shows(due, marks.Tags, marks.Done, view.TagFilter, view.DueFilter, view.DoneFilter);
 
         Opacity = display.FoldedAway ? 0d : shows ? 1d : 0.22d;
         _label.Foreground = new SolidColorBrush(isGroup ? NoteStyling.InkFor(null, NoteStyling.SurfaceFor(null)) : ink);
@@ -691,6 +882,47 @@ public sealed class NodeVisual : ContentControl
         // padding) come from one NoteType so they cannot drift apart.
         _surface.Padding = ShowText ? new Thickness(Math.Clamp(type.Padding * view.Zoom, 0, 60)) : new Thickness(0);
 
+        var isTable = _entity?.Table is not null;
+        var inset = Math.Clamp(type.Padding * view.Zoom, 0, 60);
+        var headerScreen = _entityHeader is null ? 0 : _entityHeader.HeaderWorld * view.Zoom;
+        var bodyScreen = Math.Max(0, (isTable ? Height : Math.Max(Height, 0)) - (inset * 2));
+
+        // 表格按它自己的行数占高度（每行 30 世界像素，被压小的一格降到 18），剩下的那一截才是备注。
+        // 先给备注留一行，表格才有"挤不掉的字"；两者都放不下时表格保住最小行高，备注吃渐隐。
+        var tableScreen = 0d;
+
+        if (isTable)
+        {
+            var leading = Math.Max(4, type.Leading * view.Zoom);
+            var note = EntityCards.NoteOf(node);
+            var noteWant = Math.Max(1, NaturalVisualLines(note.Length == 0 ? " " : note, Math.Max(20, Width - (inset * 2)), Math.Max(4, type.Size * view.Zoom), leading)) * leading;
+            var rows = _entity!.Table!.RowCount;
+            var natural = rows * EntityCardLayout.TableLineWorld * view.Zoom;
+            var floor = Math.Min(rows * 18 * view.Zoom, Math.Max(0, bodyScreen - headerScreen));
+
+            tableScreen = Math.Min(
+                Math.Clamp(bodyScreen - headerScreen - noteWant, floor, natural),
+                Math.Max(0, bodyScreen - headerScreen));
+
+            _table.Render(
+                _entity.Table,
+                view.Zoom,
+                Math.Max(20, Width - (inset * 2)),
+                tableScreen,
+                ink,
+                NoteStyling.IsDark);
+        }
+
+        _headerHost.Visibility = _entityHeader is null ? Visibility.Collapsed : Visibility.Visible;
+        _headerHost.Height = headerScreen;
+        _table.Visibility = isTable ? Visibility.Visible : Visibility.Collapsed;
+
+        _entityHeader?.Apply(
+            view.Zoom,
+            ink,
+            NoteStyling.ToColor(Badge.Muted(NoteStyling.IsDark)),
+            NoteStyling.IsDark);
+
         UpdateEdge(node, view);
 
         if (isGroup)
@@ -700,13 +932,21 @@ public sealed class NodeVisual : ContentControl
         else if (ShowText)
         {
             var leading = Math.Max(4, type.Leading * view.Zoom);
-            var inset = Math.Clamp(type.Padding * view.Zoom, 0, 60);
             var band = NoteType.ChipBand(view.Zoom);
+
+            // 牌子之间的空隙也按缩放走：固定 4 像素在 400% 时贴在一起，在 50% 时又显得散开——
+            // 同一排牌子的节奏不该随相机变。
+            _chips.Spacing = 4 * Math.Max(0.05, view.Zoom);
 
             _label.FontSize = Math.Max(4, type.Size * view.Zoom);
             _label.LineHeight = leading;
 
-            var body = Kind == CanvasNodeKind.Text ? marks.Body : DisplayText(node);
+            // 表格卡这一格吃的字是卡下面那几行备注；表的 markdown 只是表格自己的备份，不拿来当正文。
+            var body = Kind == CanvasNodeKind.Text || isTable
+                ? marks.Body
+                : _entity is not null
+                    ? (node.Text ?? string.Empty)
+                    : DisplayText(node);
 
             // 折进去的东西必须有一句"这里藏着几格"，否则筛选看起来像把便签删了。这句话长在框自己的
             // 标题那一格里，不新发明一种控件：同一件东西（组的标题）多说一句，而不是多一枚牌子。
@@ -719,7 +959,7 @@ public sealed class NodeVisual : ContentControl
             // 不许出现"半行字被横切"。卡片高度可能是在网页那侧量出来的——同一串字在
             // 微软雅黑下会比 Chrome 多占一行；也可能被手柄压小。两种情况下都只允许整行截断，
             // 并用省略号说明"后面还有"，而不是让最后一行露出半截。
-            var room = Math.Max(0, Height - (inset * 2));
+            var room = Math.Max(0, Height - (inset * 2) - headerScreen - tableScreen);
 
             // 行数按**世界尺寸**取整，或至少给浮点留一个 epsilon：所有量都乘过 zoom，
             // 76 高、17 内距、21 行高在 160% 时得到 2.0000000000000004 还是 1.9999999999999998
@@ -729,7 +969,7 @@ public sealed class NodeVisual : ContentControl
 
             // 正文能用到卡片下沿（下内距被下一行的半行借走），所以"完整行数"只扣上内距；
             // 用两倍内距算会把本可以显示的下一行提前判成溢出，于是只能整行显示/整行消失。
-            var lineRoom = Math.Max(0, Height - inset);
+            var lineRoom = Math.Max(0, Height - inset - headerScreen - tableScreen);
             var withChips = (int)Math.Floor(((room - band) / leading) + lineEpsilon);
 
             IReadOnlyList<NoteMarks.Mark> chips = isGroup ? Array.Empty<NoteMarks.Mark>() : NoteMarks.Chips(marks, view.Today);
@@ -741,7 +981,7 @@ public sealed class NodeVisual : ContentControl
 
             if (showChips)
             {
-                PaintChips(chips, view.Zoom, ink);
+                PaintChips(chips, view.Zoom, ink, surface);
             }
 
             // The room the words actually get, in screen pixels: the marks band is chrome and sits
@@ -765,7 +1005,7 @@ public sealed class NodeVisual : ContentControl
 
             var innerWidth = Math.Max(20, (node.Width * view.Zoom) - (inset * 2));
 
-            var blocks = Kind == CanvasNodeKind.Text && Markdown.LooksLikeMarkdown(marks.Body);
+            var blocks = (Kind == CanvasNodeKind.Text || _entity is not null) && Markdown.LooksLikeMarkdown(marks.Body);
 
             // 手动拉高以后窗口必须说实话：整段现在放得下了，就回到第一行——"↑ 更多"亮着
             // 而下面全是空白，比句末三个点更糟（他 10-22 报的第四条）。放不下但底下露着
@@ -806,36 +1046,115 @@ public sealed class NodeVisual : ContentControl
             _label.Visibility = blocks ? Visibility.Collapsed : Visibility.Visible;
             _md.Visibility = blocks ? Visibility.Visible : Visibility.Collapsed;
 
+            // 有牌子时，多出来的那一行会被文本宿主继续画进牌子带（它不按行高裁字），
+            // 而底部渐隐只能停在牌子顶边——渐变带下面于是又露出半行实字（他 10-26 的截图）。
+            // 把正文裁在牌子顶边：渐隐的实色一端正好压在这条裁线上，下面一个像素都不漏。
+            // markdown 走 _md，也共用这条裁线；两条路各裁自己的宿主。
+            var textRowHeight = Math.Max(0, Height - (inset * 2) - headerScreen - tableScreen - band);
+
+            if (blocks)
+            {
+                _label.Clip = null;
+            }
+            else if (showChips && _hasMore)
+            {
+                _label.Clip = new RectangleGeometry
+                {
+                    Rect = new Windows.Foundation.Rect(0, 0, innerWidth, textRowHeight),
+                };
+            }
+            else
+            {
+                _label.Clip = null;
+            }
+
+            // 实体卡和表格卡的备注区天生是空的，空着不像"可以写"。所以在真正能输入的那块位置上
+            // 亮一句淡色的"双击键入备注"——它不吃命中（IsHitTestVisible=false），双击照旧落到格子上。
+            var hintWanted = !blocks && _entity is not null && body.Trim().Length == 0 && display.Suffix is null;
+
+            _noteHint.Visibility = hintWanted ? Visibility.Visible : Visibility.Collapsed;
+
+            if (hintWanted)
+            {
+                _noteHint.FontFamily = NoteStyling.NoteFont;
+                _noteHint.FontSize = _label.FontSize;
+                _noteHint.LineHeight = leading;
+                _noteHint.MaxWidth = innerWidth;
+                _noteHint.Foreground = new SolidColorBrush(NoteStyling.ToColor(Badge.Muted(NoteStyling.IsDark)));
+            }
+
             if (blocks)
             {
                 var lines = Markdown.Lines(marks.Body).Skip(_firstLine).ToList();
-                var count = MarkdownPaint.Count(type, view.Zoom, lines, roomText);
+                var inkBrush = new SolidColorBrush(ink);
+                var quoteBrush = new SolidColorBrush(NoteStyling.ToColor(Badge.Muted(NoteStyling.IsDark)));
+                var barBrush = new SolidColorBrush(
+                    NoteStyling.WithAlpha(Badge.LineColour(NoteStyling.IsDark), Badge.LineAlpha(NoteStyling.IsDark)));
 
-                _hasMore = lines.Count > count;
-                // 窗口走了第几行必须进这把钥匙：以前只按"画了几行"缓存，
-                // 于是滚完两行以后这里判定"没变"，屏幕上还是一模一样的那一屏字。
-                var key = $"{marks.Body}|{type.Size}|{view.Zoom:0.####}|{count}|{_firstLine}|{NoteStyling.IsDark}|{ink}";
+                // 按“这一宽度下实际换行后的高度”量，不再按源行数：一段长句会换好几行，
+                // 旧算法把它当一行，于是内容已经溢出还判“全放得下”——教程里没有渐隐就是这个。
+                var measureKey = $"{marks.Body}|{type.Size}|{view.Zoom:0.####}|{_firstLine}|{innerWidth:0.##}|{NoteStyling.IsDark}|{XamlRoot is null}";
 
-                if (key != _mdKey)
+                if (!string.Equals(measureKey, _mdMeasureKey, StringComparison.Ordinal))
+                {
+                    _mdMeasureKey = measureKey;
+                    var measured = MarkdownPaint.Measured(type, view.Zoom, lines, innerWidth, inkBrush, quoteBrush, barBrush, XamlRoot);
+                    _mdTotalHeight = measured.Total;
+                    _mdHeights = measured.Heights;
+
+                    // 还没挂进树时量不出字；先按源行估一个底线，挂上树后 key 会变、再量一次。
+                    if (_mdTotalHeight <= 0.5 && lines.Count > 0)
+                    {
+                        _mdHeights = lines
+                            .Select(line => (double)Math.Max(4, Math.Round(type.Leading * view.Zoom * line.Scale, MidpointRounding.AwayFromZero)))
+                            .ToList();
+                        _mdTotalHeight = _mdHeights.Sum();
+                    }
+                }
+
+                var fullHeight = 0.0;
+                var fullCount = 0;
+
+                foreach (var lineHeight in _mdHeights)
+                {
+                    if (fullHeight + lineHeight > roomText + 0.5)
+                    {
+                        break;
+                    }
+
+                    fullHeight += lineHeight;
+                    fullCount++;
+                }
+
+                _hasMore = _mdTotalHeight > roomText + 0.5;
+                _visibleLines = Math.Max(1, fullCount);
+                _belowFadeTop = inset + headerScreen + tableScreen + fullHeight;
+
+                // 窗口走了第几行必须进这把钥匙：滚完两行以后不能还画上一屏字。
+                var key = $"{measureKey}|{ink}";
+
+                if (!string.Equals(key, _mdKey, StringComparison.Ordinal))
                 {
                     _mdKey = key;
                     _md.Children.Clear();
 
-                    foreach (var element in MarkdownPaint.Lines(
-                        type,
-                        view.Zoom,
-                        lines,
-                        new SolidColorBrush(ink),
-                        new SolidColorBrush(NoteStyling.ToColor(Badge.Muted(NoteStyling.IsDark))),
-                        new SolidColorBrush(NoteStyling.WithAlpha(Badge.LineColour(NoteStyling.IsDark), Badge.LineAlpha(NoteStyling.IsDark))),
-                        roomText))
+                    foreach (var element in MarkdownPaint.PaintAll(type, view.Zoom, lines, inkBrush, quoteBrush, barBrush))
                     {
                         _md.Children.Add(element);
                     }
                 }
+
+                _md.Clip = showChips && _hasMore
+                    ? new RectangleGeometry { Rect = new Windows.Foundation.Rect(0, 0, innerWidth, textRowHeight) }
+                    : null;
             }
             else
             {
+                // 渐隐从最后一条完整行的底边开始：行距再大，这条带子也一直盖到卡底，
+                // 不会只盖住空白、让下面的字看起来“没有渐隐”。
+                _belowFadeTop = inset + headerScreen + tableScreen + (_visibleLines * leading);
+                _md.Clip = null;
+
                 // 还有内容时多放一行在卡底外面：卡自己会裁掉大半行，渐隐再压上去，
                 // 屏幕上就露出"半行正在淡出"，而不是一行都不剩、只剩一片空白。
                 _label.MaxLines = _hasMore ? _visibleLines + 1 : _visibleLines;
@@ -878,7 +1197,7 @@ public sealed class NodeVisual : ContentControl
             }
         }
 
-        UpdateOverflowFades(node, view);
+        UpdateOverflowFades(node, view, headerScreen + tableScreen);
 
         // Update 每拍都把 _frame 的描边按默认虚线铺回去；警示态（组钮拖那一拍）要压过它。
         ApplyGroupAlert();
@@ -892,8 +1211,9 @@ public sealed class NodeVisual : ContentControl
     {
         var zoom = view.Zoom;
 
-        _label.FontSize = Math.Max(10, type.Size * zoom);
-        _label.LineHeight = Math.Max(12, type.Leading * zoom);
+        // 组名也是正文的一部分：和正文同一条缩放尺，不能在低倍时被 10px 地板撑大。
+        _label.FontSize = Math.Max(1, type.Size * zoom);
+        _label.LineHeight = Math.Max(1, type.Leading * zoom);
 
         var text = DisplayText(node);
 
@@ -964,9 +1284,9 @@ public sealed class NodeVisual : ContentControl
     /// 内容画不下时不再挂"更多 ↓"角标（他嫌突兀），改成在卡片上/下边缘压一道"表面色↔透明"的
     /// 渐隐遮罩：底下还有行就把最后一行淡进卡底；往上翻过则顶部淡一道。无字，靠视觉暗示。
     /// </summary>
-    private void UpdateOverflowFades(CanvasNode node, BoardViewState view)
+    private void UpdateOverflowFades(CanvasNode node, BoardViewState view, double headerScreen)
     {
-        var textCard = Kind == CanvasNodeKind.Text;
+        var textCard = ShowText && Kind != CanvasNodeKind.Group;
         var shown = view.Zoom >= 0.5;
         var above = textCard && shown && _firstLine > 0;
         var below = textCard && shown && _hasMore;
@@ -980,41 +1300,217 @@ public sealed class NodeVisual : ContentControl
         }
 
         var surface = NoteStyling.SurfaceFor(node.Color);
-        var solid = Color.FromArgb(255, surface.R, surface.G, surface.B);
-        var clear = Color.FromArgb(0, surface.R, surface.G, surface.B);
 
         // 渐隐贴着**正文区**的上下边，而不是卡片外沿：卡片还有一圈内距，压在外沿上的
         // 那道只会盖住空白，文字一点都没被淡到（他 10-25 的第二张截图就是这一格）。
         var type = NoteTypography.For(view.FontSizeFor(node.Id));
         var inset = Math.Clamp(type.Padding * view.Zoom, 0, 60);
+        var leading = Math.Max(4, type.Leading * view.Zoom);
 
-        // 从"最后一个完整行所在的顶边"一直盖到卡片外沿：内距那段也算进去，否则文字被允许
-        // 溢进内距时，渐隐会在内距上沿就结束，下面又露出一截实字（硬切边）。
-        var height = Math.Clamp(inset + (type.Leading * view.Zoom), 12, 80);
+        // 带子少于一整行高就等于没开：它整条躺在行与行的空隙里，一个字都不吃
+        // （他 10-26 第一条说的"明明有渐隐但是看似没有生效"）。
+        var aboveHeight = Math.Min(Math.Max(inset + leading, leading), Math.Max(8, Height - headerScreen));
 
-        _fadeAbove.Margin = default;
-        _fadeBelow.Margin = default;
+        // 牌子那一排（标签／日期／序号）是常驻 chrome，**渐隐绝不能吃在它们身上**。
+        // 以前这道遮罩永远贴着卡片外沿：有牌子时正文被裁的那条边在它上面一截，于是
+        // 该淡的地方硬切、牌子反倒被抹掉下沿（他 10-25 的 @n7：两个读数同一个根因）。
+        // 有牌子时：正文区的下沿在"卡片外沿－下内距－牌子带"那里（有牌子时正文借不到下内距，
+        // 见上面 Padding 那一发），所以把遮罩从底沿抬起 内距＋牌子带 这么多。
+        var chips = _chips.Visibility == Visibility.Visible ? NoteType.ChipBand(view.Zoom) : 0;
+        var bottomMargin = chips > 0 ? inset + chips : 0;
+        var fadeBottom = Math.Max(0, Height - bottomMargin);
+
+        // 带子的上沿抬到"最后一行的行顶"：整行墨都走在渐变里——行顶几乎不盖，到裁线全盖。
+        // 只按"最后一行底边到卡底"那点剩位算，正好排满整行的卡片会得到一条比行距还窄的带子，
+        // 它整条躺在字底下的空隙里，一个字都不吃（他 10-26 第一条的"看似没有生效"）。
+        _belowFadeLeading = leading;
+        var belowTop = Math.Max(0, _belowFadeTop - leading);
+        var belowHeight = Math.Clamp(
+            Math.Max(fadeBottom - belowTop, leading),
+            8,
+            Math.Max(8, fadeBottom));
+
+        _fadeAbove.Margin = new Thickness(0, headerScreen, 0, 0);
+        _fadeBelow.Margin = new Thickness(0, 0, 0, bottomMargin);
+
+        var paper = new Rgb(surface.R, surface.G, surface.B);
 
         if (above)
         {
-            ApplyFade(_fadeAbove, height, solid, clear);
+            ApplyFade(_fadeAbove, aboveHeight, headerScreen, Height, paper, solidAtBottom: false);
         }
 
         if (below)
         {
-            ApplyFade(_fadeBelow, height, clear, solid);
+            ApplyFade(_fadeBelow, belowHeight, fadeBottom - belowHeight, Height, paper, solidAtBottom: true);
         }
     }
 
-    private static void ApplyFade(Microsoft.UI.Xaml.Shapes.Rectangle fade, double height, Color from, Color to)
+    /// <summary>自检那把尺：底部渐隐这条带子的形状，两个数都按行距计——
+    /// ① 带高／行距：小于 1 就是这条带子比行距还窄；
+    /// ② 上沿抬到最后一行行盒底边**以上**多少：0 表示它整条躺在字底下的空隙里，
+    /// 一个字都不吃，屏幕上就是"明明有渐隐却像没生效"（他 10-26 的第一条）。
+    /// 读的是排版完的 ActualHeight，不是我们请求的那个数：请求对了而没排上去同样要红。</summary>
+    internal (double HeightInLines, double OverLastLineInLines) OverflowFadeBelowShape
+    {
+        get
+        {
+            if (_fadeBelow.Visibility != Visibility.Visible || _belowFadeLeading <= 0)
+            {
+                return (0, 0);
+            }
+
+            var top = Height - _fadeBelow.Margin.Bottom - _fadeBelow.ActualHeight;
+
+            return (_fadeBelow.ActualHeight / _belowFadeLeading, (_belowFadeTop - top) / _belowFadeLeading);
+        }
+    }
+
+    /// <summary>自检那把尺：底部渐隐每一停的**颜色**必须等于卡面纸在同一高度的实际颜色。
+    /// 这条在旧写法（拿卡面本色平铺）上是红的——那正是"放大看颜色会分层"的根因。</summary>
+    internal bool OverflowFadeMatchesPaper
+    {
+        get
+        {
+            if (_fadeBelow.Visibility != Visibility.Visible
+                || _fadeBelow.Fill is not LinearGradientBrush brush
+                || brush.GradientStops.Count == 0
+                || _fadeBelow.ActualHeight <= 0)
+            {
+                return false;
+            }
+
+            var paper = new Rgb(_paperKey.R, _paperKey.G, _paperKey.B);
+
+            // 带子的上沿在卡片坐标里的哪儿：它贴着底沿（抬起 bottomMargin），高就是排版出来的那一格。
+            var top = Height - _fadeBelow.Margin.Bottom - _fadeBelow.ActualHeight;
+
+            foreach (var stop in brush.GradientStops)
+            {
+                var y = (top + (stop.Offset * _fadeBelow.ActualHeight)) / Math.Max(1, Height);
+                var want = NoteSurface.PaperAt(paper, y, NoteStyling.IsDark);
+
+                if (stop.Color.R != want.R || stop.Color.G != want.G || stop.Color.B != want.B)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>自检那把尺：底部渐隐与牌子那一排不许有交集（@n7 的根因就是它盖在牌子上）。</summary>
+    internal bool FadeClearsChips()
+    {
+        if (_fadeBelow.Visibility != Visibility.Visible || _chips.Visibility != Visibility.Visible)
+        {
+            return true;
+        }
+
+        if (_fadeBelow.ActualWidth <= 0 || _chips.ActualHeight <= 0)
+        {
+            // 量不到就是这一枚根本没排过版——不许把它当成"通过"。
+            return false;
+        }
+
+        var fade = _fadeBelow.TransformToVisual(this).TransformBounds(
+            new Windows.Foundation.Rect(0, 0, _fadeBelow.ActualWidth, _fadeBelow.ActualHeight));
+        var chips = _chips.TransformToVisual(this).TransformBounds(
+            new Windows.Foundation.Rect(0, 0, _chips.ActualWidth, _chips.ActualHeight));
+
+        return fade.Bottom <= chips.Top + 0.5;
+    }
+
+    /// <summary>自检那把尺之二：内容被压小时，底部那道渐隐必须真的亮着（"硬切边、没有渐隐"就是它没亮）。</summary>
+    internal bool PaintsOverflowBelow => _fadeBelow.Visibility == Visibility.Visible && _fadeBelow.ActualHeight > 8;
+
+    /// <summary>自检那把尺之三：有牌子时正文必须裁在牌子顶边。
+    /// 不裁的话多出来的半行会继续画进牌子带，渐隐带下面又露出一截实字（他 10-26 的截图）。</summary>
+    internal bool ClipsOverflowAtChips()
+    {
+        if (_fadeBelow.Visibility != Visibility.Visible || _chips.Visibility != Visibility.Visible)
+        {
+            return true;
+        }
+
+        FrameworkElement text = _md.Visibility == Visibility.Visible ? _md : _label;
+
+        if (text.Visibility != Visibility.Visible)
+        {
+            return true;
+        }
+
+        if (text.Clip is not RectangleGeometry clip
+            || text.ActualWidth <= 0 || text.ActualHeight <= 0 || _chips.ActualHeight <= 0)
+        {
+            return false;
+        }
+
+        var clipBounds = text.TransformToVisual(this).TransformBounds(clip.Rect);
+        var chipsBounds = _chips.TransformToVisual(this).TransformBounds(
+            new Windows.Foundation.Rect(0, 0, _chips.ActualWidth, _chips.ActualHeight));
+
+        return clipBounds.Bottom <= chipsBounds.Top + 0.5 && clipBounds.Height >= Math.Max(8, _label.LineHeight) - 0.5;
+    }
+
+    /// <summary>
+    /// Paints one overflow fade band. Its colour is not a flat card colour but <b>the card's own
+    /// paper at that exact height</b>, and only its alpha moves.
+    /// </summary>
+    /// <remarks>
+    /// The card is filled with a three-stop ramp (white over at the top edge, the chosen colour
+    /// untouched at 42%, black over at the bottom). A band painted with the flat colour therefore
+    /// differs from the paper it lies on everywhere except where the two happen to meet: the strip
+    /// reads as a second sheet laid over the first, and the eye catches the step at both ends of
+    /// the band. That is the "放大看颜色会分层" report of 2026-10-26, and it is why the three earlier
+    /// fixes — band height, band position, the curve between the stops — could not land: none of
+    /// them touched which colour was being laid down. Sampling the same ramp makes the band the
+    /// paper, so there is nothing left to see except the words dissolving.
+    /// </remarks>
+    private static void ApplyFade(
+        Microsoft.UI.Xaml.Shapes.Rectangle fade,
+        double height,
+        double topInCard,
+        double cardHeight,
+        Rgb paper,
+        bool solidAtBottom)
     {
         fade.Height = height;
 
-        if (fade.Fill is LinearGradientBrush brush)
+        if (fade.Fill is not LinearGradientBrush brush || cardHeight <= 0)
         {
-            brush.GradientStops.Clear();
-            brush.GradientStops.Add(new GradientStop { Color = from, Offset = 0 });
-            brush.GradientStops.Add(new GradientStop { Color = to, Offset = 1 });
+            return;
+        }
+
+        // 五个停点走 smoothstep（3t²−2t³）：线性那一把在带子的第一个像素就开始吃字，
+        // 接缝就露在那儿；两端缓开缓合，才看不出这道带子从哪儿开始。
+        var offsets = new List<double> { 0, 0.25, 0.5, 0.75, 1 };
+
+        // 纸自己的折点（42% 那一停）要是落进带子里，必须原样进停点：不然带子内部会把这条折线
+        // 拉成一段直线，在带子中间又分出一层来。
+        var kink = ((cardHeight * NoteSurface.PaperMiddleOffset) - topInCard) / height;
+
+        if (kink is > 0 and < 1)
+        {
+            offsets.Add(kink);
+        }
+
+        offsets.Sort();
+
+        brush.GradientStops.Clear();
+
+        foreach (var t in offsets)
+        {
+            var rgb = NoteSurface.PaperAt(paper, (topInCard + (height * t)) / cardHeight, NoteStyling.IsDark);
+            var eased = t * t * (3 - (2 * t));
+            var alpha = solidAtBottom ? eased : 1 - eased;
+
+            brush.GradientStops.Add(new GradientStop
+            {
+                Color = Color.FromArgb((byte)Math.Round(alpha * 255), rgb.R, rgb.G, rgb.B),
+                Offset = t,
+            });
         }
     }
 
@@ -1152,9 +1648,9 @@ public sealed class NodeVisual : ContentControl
     /// a pan re-runs <c>Update</c> for every card, and re-making a chip mid-hover would hide the ×
     /// the delete depends on.
     /// </summary>
-    private void PaintChips(IReadOnlyList<NoteMarks.Mark> chips, double zoom, Color ink)
+    private void PaintChips(IReadOnlyList<NoteMarks.Mark> chips, double zoom, Color ink, Color surface)
     {
-        var key = string.Join("/", chips.Select(chip => $"{chip.Source}={chip.Label}"));
+        var key = $"{zoom:0.####}|{surface}|{string.Join("/", chips.Select(chip => $"{chip.Source}={chip.Label}"))}";
 
         if (key == _chipKey)
         {
@@ -1175,6 +1671,7 @@ public sealed class NodeVisual : ContentControl
                 chip,
                 NoteType.ChipFont(zoom),
                 ink,
+                surface,
                 () => RemoveMark?.Invoke(NodeId, source),
                 () => EditMark?.Invoke(NodeId, source)));
         }

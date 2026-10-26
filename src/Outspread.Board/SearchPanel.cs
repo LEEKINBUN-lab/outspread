@@ -404,10 +404,21 @@ public sealed partial class MainWindow
                 problems.Add(
                     $"自检溢出处: 渐隐亮着但只画了 {card.RenderedMaxLines} 行（可见 {state.Visible}）——渐隐压在空白上");
             }
+            else if (card.OverflowFadeBelowShape is not (>= 0.95, >= 0.45))
+            {
+                var shape = card.OverflowFadeBelowShape;
+
+                problems.Add(
+                    $"自检溢出处: 渐隐带高 {shape.HeightInLines:0.###} 行、抬进最后一行 {shape.OverLastLineInLines:0.###} 行——"
+                    + "没吃进最后一行的字，看着像没生效");
+            }
             else
             {
+                var shape = card.OverflowFadeBelowShape;
+
                 Diagnostics.Write(
-                    $"selftest 溢出处: 68 高便签可见 {state.Visible} 行、多画 {card.RenderedMaxLines - state.Visible} 行半行，底部渐隐亮");
+                    $"selftest 溢出处: 68 高便签可见 {state.Visible} 行、多画 {card.RenderedMaxLines - state.Visible} 行半行，"
+                    + $"底部渐隐高 {shape.HeightInLines:0.###} 行、抬进最后一行 {shape.OverLastLineInLines:0.###} 行");
             }
         }
         finally

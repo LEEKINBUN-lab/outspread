@@ -173,8 +173,9 @@ public class ChromeTests
         Assert.True(NoteType.ChipDotPx > 0 && NoteType.ChipDotPx < NoteType.ChipBandPx);
 
         // 放大时长，缩小不缩：缩到 40% 还跟着走的牌子就读不出来了，读不出来就等于没有。
-        Assert.Equal(12, NoteType.ChipFont(0.4));
-        Assert.Equal(22, NoteType.ChipBand(0.4));
+        // 牌子和正文同一条缩放尺：缩小时一起变小（旧版在 <100% 时钉在屏幕 12/22）。
+        Assert.Equal(4.8, NoteType.ChipFont(0.4), 3);
+        Assert.Equal(8.8, NoteType.ChipBand(0.4), 3);
         Assert.Equal(24, NoteType.ChipFont(2));
         Assert.Equal(44, NoteType.ChipBand(2));
 

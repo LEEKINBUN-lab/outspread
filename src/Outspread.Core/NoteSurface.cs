@@ -33,6 +33,32 @@ public static class NoteSurface
             (byte)Math.Round((front.G * alpha) + (back.G * (1 - alpha))),
             (byte)Math.Round((front.B * alpha) + (back.B * (1 - alpha))));
 
+    /// <summary>
+    /// The card's own paper colour at one height: <paramref name="y"/> is 0 at the card's top edge
+    /// and 1 at its bottom, and the ramp is the one <see cref="PaperLight"/> describes.
+    /// </summary>
+    /// <remarks>
+    /// This is the single definition of "what colour is the card at this line" — the card's fill and
+    /// anything painted on top of it (the overflow fade) have to read it from here, or the two
+    /// disagree by a few levels and the overlay reads as a second sheet of paper laid on the first.
+    /// Interpolating the overlay's <i>alpha</i> is the same thing as interpolating the composited
+    /// colour, because <see cref="Over"/> is affine in it — so this reproduces the three-stop brush
+    /// exactly, kink at 42% included.
+    /// </remarks>
+    public static Rgb PaperAt(Rgb surface, double y, bool dark)
+    {
+        var (top, bottom) = PaperLight(dark);
+        var k = Math.Clamp(y, 0, 1);
+
+        // 1 - PaperMiddleOffset is exact for a double at 0.42, but guard the divide anyway: a
+        // future token edit that parks the middle stop on the bottom edge must not yield NaN.
+        var span = 1 - PaperMiddleOffset;
+
+        return k <= PaperMiddleOffset
+            ? Over(surface, new Rgb(255, 255, 255), top * (1 - (k / PaperMiddleOffset)))
+            : Over(surface, new Rgb(0, 0, 0), span <= 0 ? 0 : bottom * ((k - PaperMiddleOffset) / span));
+    }
+
     /// <summary>Below this zoom the shadow is dropped and one bottom line is drawn instead.</summary>
     /// <remarks>
     /// tldraw's own level-of-detail budget: a blurred edge costs a redraw per frame, and at 25%
@@ -299,9 +325,9 @@ public readonly record struct NoteType(double Size, double Leading, double Paddi
     /// The band the chip row takes, at this zoom. The fit-measure and the paint both read it, so a
     /// card can never be sized without the row it draws — the old defect class.
     /// </summary>
-    public static double ChipBand(double zoom) => ChipBandPx * Math.Max(1, zoom);
+    public static double ChipBand(double zoom) => ChipBandPx * Math.Max(0.05, zoom);
 
-    public static double ChipFont(double zoom) => ChipFontPx * Math.Max(1, zoom);
+    public static double ChipFont(double zoom) => ChipFontPx * Math.Max(0.05, zoom);
 
     /// <summary>
     /// 牌子的形状（2026-10-12 他打回：「一个方框看起来很廉价」，并要我先调研）。
@@ -329,6 +355,10 @@ public readonly record struct NoteType(double Size, double Leading, double Paddi
     public const double ChipFillAlpha = 0.08;
     public const double ChipHoverAlpha = 0.16;
     public const double ChipInkAlpha = 0.82;
+
+    /// <summary>× 那一小块命中的宽（含它自己的左右内距）。它**不参与牌宽**：牌子宽度＝字的自然宽，
+    /// 悬停时这块压在牌尾上（他 10-26 的第二条：占位让每枚都比字宽，一排全是空档）。</summary>
+    public const double ChipCrossHitPx = 16;
 
     /// <summary>胶囊：半径＝带高的一半（Primer 的 2em、Carbon 的 16px 都是这个意思）。</summary>
     public static double ChipRadiusPx => ChipBandPx / 2;

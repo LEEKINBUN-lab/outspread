@@ -26,6 +26,7 @@ internal static class ChromeStyling
     public static SolidColorBrush MarqueeFill { get; private set; } = null!;
     public static SolidColorBrush Snap { get; private set; } = null!;
     public static SolidColorBrush PanelFill { get; private set; } = null!;
+    public static SolidColorBrush PanelSolid { get; private set; } = null!;
     public static SolidColorBrush PanelLine { get; private set; } = null!;
 
     public static void Ensure(bool dark)
@@ -47,6 +48,9 @@ internal static class ChromeStyling
         PanelFill = Tinted(Chrome.PanelFill(dark), Chrome.PanelAlpha);
         var floor = Chrome.PanelFill(dark);
         var opaque = Color.FromArgb(255, floor.R, floor.G, floor.B);
+
+        // 贴在板面上的数据表不用浮层那档半透明：94% 的白底下会透出便签文字，行与行之间全是影子。
+        PanelSolid = new SolidColorBrush(opaque);
 
         // WinUI 3 的 AcrylicBrush 没有 BackgroundSource（那是 UWP 的口子），所以这里只能给出
         // 色与不透明度 + 一个兜底色；到底有没有真的模糊，靠两次出图对比，不靠属性名。
@@ -162,21 +166,66 @@ internal static class ChromeStyling
     /// <summary>
     /// 卡片/编辑器上的一枚标记牌。点牌身＝编辑这枚标记，只有右侧的 × 才删它——他不是要
     /// "点哪儿都删"：× 显示出来却点不到，等于没有。
+    /// <para>
+    /// 牌宽＝那几个字的自然宽，× 不占位（<paramref name="surface"/> 只用来给 × 算一块盖得住字的底）。
+    /// </para>
     /// </summary>
-    public static Border Chip(NoteMarks.Mark mark, double size, Color ink, Action onDelete, Action onEdit)
+    public static Border Chip(NoteMarks.Mark mark, double size, Color ink, Color surface, Action onDelete, Action onEdit)
     {
         var scale = size / NoteType.ChipFontPx;
         var self = new Rgb(ink.R, ink.G, ink.B);
-        var body = NoteStyling.WithAlpha(self, NoteType.ChipInkAlpha);
-        var rest = NoteStyling.WithAlpha(self, mark.IsDate ? 0 : NoteType.ChipFillAlpha);
-        var hover = NoteStyling.WithAlpha(self, NoteType.ChipHoverAlpha);
+
+        // 完成状态那一枚不是"又一张标签"：绿＝已完成、红＝未完成，配勾／叉，颜色是满的。
+        // 旁的那些标签仍是同一族的灰底墨字——他 10-26 报的"颜色一样、看不出来"就是这一格。
+        // 平台自己的成功/错误色（generic.xaml 里 SystemFillColorSuccess/Critical 那一对）：
+        // **淡实底 + 深色字与图标**。满色底压在浅卡上太重（他 10-26 报"颜色太深"），
+        // 而淡底不是半透明——它是实色，只是浅；对比度 4.79:1 / 4.84:1，都过 AA。
+        var dark = NoteStyling.IsDark;
+
+        var stateColour = mark.Done switch
+        {
+            true => dark ? new Rgb(0x6C, 0xCB, 0x5F) : new Rgb(0x0F, 0x7B, 0x0F),
+            false => dark ? new Rgb(0xFF, 0x99, 0xA4) : new Rgb(0xC4, 0x2B, 0x1C),
+            null => self,
+        };
+
+        var stateFill = mark.Done switch
+        {
+            true => dark ? new Rgb(0x39, 0x3D, 0x1B) : new Rgb(0xDF, 0xF6, 0xDD),
+            false => dark ? new Rgb(0x44, 0x27, 0x26) : new Rgb(0xFD, 0xE7, 0xE9),
+            null => self,
+        };
+
+        var tinted = mark.Done is not null;
+
+        // × 压在牌尾的那块底：悬停底色压在卡面**之后**的实色。用实色而不是半透明，是因为它的活
+        // 就是把底下那几个字盖掉——半压上去只会变成"× 叠在字上"糊成一团。
+        var crossShroud = OpaqueOver(surface, NoteStyling.ToColor(stateFill), tinted ? 1 : NoteType.ChipHoverAlpha);
+
+        var body = tinted ? NoteStyling.ToColor(stateColour) : NoteStyling.WithAlpha(self, NoteType.ChipInkAlpha);
+        var rest = tinted
+            ? NoteStyling.ToColor(stateFill)
+            : NoteStyling.WithAlpha(stateColour, mark.IsDate ? 0 : NoteType.ChipFillAlpha);
+        var hover = tinted ? NoteStyling.ToColor(stateFill) : NoteStyling.WithAlpha(stateColour, NoteType.ChipHoverAlpha);
 
         var inner = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = NoteType.ChipGapPx * scale,
             VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            // 左右内距挂在这一排字上，不挂整枚牌：× 那一块要能顶到胶囊的右沿。
+            Padding = new Thickness(NoteType.ChipPadX * scale, 0, NoteType.ChipPadX * scale, 0),
         };
+
+        if (mark.Done is { } finished)
+        {
+            // 形状同样来自官方库（勾／叉的 20_regular），不自绘。
+            if (FluentIcons.Glyph(finished ? FluentIcons.CheckmarkFilled : FluentIcons.DismissFilled, 14 * scale, body) is { } glyph)
+            {
+                inner.Children.Add(glyph);
+            }
+        }
 
         if (mark.IsDate)
         {
@@ -210,28 +259,42 @@ internal static class ChromeStyling
             FontFamily = NoteStyling.NoteFont,
             FontSize = size,
             Foreground = new SolidColorBrush(body),
+            VerticalAlignment = VerticalAlignment.Center,
         };
 
-        // × 自己一块命中区：点它才删，点牌身是编辑；不悬停时整块不接鼠标。
+        // × 自己一块命中区：点它才删，点牌身是编辑。
+        // 它**不占牌宽**（10-26 他点的第二格）：牌子宽度只有那几个字，× 悬停时压在牌子右端
+        // 那一小块上——不常驻，所以不挡正常浏览；不占位，所以一排牌子没有空档。
+        // 它不"长出来"：占位与不占位之间不切换宽度，切的只有透明度。
         var crossHost = new Border
         {
             Child = cross,
-            Padding = new Thickness(4 * scale, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            Visibility = Visibility.Collapsed,
+            Background = new SolidColorBrush(crossShroud),
+            CornerRadius = new CornerRadius(0, NoteType.ChipRadiusPx * scale, NoteType.ChipRadiusPx * scale, 0),
+            Padding = new Thickness(5 * scale, 0, 4 * scale, 0),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Opacity = 0,
+            IsHitTestVisible = false,
         };
 
         inner.Children.Add(label);
-        inner.Children.Add(crossHost);
+
+        // 牌面是一层 Grid：字在左，× 盖在右端。两枚互不计入对方的宽度。
+        var face = new Grid();
+
+        face.Children.Add(inner);
+        face.Children.Add(crossHost);
 
         var border = new Border
         {
-            Child = inner,
+            Child = face,
             BorderThickness = new Thickness(0),
-            Padding = new Thickness(NoteType.ChipPadX * scale, 0, NoteType.ChipPadX * scale, 0),
             Background = new SolidColorBrush(rest),
             CornerRadius = new CornerRadius(NoteType.ChipRadiusPx * scale),
             Height = NoteType.ChipBandPx * scale,
+            // 至少留两个字那么宽：不然"n7"这种短牌一悬停就被 × 整枚盖没。
+            MinWidth = (NoteType.ChipPadX * 2 + NoteType.ChipCrossHitPx) * scale,
         };
 
         ToolTipService.SetToolTip(border, mark.IsDate ? "点一下＝改这个日期；点 × 去掉" : "点一下＝改这个标签；点 × 去掉");
@@ -239,12 +302,14 @@ internal static class ChromeStyling
         border.PointerEntered += (_, _) =>
         {
             border.Background = new SolidColorBrush(hover);
-            crossHost.Visibility = Visibility.Visible;
+            crossHost.Opacity = 1;
+            crossHost.IsHitTestVisible = true;
         };
         border.PointerExited += (_, _) =>
         {
             border.Background = new SolidColorBrush(rest);
-            crossHost.Visibility = Visibility.Collapsed;
+            crossHost.Opacity = 0;
+            crossHost.IsHitTestVisible = false;
         };
         border.PointerPressed += (_, args) =>
         {
@@ -263,6 +328,19 @@ internal static class ChromeStyling
         };
 
         return border;
+    }
+
+    /// <summary>半透明色压在实色面上以后的实色。× 那一小块要有块盖得住字的底，而这底必须仍是
+    /// 牌子那一档颜色——直接把悬停色画成不透明会比牌子深一块，看着像牌尾贴了个补丁。</summary>
+    private static Color OpaqueOver(Color surface, Color overlay, double alpha)
+    {
+        var t = Math.Clamp(alpha, 0, 1);
+
+        return Color.FromArgb(
+            255,
+            (byte)Math.Round(Math.Clamp(surface.R + ((long)overlay.R - surface.R) * t, 0, 255)),
+            (byte)Math.Round(Math.Clamp(surface.G + ((long)overlay.G - surface.G) * t, 0, 255)),
+            (byte)Math.Round(Math.Clamp(surface.B + ((long)overlay.B - surface.B) * t, 0, 255)));
     }
 
     /// <summary>

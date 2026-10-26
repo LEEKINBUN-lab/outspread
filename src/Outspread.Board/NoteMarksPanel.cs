@@ -68,6 +68,14 @@ public sealed partial class MainWindow
             return false;
         }
 
+        // 改表格里那一格：回车＝收下这一格（单行输入框，接着换行没有意义）。
+        if (_editingCell is not null)
+        {
+            CloseEditor(commit: true);
+
+            return true;
+        }
+
         if (KeyDownIs(Windows.System.VirtualKey.Control))
         {
             CloseEditor(commit: true);
@@ -228,6 +236,30 @@ public sealed partial class MainWindow
             }
         }
 
+        // 完成那一档（@b1）：两行，不是三行——"没写 @b"就是还没做完，所以它归进「还没做完」那一档，
+        // 而不是单开一行"无标记"。三档会把人教成"要先写 @b0 才看得见"，那是语法泄漏。
+        var doneCount = notes.Count(node => Tags.Read(node.Text).Done == true);
+        var openCount = notes.Count - doneCount;
+
+        rows.Add(PanelKit.Line("完成"));
+
+        if (doneCount == 0 && _view.DoneFilter is null)
+        {
+            rows.Add(PanelKit.Line("板上还没有完成标记（写 @b1 或点牌子切换）"));
+        }
+        else
+        {
+            rows.Add(PanelKit.Row(
+                $"{(_view.DoneFilter == true ? "✓ " : string.Empty)}已完成",
+                doneCount.ToString(),
+                () => SetDoneFilter(true)));
+
+            rows.Add(PanelKit.Row(
+                $"{(_view.DoneFilter == false ? "✓ " : string.Empty)}还没做完",
+                openCount.ToString(),
+                () => SetDoneFilter(false)));
+        }
+
         var tally = NoteMarks.Tally(notes.Select(node => node.Text).ToList());
 
         rows.Add(PanelKit.Line("标签"));
@@ -285,18 +317,28 @@ public sealed partial class MainWindow
 
         var notes = _document.Nodes.Where(node => node.Kind != CanvasNodeKind.Group).ToList();
 
-        var shown = notes.Count(node => NoteMarks.Shows(
-            NoteMarks.StateOf(node.Text, _view.Today),
-            Tags.Of(node.Text),
-            _view.TagFilter,
-            _view.DueFilter));
+        var shown = notes.Count(node =>
+        {
+            var marks = Tags.Read(node.Text);
+
+            return NoteMarks.Shows(NoteMarks.StateOf(marks, _view.Today), marks.Tags, marks.Done, _view.TagFilter, _view.DueFilter, _view.DoneFilter);
+        });
 
         // 内插里不放条件式：{ } 是属性模式的记号，编译器会先把它当成插补的结束符。
-        var what = _view.TagFilter is { Length: > 0 } tag
-            ? $"只看 {tag}"
-            : _view.DueFilter is { } state
-                ? $"只看{DueLabel(state)}的便签"
-                : "没有筛选";
+        string what = "没有筛选";
+
+        if (_view.TagFilter is { Length: > 0 } tag)
+        {
+            what = $"只看 {tag}";
+        }
+        else if (_view.DueFilter is { } state)
+        {
+            what = $"只看{DueLabel(state)}的便签";
+        }
+        else if (_view.DoneFilter is { } done)
+        {
+            what = done ? "只看已完成的便签" : "只看还没做完的便签";
+        }
 
         // 折进组里的那几格必须有一句，否则筛选看起来像删了便签。框上那行标签会被卡片盖住
         // （框贴着成员收，没给标题留边），所以这句话由这条一直在屏幕上的横幅来说。
@@ -352,11 +394,50 @@ public sealed partial class MainWindow
             return;
         }
 
+        // 「@b」是一枚开关，不是一枚可改写的值：点一下就在 0↔1 之间切换，不进编辑态
+        // （他 10-25 补的 @n2：完成标签用户也要可以点，不需要像其他标签那样点击修改）。
+        if (token.StartsWith("@b", StringComparison.OrdinalIgnoreCase))
+        {
+            ToggleDoneFrom(nodeId, token);
+            return;
+        }
+
         BeginEdit(nodeId);
 
         // 从牌子进来的这一发是"只改这枚标记"：收下它以后回车就收笔，不再停在新便签的编辑态。
         _markEditOnly = true;
         BeginMarkEdit(token);
+    }
+
+    /// <summary>点「已完成／未完成」那枚牌子：把正文里的 <c>@b0</c>／<c>@b1</c> 换过来。
+    /// 走的仍是"改文档"那一扇门——一步可撤销、会存盘，不是只翻一个视图状态。</summary>
+    private void ToggleDoneFrom(string nodeId, string token)
+    {
+        if (NodeOf(nodeId) is not { } node || node.Kind != CanvasNodeKind.Text)
+        {
+            return;
+        }
+
+        var next = !(Tags.Read(node.Text).Done ?? false);
+        var written = Tags.SetDone(node.Text, next);
+
+        if (string.Equals(written, node.Text, StringComparison.Ordinal))
+        {
+            // 换不掉却说换了，比不换更糟。
+            Say($"正文中未找到“{token}”，未作修改");
+            return;
+        }
+
+        BeginGesture(next ? "标为已完成" : "标为未完成");
+
+        node.Text = written;
+        FitNoteHeight(node);
+
+        EndGesture();
+        Rebuild();
+        SaveSoon();
+
+        Say(next ? "已标为已完成 · 可按 Ctrl＋Z 撤销" : "已标为未完成 · 可按 Ctrl＋Z 撤销");
     }
 
     /// <summary>
@@ -416,6 +497,9 @@ public sealed partial class MainWindow
 
         _editorChips.Children.Clear();
 
+        // × 那块盖字的底要按**这张卡自己的面色**算，否则在彩色卡上它会透出底下那几个字的影子。
+        var editingSurface = NoteStyling.SurfaceFor(_document.Nodes.FirstOrDefault(node => node.Id == _editingId)?.Color);
+
         foreach (var chip in NoteMarks.Chips(marks, _view.Today))
         {
             var source = chip.Source;
@@ -424,6 +508,7 @@ public sealed partial class MainWindow
                 chip,
                 size,
                 NoteStyling.InkFor(null, NoteStyling.SurfaceFor(null)),
+                editingSurface,
                 () =>
                 {
                     _editorProps = Tags.Without(_editorProps, source);
@@ -521,6 +606,7 @@ public sealed partial class MainWindow
     {
         _view.TagFilter = null;
         _view.DueFilter = null;
+        _view.DoneFilter = null;
 
         Rebuild();
     }
@@ -531,9 +617,12 @@ public sealed partial class MainWindow
     /// </summary>
     private void SelfTestMarkChipEdits(List<string> problems)
     {
+        // @b 那一枚是开关，点了不进编辑器（SelfTestDoneChip 单独量它），所以这里挑"可改写"的那几枚。
         var target = BoardNotes()
             .Where(node => node.Kind == CanvasNodeKind.Text)
-            .Select(node => (Node: node, Chips: NoteMarks.Chips(Tags.Read(node.Text), _view.Today)))
+            .Select(node => (Node: node, Chips: NoteMarks.Chips(Tags.Read(node.Text), _view.Today)
+                .Where(chip => !chip.Source.StartsWith("@b", StringComparison.OrdinalIgnoreCase))
+                .ToList()))
             .FirstOrDefault(pair => pair.Chips.Count > 0);
 
         if (target.Node is null)
@@ -578,6 +667,95 @@ public sealed partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// @n2 那一发：「已完成／未完成」的牌子点一下是**切换**，不进编辑态；× 仍是把那段拿掉。
+    /// 量的顺序就是它落进文件的顺序——牌子画出来、点下去换了字、再点 × 删掉，一步一撤销。
+    /// </summary>
+    private void SelfTestDoneChip(List<string> problems)
+    {
+        var saved = _document.ToJson();
+        var savedCamera = (_view.PanX, _view.PanY, _view.Zoom);
+        var node = _document.Add(CanvasNodeKind.Text, 43200, 40000, 260, 200);
+
+        node.Text = "@b1\n自检完成标记";
+
+        // 相机要把这一格摆进可见区：落在视野外的格子根本不走 Update，"牌子画没画"就读不到东西。
+        // 缩放留在 100%：卡片小得装不下一行正文加一排牌子时，规矩是"先保正文"、牌子整排收起，
+        // 那一发量的就不是这块牌子了。
+        _view.Zoom = 1;
+        _view.PanX = 60 - 43200;
+        _view.PanY = 60 - 40000;
+
+        Rebuild();
+        ArrangeAll();
+        BoardArea.UpdateLayout();
+
+        try
+        {
+            var chips = NoteMarks.Chips(Tags.Read(node.Text), _view.Today);
+
+            if (!_realized.TryGetValue(node.Id, out var card))
+            {
+                problems.Add($"自检完成标记: 这一格没进可见区（相机 {savedCamera.Item1:0}→{_view.PanX:0}，zoom {_view.Zoom:0.##}），量不到牌子");
+            }
+            else if (!card.PaintsReadout)
+            {
+                problems.Add(
+                    $"自检完成标记: 牌子那一排没画出来（Core 侧 {chips.Count} 枚、正文「{node.Text}」、框 {node.Width:0}×{node.Height:0}）");
+            }
+            else if (!chips.Any(chip => chip.Label == "已完成"))
+            {
+                problems.Add($"自检完成标记: 牌子上读不到「已完成」（牌子 {chips.Count} 枚、正文「{node.Text}」）");
+            }
+            else
+            {
+                EditMarkFrom(node.Id, "@b1");
+
+                if (_editor is not null)
+                {
+                    CloseEditor(commit: false);
+                    problems.Add("自检完成标记: 点牌子进了编辑态——它是一枚开关，不是可改写的值");
+                }
+
+                if (!node.Text.Contains("@b0", StringComparison.Ordinal) || Tags.Read(node.Text).Done != false)
+                {
+                    problems.Add($"自检完成标记: 点一下没换成 @b0（正文「{node.Text}」）");
+                }
+                else
+                {
+                    EditMarkFrom(node.Id, "@b0");
+
+                    if (!node.Text.Contains("@b1", StringComparison.Ordinal) || Tags.Read(node.Text).Done != true)
+                    {
+                        problems.Add($"自检完成标记: 再点一下没换回 @b1（正文「{node.Text}」）");
+                    }
+
+                    RemoveMarkFrom(node.Id, "@b1");
+
+                    if (Tags.Read(node.Text).Done is not null || node.Text.Contains("@b", StringComparison.Ordinal))
+                    {
+                        problems.Add($"自检完成标记: 点 × 没把这段拿掉（正文「{node.Text}」）");
+                    }
+                    else
+                    {
+                        Diagnostics.Write("selftest 完成标记: 点牌子在 @b0↔@b1 之间切换且不进编辑态、点 × 拿掉整段，三步各过一发");
+                    }
+                }
+            }
+        }
+        finally
+        {
+            _document.Remove(node.Id);
+            (_view.PanX, _view.PanY, _view.Zoom) = savedCamera;
+            Rebuild();
+
+            if (_document.ToJson() != saved)
+            {
+                problems.Add("自检完成标记: 这一发没把板子原样还回去");
+            }
+        }
+    }
+
     private void SetTagFilter(string? tag)
     {
         _view.TagFilter = string.Equals(_view.TagFilter, tag, StringComparison.Ordinal) ? null : tag;
@@ -600,5 +778,25 @@ public sealed partial class MainWindow
         Say(_view.DueFilter is { } active
             ? $"仅显示{DueLabel(active)}的便签（再次点击取消）"
             : "已取消到期筛选");
+    }
+
+    /// <summary>
+    /// 完成那一档：再点同一行＝取消。<c>false</c> 那一档含"没写 @b"的便签（见 WriteFilterRows 里的理由），
+    /// 所以它读起来是"还没做完"，不是"标了 @b0"。
+    /// </summary>
+    private void SetDoneFilter(bool done)
+    {
+        _view.DoneFilter = _view.DoneFilter == done ? null : done;
+
+        Rebuild();
+
+        var words = _view.DoneFilter switch
+        {
+            true => "仅显示已完成的便签（再次点击取消）",
+            false => "仅显示还没做完的便签（再次点击取消）",
+            _ => "已取消完成状态筛选",
+        };
+
+        Say(words);
     }
 }

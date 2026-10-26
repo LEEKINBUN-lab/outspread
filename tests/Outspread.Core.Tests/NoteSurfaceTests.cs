@@ -106,6 +106,34 @@ public class NoteSurfaceTests
     }
 
     [Fact]
+    public void The_paper_ramp_has_exactly_one_source_of_truth()
+    {
+        // 卡片按这条斜坡铺底，压在它上面的渐隐也必须按同一条取色——两边同一个函数，带子才和纸同色。
+        // 旧写法拿卡面本色平铺那道带子，于是它在任何一条线上都和纸差几级：放大看就是"颜色分层"。
+        var green = new Rgb(229, 245, 234);
+
+        Assert.Equal(new Rgb(233, 247, 237), NoteSurface.PaperAt(green, 0, dark: false));
+        Assert.Equal(green, NoteSurface.PaperAt(green, NoteSurface.PaperMiddleOffset, dark: false));
+        Assert.Equal(new Rgb(220, 235, 225), NoteSurface.PaperAt(green, 1, dark: false));
+
+        // 暗档只是把受光的两端换成 10% 白与 22% 黑，中段仍是卡面本色。
+        Assert.Equal(NoteSurface.Over(green, new Rgb(255, 255, 255), 0.10), NoteSurface.PaperAt(green, 0, dark: true));
+        Assert.Equal(green, NoteSurface.PaperAt(green, NoteSurface.PaperMiddleOffset, dark: true));
+        Assert.Equal(NoteSurface.Over(green, new Rgb(0, 0, 0), 0.22), NoteSurface.PaperAt(green, 1, dark: true));
+
+        // 一路单调变暗，中间不许翻上来：翻上来就会在带子里多出一道边。
+        var samples = Enumerable.Range(0, 41).Select(i => NoteSurface.PaperAt(green, i / 40.0, dark: false)).ToList();
+
+        Assert.True(samples.Zip(samples.Skip(1)).All(pair => Luma(pair.First) >= Luma(pair.Second)));
+
+        // 越界不许 NaN、不许回弹：卡高被压到 0 那一发，调用方给的 y 落在纸外也得停在纸边上。
+        Assert.Equal(NoteSurface.PaperAt(green, 1, dark: false), NoteSurface.PaperAt(green, 9, dark: false));
+        Assert.Equal(NoteSurface.PaperAt(green, 0, dark: false), NoteSurface.PaperAt(green, -3, dark: false));
+    }
+
+    private static int Luma(Rgb colour) => colour.R + colour.G + colour.B;
+
+    [Fact]
     public void The_shadow_survives_at_the_level_of_detail_threshold_and_not_below_it()
     {
         Assert.True(NoteSurface.DrawsShadow(NoteSurface.ShadowMinZoom));

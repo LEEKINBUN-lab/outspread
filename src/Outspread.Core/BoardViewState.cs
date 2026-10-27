@@ -44,6 +44,9 @@ public sealed class BoardViewState
     /// </summary>
     public bool IsManualSize(string id) => _manualSizes.Contains(id);
 
+    /// <summary>被钉住尺寸的格子（外部工具归档时写进来的，载入/并入时要跟着认）。</summary>
+    public IReadOnlyCollection<string> ManualSizeIds => _manualSizes;
+
     public void MarkManualSize(string id) => _manualSizes.Add(id);
 
     /// <summary>把"手动定过大小"的标记摘掉（只在确认那几像素是误触时用）。</summary>

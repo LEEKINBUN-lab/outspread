@@ -2329,6 +2329,18 @@ public sealed partial class MainWindow : Window
                 Diagnostics.Write($"merged {fromOutside.NodeCount} outside change(s), {rejected} reported");
             }
 
+            // 外部归档会把一整摞钉成同一个框（侧车 manualSize）。这里先把盘上那份标记并进来：
+            // 不并，随文字会把每一格按各自的正文重新量高，一摞又高低不齐（他 10-27 的截图）。
+            var (diskView, viewProblem) = BoardViewState.TryLoad(_boardPath + ".view.json");
+
+            if (viewProblem is null)
+            {
+                foreach (var pinned in diskView.ManualSizeIds)
+                {
+                    _view.MarkManualSize(pinned);
+                }
+            }
+
             // 外面改的常常是文字，而盘上那份高度是改之前量的：不重算就是"字进来了、框没长"，
             // 多出来的行被渐隐吃掉。这一发与载入那一发同一把尺（随文字、非手动）。
             // 必须走在撤销快照之前：不然撤销只回到"字改回去、框还是新的"那一半。

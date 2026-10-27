@@ -44,6 +44,9 @@ public sealed partial class MainWindow : Window
 
     private BoardViewState _view = new();
 
+    /// <summary>小地图：读数，不是控制器。挂在 BoardArea 之上、PanLayer 之外，整块不吃输入（他 10-28 定档）。</summary>
+    private MiniMap _miniMap = null!;
+
     private readonly Dictionary<string, NodeVisual> _realized = new(StringComparer.Ordinal);
 
     private readonly HashSet<string> _selection = new(StringComparer.Ordinal);
@@ -200,6 +203,13 @@ public sealed partial class MainWindow : Window
 
         // 浮层的影落在板子自己身上：ThemeShadow 只往 receivers 上画，没有这一句它就是贴上去的一块白。
         ChromeStyling.ShadowReceiver = BoardArea;
+
+        // 小地图（他 10-28 定档）：画板区左上角一枚方框，只读数、不吃输入——主画板右键拖动平移、
+        // 滚轮缩放、点「看到全部／回到 100%」、切板时它的视口矩形跟着走，而不是由它反过来控制主画板。
+        // 挂在 BoardArea 的孩子里（PanLayer 之外）；框里没有任何文字，这条由界面自检钉住。
+        ChromeStyling.Ensure(NoteStyling.IsDark);
+        _miniMap = new MiniMap();
+        BoardArea.Children.Add(_miniMap.Root);
 
         // 系统那三枚按钮（最小化／最大化／关闭）画在客户端区右上，标签条必须给它们让出宽度，
         // 否则最后一枚标签会被盖住。让多少不能拍脑袋：读 AppWindow.TitleBar.RightInset（设备像素）
@@ -759,6 +769,11 @@ public sealed partial class MainWindow : Window
             viewport.Width + (2 * margin),
             viewport.Height + (2 * margin));
 
+        // 小地图跟着这一拍走：小块只在文档几何真变了时才拆建（Sync 里自己对账），
+        // 视口矩形按这一拍落定的真相机摆正。增删格、移动、改大小、归档/收紧的提交都过这里。
+        _miniMap.Sync(_document.Nodes.Where(IsPlaceable).ToList());
+        SyncMiniMapViewport();
+
         var visible = 0;
         var started = Stopwatch.GetTimestamp();
 
@@ -830,6 +845,52 @@ public sealed partial class MainWindow : Window
             Diagnostics.Write(
                 $"arrange took {elapsed.TotalMilliseconds:0.0} ms for {_document.Nodes.Count} nodes ({visible} visible)");
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // 小地图：手势每一帧只改视口矩形那四个数；小块只在文档几何变化那一拍拆建
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// 右键平移的每一帧：相机先记在账上（松手那一拍的逐格排布按它结算），卡片那一层只靠
+    /// <see cref="PanShift"/> 搬——日志里那行 "arrange took 20–50 ms" 就是滞涩感的来源，
+    /// 每帧重排一次＝20fps；位移不改缩放，字形不会因走变换而糊（那条"不用 render transform"
+    /// 的规矩针对的是缩放，不是平移）。点阵与小地图的视口矩形按这一帧的相机同帧跟上——
+    /// 不能等到提交才啪一下补（他上次就是被"卡片在走、点阵不动"的错位硌到的）。
+    /// 界面自检走的也是这一句，所以这条接线被摘掉时红的是自检，不是一句注释。
+    /// </summary>
+    private void ApplyPanPreview(double dx, double dy)
+    {
+        _view.PanBy(dx, dy);
+
+        PanShift.X += dx;
+        PanShift.Y += dy;
+
+        UpdateAtmosphere();
+        SyncMiniMapViewport();
+    }
+
+    /// <summary>提交那一拍（ArrangeAll 里）与平移每一帧共用：矩形＝真相机在世界里占的那一块，投进地图。</summary>
+    private void SyncMiniMapViewport()
+        => _miniMap.SyncViewport(_view.Zoom, _view.PanX, _view.PanY, BoardArea.ActualWidth, BoardArea.ActualHeight);
+
+    /// <summary>
+    /// 缩放缓动中的那一帧：传进去的是缓动那一档的虚拟相机，几何与 <see cref="RepaintGridAt"/>
+    /// 同一笔账（指针是不动点），所以卡片、点阵、小地图矩形走的是同一条线。
+    /// </summary>
+    private void SyncMiniMapPreviewViewport()
+    {
+        var zoom = _wheelShownZoom;
+
+        var worldX = _view.ToWorldX(_wheelAnchor.X);
+        var worldY = _view.ToWorldY(_wheelAnchor.Y);
+
+        _miniMap.SyncViewport(
+            zoom,
+            _wheelAnchor.X - (worldX * zoom),
+            _wheelAnchor.Y - (worldY * zoom),
+            BoardArea.ActualWidth,
+            BoardArea.ActualHeight);
     }
 
     // -------------------------------------------------------------------------
@@ -996,18 +1057,11 @@ public sealed partial class MainWindow : Window
             var dx = screen.X - _panStartX;
             var dy = screen.Y - _panStartY;
 
-            _view.PanBy(dx, dy);
-
             _panStartX = screen.X;
             _panStartY = screen.Y;
 
-            // 平移期间只搬这一层，不逐格重排：日志里那行 "arrange took 20–50 ms" 就是滞涩感的来源，
-            // 每帧重排一次＝20fps。松手时再结算成真正的排布（见 OnSurfaceReleased）。
-            // 位移不改缩放，所以字形不会因为走变换而变糊——那条"不用 render transform"的规矩针对的是缩放。
-            PanShift.X += dx;
-            PanShift.Y += dy;
+            ApplyPanPreview(dx, dy);
 
-            UpdateAtmosphere();
             e.Handled = true;
             return;
         }
@@ -1490,6 +1544,9 @@ public sealed partial class MainWindow : Window
         ZoomLevelText.Text = $"{Math.Round(_wheelShownZoom * 100)}%";
 
         RepaintGridAt(_wheelShownZoom);
+
+        // 小地图的视口矩形每一帧跟着缓动那一档走——提交时才补就是"啪一下"那一发。
+        SyncMiniMapPreviewViewport();
 
         if (_wheelShownZoom == _wheelTargetZoom)
         {
@@ -6737,6 +6794,9 @@ public sealed partial class MainWindow : Window
 
         // 相机：幽灵格不许拉远"看到全部"；"回到 100%"以后屏幕上必须有内容。
         SelfTestCameraFraming(problems);
+
+        // 小地图：读数不控制——没有文字、矩形跟相机（含平移/缩放预览）、块只在几何变时拆建（10-28 定档）。
+        SelfTestMiniMap(problems);
         SelfTestTwoLineNoteAtFractionalZoom(problems);
         SelfTestOverflowCue(problems);
         SelfTestRepairs(problems);
@@ -6782,6 +6842,291 @@ public sealed partial class MainWindow : Window
         _suppressBoardDeleteConfirm = false;
 
         return problems;
+    }
+
+    /// <summary>
+    /// 小地图（他 10-28 定档：它是读数，不是控制器）。五问各有一发——
+    /// ① 方框挂在 BoardArea 上、整块不吃输入、子树里一枚 TextBlock 都没有（没有标题条、没有底部读数、没有折叠钮）；
+    /// ② 已知相机（PanBy＋ZoomAt）之后，视口矩形的位置与尺寸等于按该相机独立重算的期望值；
+    /// ③ 右键平移的每一帧矩形跟着预览走（走的正是 OnSurfaceMoved 平移分支那一句 <see cref="ApplyPanPreview"/>），提交后仍对得上；
+    /// ④ 挪一格、加一格、删一格之后，对应小矩形的几何跟着变；
+    /// ⑤ 平移与缩放的整个手势里块集合一次都没拆建——每帧只许改视口矩形那四个数（卡顿工单的小地图版本）。
+    /// 期望值在这里按文档与相机独立重算，不回读 MiniMap 内部的账：实现不能自己证明自己。
+    /// </summary>
+    private void SelfTestMiniMap(List<string> problems)
+    {
+        var map = _miniMap;
+
+        if (map is null)
+        {
+            problems.Add("自检小地图: 构造里没建出小地图——方框根本不存在");
+
+            return;
+        }
+
+        if (!BoardArea.Children.Contains(map.Root))
+        {
+            problems.Add("自检小地图: 小地图那枚方框没挂在 BoardArea 上");
+        }
+
+        if (map.Root.IsHitTestVisible)
+        {
+            problems.Add("自检小地图: 小地图吃输入——定档是纯读数，整块必须 IsHitTestVisible=false");
+        }
+
+        static int WalkTextBlocks(DependencyObject node)
+        {
+            var found = node is TextBlock ? 1 : 0;
+
+            for (var index = 0; index < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(node); index++)
+            {
+                found += WalkTextBlocks(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(node, index));
+            }
+
+            return found;
+        }
+
+        var texts = WalkTextBlocks(map.Root);
+
+        if (texts != 0)
+        {
+            problems.Add($"自检小地图: 方框子树里读到 {texts} 枚 TextBlock——定档没有任何文字（标题条/底部读数/折叠钮都不许有）");
+        }
+
+        IReadOnlyList<CanvasNode> Placed() => _document.Nodes.Where(IsPlaceable).ToList();
+
+        if (Placed().Count == 0)
+        {
+            problems.Add("自检小地图: 这块板上没有可画的格子，这一发不适用");
+
+            return;
+        }
+
+        // 独立重算（原型那一发）：s = min(地图宽/内容宽, 地图高/内容高)，内容包围盒左上角是原点。
+        (double X, double Y, double S) Frame()
+        {
+            var placed = Placed();
+            var x = placed.Min(node => node.X);
+            var y = placed.Min(node => node.Y);
+            var width = Math.Max(placed.Max(node => node.X + node.Width) - x, 1);
+            var height = Math.Max(placed.Max(node => node.Y + node.Height) - y, 1);
+
+            return (x, y, Math.Min(MiniMap.MapWidthPx / width, MiniMap.MapHeightPx / height));
+        }
+
+        (double, double, double, double) Expect(double zoom, double panX, double panY)
+        {
+            var (x, y, s) = Frame();
+
+            return (
+                (((0 - panX) / zoom) - x) * s,
+                (((0 - panY) / zoom) - y) * s,
+                (BoardArea.ActualWidth / zoom) * s,
+                (BoardArea.ActualHeight / zoom) * s);
+        }
+
+        (double, double, double, double) Read()
+            => (Canvas.GetLeft(map.Viewport), Canvas.GetTop(map.Viewport), map.Viewport.Width, map.Viewport.Height);
+
+        static bool Same((double, double, double, double) a, (double, double, double, double) b)
+            => Math.Abs(a.Item1 - b.Item1) <= 0.75 && Math.Abs(a.Item2 - b.Item2) <= 0.75
+            && Math.Abs(a.Item3 - b.Item3) <= 0.75 && Math.Abs(a.Item4 - b.Item4) <= 0.75;
+
+        static string Show((double, double, double, double) v)
+            => $"({v.Item1:0.##},{v.Item2:0.##},{v.Item3:0.##},{v.Item4:0.##})";
+
+        var saved = (_view.PanX, _view.PanY, _view.Zoom);
+
+        try
+        {
+            // ② 已知相机：PanBy＋ZoomAt 落一拍，矩形＝按这一拍相机独立算出的期望值。
+            _view.PanBy(120, -60);
+            _view.ZoomAt(BoardArea.ActualWidth / 2, BoardArea.ActualHeight / 2, WheelStep, MinZoom, MaxZoom);
+            ArrangeAll();
+
+            var expect2 = Expect(_view.Zoom, _view.PanX, _view.PanY);
+            var read2 = Read();
+
+            if (!Same(read2, expect2))
+            {
+                problems.Add($"自检小地图: 已知相机下视口矩形对不上——读到 {Show(read2)}，该是 {Show(expect2)}");
+            }
+
+            // ③＋⑤ 右键平移的每一帧：走 ApplyPanPreview（OnSurfaceMoved 的平移分支就是这一句），
+            // 矩形跟着预览走、块一次都不拆。
+            var gestureRebuilds = map.BlocksRebuilds;
+            var leftBefore = Canvas.GetLeft(map.Viewport);
+
+            ApplyPanPreview(80, 50);
+            ApplyPanPreview(-30, 20);
+
+            var expectPan = Expect(_view.Zoom, _view.PanX, _view.PanY);
+            var readPan = Read();
+
+            if (!Same(readPan, expectPan))
+            {
+                problems.Add($"自检小地图: 平移预览中矩形与相机对不上——读到 {Show(readPan)}，该是 {Show(expectPan)}");
+            }
+
+            if (Math.Abs(Canvas.GetLeft(map.Viewport) - leftBefore) < 0.5)
+            {
+                problems.Add("自检小地图: 平移两发（净 +50 屏幕像素）视口矩形一格没动——它没跟预览走");
+            }
+
+            if (Math.Abs(PanShift.X - 50) > 0.01 || Math.Abs(PanShift.Y - 70) > 0.01)
+            {
+                problems.Add($"自检小地图: 这一发没走 PanShift 那条预览层（读到 {PanShift.X:0.#},{PanShift.Y:0.#}，该是 50,70）");
+            }
+
+            // 提交（OnSurfaceReleased 同一段）：临时位移归零、按真相机落一次排布，矩形仍对得上。
+            PanShift.X = 0;
+            PanShift.Y = 0;
+            ArrangeAll();
+
+            if (!Same(Read(), Expect(_view.Zoom, _view.PanX, _view.PanY)))
+            {
+                problems.Add("自检小地图: 平移提交后矩形与真相机对不上");
+            }
+
+            // ⑤ 滚轮预览：矩形跟缓动那一档走（与点阵同一笔账），提交后仍对得上；期间块不拆建。
+            var at = new Point(BoardArea.ActualWidth / 2, BoardArea.ActualHeight / 2);
+            var rest = Expect(_view.Zoom, _view.PanX, _view.PanY);
+
+            ApplyWheel(at, 120);
+            OnWheelFrame(null, new object());
+
+            var shown = _wheelShownZoom;
+            var expectPreview = Expect(
+                shown,
+                at.X - (_view.ToWorldX(at.X) * shown),
+                at.Y - (_view.ToWorldY(at.Y) * shown));
+            var readPreview = Read();
+
+            if (!Same(readPreview, expectPreview))
+            {
+                problems.Add($"自检小地图: 缓动中视口矩形与预览相机对不上——读到 {Show(readPreview)}，该是 {Show(expectPreview)}");
+            }
+
+            if (!Same(expectPreview, rest) && Same(readPreview, rest))
+            {
+                problems.Add("自检小地图: 缓动中卡片与点阵在走、视口矩形停在提交前那一档（\"卡片在走、点阵不动\"的小地图版本）");
+            }
+
+            var frames = 0;
+
+            while (_wheelShownZoom != _wheelTargetZoom && frames < 60)
+            {
+                OnWheelFrame(null, new object());
+                frames++;
+            }
+
+            CommitWheelPreview();
+
+            if (!Same(Read(), Expect(_view.Zoom, _view.PanX, _view.PanY)))
+            {
+                problems.Add("自检小地图: 滚轮提交后视口矩形与真相机对不上");
+            }
+
+            if (map.BlocksRebuilds != gestureRebuilds)
+            {
+                problems.Add($"自检小地图: 平移/缩放手势里拆建了 {map.BlocksRebuilds - gestureRebuilds} 次块集合——每帧只许改视口矩形那四个数");
+            }
+
+            var gestureDelta = map.BlocksRebuilds - gestureRebuilds;
+
+            // ④ 挪一格：对应小矩形跟着动，那一拍恰好多拆建一次。
+            var probe = _document.Nodes.FirstOrDefault(node => node.Kind == CanvasNodeKind.Text && IsPlaceable(node));
+
+            if (probe is null)
+            {
+                problems.Add("自检小地图: 这块板上没有文字格，挪格那一发不适用");
+            }
+            else
+            {
+                var start = probe.X;
+                var rebuildsBeforeMove = map.BlocksRebuilds;
+
+                probe.X = start + 120;
+                ArrangeAll();
+
+                var movedBlock = map.BlockFor(probe.Id);
+                var (fx, fy, fs) = Frame();
+
+                if (movedBlock is null)
+                {
+                    problems.Add("自检小地图: 挪动之后块集合里读不到该格的小矩形");
+                }
+                else if (Math.Abs(Canvas.GetLeft(movedBlock) - ((probe.X - fx) * fs)) > 0.75)
+                {
+                    problems.Add($"自检小地图: 挪一格后小矩形没跟上（读到 {Canvas.GetLeft(movedBlock):0.##}，该在 {(probe.X - fx) * fs:0.##}）");
+                }
+
+                if (map.BlocksRebuilds != rebuildsBeforeMove + 1)
+                {
+                    problems.Add($"自检小地图: 挪一格那一拍应恰好拆建一次块集合（{rebuildsBeforeMove} → {map.BlocksRebuilds}）");
+                }
+
+                probe.X = start;
+                ArrangeAll();
+            }
+
+            // 加一格（配色预设 1＝红那一档）：小矩形出现在算好的位置上、染该档预设的发丝色；
+            // 删一格：小矩形跟着没。
+            var fresh = _document.Add(CanvasNodeKind.Text, 50, 50, 120, 60, "1");
+            Rebuild();
+
+            var freshBlock = map.BlockFor(fresh.Id);
+
+            if (freshBlock is null)
+            {
+                problems.Add("自检小地图: 新增一格后小地图里没有它的小矩形");
+            }
+            else
+            {
+                var (fx2, fy2, s2) = Frame();
+
+                // 小块下限那一档（原型 max(1.5, w·s)）在这里取的是宽的一侧：120·s2 远大于 1.5，按原式判。
+                if (Math.Abs(Canvas.GetLeft(freshBlock) - ((fresh.X - fx2) * s2)) > 0.75
+                    || Math.Abs(freshBlock.Width - (fresh.Width * s2)) > 0.75)
+                {
+                    problems.Add(
+                        $"自检小地图: 新增格的小矩形几何不对（左 {Canvas.GetLeft(freshBlock):0.##} 该 {(fresh.X - fx2) * s2:0.##}，" +
+                        $"宽 {freshBlock.Width:0.##} 该 {fresh.Width * s2:0.##}）");
+                }
+
+                var want = NoteStyling.ToColor(NotePalette.PaletteFor("1", NoteStyling.IsDark)!.Value.Line);
+
+                if (freshBlock.Fill is not SolidColorBrush paint || paint.Color != want)
+                {
+                    problems.Add("自检小地图: 预设 1 的小块没染该档预设的发丝色");
+                }
+            }
+
+            _document.Remove(fresh.Id);
+            Rebuild();
+
+            if (map.BlockFor(fresh.Id) is not null)
+            {
+                problems.Add("自检小地图: 删掉一格后小地图还留着它的小矩形");
+            }
+
+            var finalFrame = Frame();
+
+            Diagnostics.Write(
+                $"selftest 小地图: 无字方框（{texts} 枚文字）、{Placed().Count} 格入图、s={finalFrame.S:0.####}；" +
+                $"矩形跟相机（含平移 PanShift 预览与滚轮缓动预览），手势全程拆建 {gestureDelta} 次（应 0）；" +
+                $"挪/加/删各一拍拆建到位");
+        }
+        finally
+        {
+            _view.PanX = saved.PanX;
+            _view.PanY = saved.PanY;
+            _view.Zoom = saved.Zoom;
+            PanShift.X = 0;
+            PanShift.Y = 0;
+
+            ArrangeAll();
+        }
     }
 
     /// <summary>

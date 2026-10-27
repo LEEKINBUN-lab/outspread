@@ -8,6 +8,8 @@ public partial class App : Application
 {
     private Window? _window;
 
+    internal static bool PerfMode => Environment.GetCommandLineArgs().Any(arg => arg.Equals("--perf", StringComparison.OrdinalIgnoreCase));
+
     /// <summary>这一发是不是自检那一发。决定"出了意外该以什么退出码收场"。</summary>
     private static bool SelfTestMode
         => Environment.GetCommandLineArgs().Contains("--selftest", StringComparer.OrdinalIgnoreCase);
@@ -94,6 +96,11 @@ public partial class App : Application
         if (SelfTestMode)
         {
             window.BeginSelfTest();
+        }
+
+        if (PerfMode)
+        {
+            window.BeginPerfProbe();
         }
     }
 

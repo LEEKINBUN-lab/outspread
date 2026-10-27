@@ -7198,6 +7198,69 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 缩放/平移卡的读数装置：同一块板上分别量"重排"、"重建"、"重画点阵"、"一发滚轮"各花多少，
+    /// 把"卡"拆到能指认的那一步，而不是猜。跑法：<c>Outspread.Board.exe --perf 路径</c>。
+    /// </summary>
+    /// <summary>等板子真载入再开探针：同一拍量会得到假读数。</summary>
+    public void BeginPerfProbe()
+    {
+        void Try(int attempts)
+        {
+            if (_document.Nodes.Count > 0 || attempts >= 120)
+            {
+                RunPerfProbe();
+
+                return;
+            }
+
+            DispatcherQueue.TryEnqueue(() => Try(attempts + 1));
+        }
+
+        Try(0);
+    }
+
+    public void RunPerfProbe()
+    {
+        var notes = _document.Nodes.Count(node => node.Kind != CanvasNodeKind.Group);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        void Bench(string name, int rounds, Action body)
+        {
+            var samples = new List<double>();
+
+            for (var round = 0; round < rounds; round++)
+            {
+                watch.Restart();
+                body();
+                watch.Stop();
+                samples.Add(watch.Elapsed.TotalMilliseconds);
+            }
+
+            Diagnostics.Write($"perf {name}: 平均 {samples.Average():0.##}ms 最慢 {samples.Max():0.##}ms（{rounds} 发）");
+        }
+
+        Diagnostics.Write($"perf 开始: 板上 {notes} 格，视口 {BoardArea.ActualWidth:0}x{BoardArea.ActualHeight:0}");
+
+        Bench("ArrangeAll 重排", 12, () => ArrangeAll());
+        Bench("Rebuild 重建", 8, () => Rebuild());
+        Bench("点阵重画（换档）", 8, () =>
+        {
+            _gridKey = string.Empty;
+            UpdateAtmosphereAt(_view.Zoom, 0, 0, forensics: false);
+        });
+
+        var anchor = new Point(BoardArea.ActualWidth / 2, BoardArea.ActualHeight / 2);
+
+        Bench("一发滚轮（预览+提交）", 10, () =>
+        {
+            ApplyWheel(anchor, 120);
+            CommitWheelPreview();
+        });
+
+        Diagnostics.Write("PERF DONE");
+    }
+
     public void BeginSelfTest()
     {
         RoutedEventHandler run = null!;

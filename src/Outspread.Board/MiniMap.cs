@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -9,13 +10,22 @@ using Outspread.Core;
 namespace Outspread.Board;
 
 /// <summary>
-/// 小地图：画板区左上角的一枚方框。它是读数，不是控制器（他 10-28 定档）。
+/// 小地图：画板区左上角的一枚方框。它读主画板的相机，也回答"我要看哪儿"——
+/// <b>左键点一下＝视口移过去</b>（他 10-28 改口，此前那条"纯读数、一次输入都不吃"作废）。
 /// </summary>
 /// <remarks>
 /// <para>
-/// 主画板右键拖动平移、滚轮缩放、点「看到全部／回到 100%」、切板——这一枚跟着读；它自己一次输入
-/// 都不吃：<see cref="Root"/> 整块 <c>IsHitTestVisible=false</c>，挂在 BoardArea 之上、PanLayer 之外。
-/// 所以没有「点小地图跳转」，也没有「在地图上滚滚轮」——那两条是原型里被否掉的旧交互，没搬。
+/// 主画板右键拖动平移、滚轮缩放、点「看到全部／回到 100%」、切板——这一枚跟着读；
+/// 它自己只吃一种输入：<b>地图内的左键按下</b>，把落点按这一拍的映射反解成世界坐标
+/// （<see cref="OriginX"/>／<see cref="OriginY"/>／<see cref="Scale"/> 的逆运算），
+/// 交给宿主 <see cref="JumpToWorld"/> 把相机挪过去。走的是相机那条路，不是 <c>PanShift</c> 预览量——
+/// 预览会在提交时被真相机覆盖，点一下会"跳回去"。
+/// </para>
+/// <para>
+/// 右键与滚轮<b>仍然透过去</b>给板子（按下不标 Handled，事件照旧冒泡）：地图上右键拖＝平移、
+/// 地图上滚滚轮＝缩放。"在地图上滚滚轮缩放"这一条他没要，没有做特判，只是没把板子的默认抢走。
+/// 为了让地图内每一处都接得住这一发左键，<see cref="_map"/> 有一层全透明底色
+/// （Canvas 没有底色时，空白处根本不算命中——只有小块和矩形在场，而它们都不吃命中）。
 /// </para>
 /// <para>
 /// 外观定档「就是一个方框」：皮只走 <see cref="ChromeStyling.ApplyFloatingChrome"/>（浮层不许手搓），
@@ -68,12 +78,14 @@ internal sealed class MiniMap
     {
         ChromeStyling.ApplyFloatingChrome(_root);
 
-        // 纯读数：整块不吃输入，指针从它头上过＝从板子上过。
-        _root.IsHitTestVisible = false;
         _root.HorizontalAlignment = HorizontalAlignment.Left;
         _root.VerticalAlignment = VerticalAlignment.Top;
         _root.Margin = new Thickness(10, 10, 0, 0);
         _root.Child = _map;
+
+        // 地图这一层吃输入：底色全透明但仍在（Canvas 无底色时空白处不算命中，那一发左键会漏到板子上）。
+        _map.Background = new SolidColorBrush(Colors.Transparent);
+        _map.PointerPressed += OnMapPressed;
 
         // 视口矩形说「你现在在看哪一块」：语言取自选中环与框选那层半透明，不手搓第三种蓝。
         _viewport.Stroke = ChromeStyling.Ring;
@@ -89,6 +101,41 @@ internal sealed class MiniMap
 
     /// <summary>挂在 BoardArea 上的那枚方框。</summary>
     public FrameworkElement Root => _root;
+
+    /// <summary>
+    /// 宿主接上这一枚：地图内的落点已经反解成世界坐标，把视口中心挪过去。
+    /// 没接（或板子还没内容、映射还没算出来）时按下什么都不做。
+    /// </summary>
+    public Action<double, double>? JumpToWorld { get; set; }
+
+    /// <summary>
+    /// 地图上按下那一发的正身：把 (mapX, mapY) 按这一拍的映射反解回世界坐标并交给宿主。
+    /// 逆运算就是 <see cref="SyncViewport"/> 那两式的反函数：<c>世界＝原点＋地图／s</c>。
+    /// 界面自检点的也是这一发——真实按下与它只差"事件怎么进到 _map"这一段，反解与落账同一份代码。
+    /// </summary>
+    public void PressAt(double mapX, double mapY)
+    {
+        if (!_hasContent || _scale <= 0 || JumpToWorld is not { } jump)
+        {
+            return;
+        }
+
+        jump(_originX + (mapX / _scale), _originY + (mapY / _scale));
+    }
+
+    private void OnMapPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        var point = e.GetCurrentPoint(_map);
+
+        // 只接左键：右键那一发不标 Handled，照旧冒泡给板子去平移（地图上也拖得动）。
+        if (!point.Properties.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        PressAt(point.Position.X, point.Position.Y);
+        e.Handled = true;
+    }
 
     /// <summary>视口矩形：手势期间唯一被允许动的东西，自检直接读它的四个数。</summary>
     public Rectangle Viewport => _viewport;

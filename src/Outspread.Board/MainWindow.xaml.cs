@@ -44,7 +44,7 @@ public sealed partial class MainWindow : Window
 
     private BoardViewState _view = new();
 
-    /// <summary>小地图：读数，不是控制器。挂在 BoardArea 之上、PanLayer 之外，整块不吃输入（他 10-28 定档）。</summary>
+    /// <summary>小地图：画板区左上角那枚方框。挂在 BoardArea 之上、PanLayer 之外；只吃"地图内左键按下"这一发＝视口移过去（他 10-28 改口），右键与滚轮仍透给板子。</summary>
     private MiniMap _miniMap = null!;
 
     private readonly Dictionary<string, NodeVisual> _realized = new(StringComparer.Ordinal);
@@ -204,11 +204,13 @@ public sealed partial class MainWindow : Window
         // 浮层的影落在板子自己身上：ThemeShadow 只往 receivers 上画，没有这一句它就是贴上去的一块白。
         ChromeStyling.ShadowReceiver = BoardArea;
 
-        // 小地图（他 10-28 定档）：画板区左上角一枚方框，只读数、不吃输入——主画板右键拖动平移、
-        // 滚轮缩放、点「看到全部／回到 100%」、切板时它的视口矩形跟着走，而不是由它反过来控制主画板。
-        // 挂在 BoardArea 的孩子里（PanLayer 之外）；框里没有任何文字，这条由界面自检钉住。
+        // 小地图（他 10-28 定档、当晚改口）：画板区左上角一枚方框，挂在 BoardArea 的孩子里
+        // （PanLayer 之外）。主画板右键拖动平移、滚轮缩放、点「看到全部／回到 100%」、切板时它的
+        // 视口矩形跟着走；它自己只吃一种输入——地图内的左键按下，把那一处反解成世界坐标、
+        // 由下面这一句把相机挪过去（走真相机，不走 PanShift 预览量）。框里没有任何文字，这条由界面自检钉住。
         ChromeStyling.Ensure(NoteStyling.IsDark);
         _miniMap = new MiniMap();
+        _miniMap.JumpToWorld = CenterWorldInView;
         BoardArea.Children.Add(_miniMap.Root);
 
         // 系统那三枚按钮（最小化／最大化／关闭）画在客户端区右上，标签条必须给它们让出宽度，
@@ -848,7 +850,8 @@ public sealed partial class MainWindow : Window
     }
 
     // -------------------------------------------------------------------------
-    // 小地图：手势每一帧只改视口矩形那四个数；小块只在文档几何变化那一拍拆建
+    // 小地图：手势每一帧只改视口矩形那四个数；小块只在文档几何变化那一拍拆建；
+    //          地图内的左键那一发把视口挪过去（走真相机，不走预览量）
     // -------------------------------------------------------------------------
 
     /// <summary>
@@ -873,6 +876,22 @@ public sealed partial class MainWindow : Window
     /// <summary>提交那一拍（ArrangeAll 里）与平移每一帧共用：矩形＝真相机在世界里占的那一块，投进地图。</summary>
     private void SyncMiniMapViewport()
         => _miniMap.SyncViewport(_view.Zoom, _view.PanX, _view.PanY, BoardArea.ActualWidth, BoardArea.ActualHeight);
+
+    /// <summary>
+    /// 点小地图那一发落在这里：把地图上反解出来的世界点摆到视口正中，缩放不动。
+    /// 走的是相机那条路（<c>_view.PanX/PanY</c> 落账＋<see cref="ArrangeAll"/> 提交），不是
+    /// <c>PanShift</c> 那层预览量——预览会在下一次提交时被真相机覆盖，只挪它的话点一下会"跳回去"。
+    /// 与查找跳转的 <c>CenterOn</c> 同一笔账，只是那里对的是"某一格"、这里对的是"地图上那一点"，
+    /// 而且这一发不必让开查找面板（指针在地图上，面板在另一边）。
+    /// </summary>
+    private void CenterWorldInView(double worldX, double worldY)
+    {
+        _view.PanX = (BoardArea.ActualWidth / 2) - (worldX * _view.Zoom);
+        _view.PanY = (BoardArea.ActualHeight / 2) - (worldY * _view.Zoom);
+
+        ArrangeAll();
+        SaveSoon();
+    }
 
     /// <summary>
     /// 缩放缓动中的那一帧：传进去的是缓动那一档的虚拟相机，几何与 <see cref="RepaintGridAt"/>
@@ -6845,12 +6864,14 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 小地图（他 10-28 定档：它是读数，不是控制器）。五问各有一发——
-    /// ① 方框挂在 BoardArea 上、整块不吃输入、子树里一枚 TextBlock 都没有（没有标题条、没有底部读数、没有折叠钮）；
+    /// 小地图（他 10-28 定档、当晚改口：框里无字，但点它＝视口移过去）。六问各有一发——
+    /// ① 方框挂在 BoardArea 上、这块框吃输入（不再整块 IsHitTestVisible=false）、子树里一枚 TextBlock 都没有（没有标题条、没有底部读数、没有折叠钮）；
     /// ② 已知相机（PanBy＋ZoomAt）之后，视口矩形的位置与尺寸等于按该相机独立重算的期望值；
     /// ③ 右键平移的每一帧矩形跟着预览走（走的正是 OnSurfaceMoved 平移分支那一句 <see cref="ApplyPanPreview"/>），提交后仍对得上；
     /// ④ 挪一格、加一格、删一格之后，对应小矩形的几何跟着变；
-    /// ⑤ 平移与缩放的整个手势里块集合一次都没拆建——每帧只许改视口矩形那四个数（卡顿工单的小地图版本）。
+    /// ⑤ 平移与缩放的整个手势里块集合一次都没拆建——每帧只许改视口矩形那四个数（卡顿工单的小地图版本）；
+    /// ⑥ 地图内的左键那一发：落点反解成世界坐标后，视口矩形中心与相机算出的视口中心都回到那一点，
+    ///    而且走的是真相机（PanShift 一个像素都不动），期间块集合不拆建。
     /// 期望值在这里按文档与相机独立重算，不回读 MiniMap 内部的账：实现不能自己证明自己。
     /// </summary>
     private void SelfTestMiniMap(List<string> problems)
@@ -6869,9 +6890,9 @@ public sealed partial class MainWindow : Window
             problems.Add("自检小地图: 小地图那枚方框没挂在 BoardArea 上");
         }
 
-        if (map.Root.IsHitTestVisible)
+        if (!map.Root.IsHitTestVisible)
         {
-            problems.Add("自检小地图: 小地图吃输入——定档是纯读数，整块必须 IsHitTestVisible=false");
+            problems.Add("自检小地图: 小地图整块不吃输入——他 10-28 改口后它要接地图内的左键，不许再 IsHitTestVisible=false");
         }
 
         static int WalkTextBlocks(DependencyObject node)
@@ -7110,12 +7131,68 @@ public sealed partial class MainWindow : Window
                 problems.Add("自检小地图: 删掉一格后小地图还留着它的小矩形");
             }
 
+            // ⑥ 点小地图＝视口移过去（他 10-28 改口）。这一发按的是真按下走的那同一条路：
+            //    地图内左键 → MiniMap.PressAt（反解） → 宿主 CenterWorldInView（落真相机）→ ArrangeAll。
+            //    事件那一段（OnMapPressed 取落点、只认左键、标 Handled）装置喂不进去，归他的眼睛。
+            var (jumpMapX, jumpMapY) = (MiniMap.MapWidthPx * 0.2, MiniMap.MapHeightPx * 0.8);
+            var (jx, jy, js) = Frame();
+            var wantWorldX = jx + (jumpMapX / js);
+            var wantWorldY = jy + (jumpMapY / js);
+
+            var panBeforeJump = (_view.PanX, _view.PanY);
+            var rebuildsBeforeJump = map.BlocksRebuilds;
+
+            map.PressAt(jumpMapX, jumpMapY);
+
+            var jumped = Read();
+            var centreMapX = jumped.Item1 + (jumped.Item3 / 2);
+            var centreMapY = jumped.Item2 + (jumped.Item4 / 2);
+
+            if (Math.Abs(centreMapX - jumpMapX) > 0.75 || Math.Abs(centreMapY - jumpMapY) > 0.75)
+            {
+                problems.Add(
+                    $"自检小地图: 点了地图 ({jumpMapX:0.#},{jumpMapY:0.#}) 以后视口矩形中心没落在那一点" +
+                    $"（读到 ({centreMapX:0.##},{centreMapY:0.##})）");
+            }
+
+            // 按落账后的相机独立重算：屏幕正中那一点的世界坐标＝反解出来的那个世界点。
+            var centreWorldX = _view.ToWorldX(BoardArea.ActualWidth / 2);
+            var centreWorldY = _view.ToWorldY(BoardArea.ActualHeight / 2);
+
+            if (Math.Abs(centreWorldX - wantWorldX) > 0.5 || Math.Abs(centreWorldY - wantWorldY) > 0.5)
+            {
+                problems.Add(
+                    $"自检小地图: 点小地图后相机没把那一点摆到视口正中（相机算出 ({centreWorldX:0.##},{centreWorldY:0.##})，" +
+                    $"该是 ({wantWorldX:0.##},{wantWorldY:0.##})）");
+            }
+
+            // 走的是相机那条路，不是 PanShift 预览量：预览量一个像素都不该动，而真相机确实挪了。
+            if (Math.Abs(PanShift.X) > 0.01 || Math.Abs(PanShift.Y) > 0.01)
+            {
+                problems.Add($"自检小地图: 点小地图走了 PanShift 预览量（读到 {PanShift.X:0.#},{PanShift.Y:0.#}，该是 0,0——提交时会跳回去）");
+            }
+
+            if (Math.Abs(_view.PanX - panBeforeJump.Item1) < 0.5 && Math.Abs(_view.PanY - panBeforeJump.Item2) < 0.5)
+            {
+                problems.Add("自检小地图: 点小地图以后真相机的 PanX/PanY 一格都没动——那一发没落到相机上");
+            }
+
+            if (map.BlocksRebuilds != rebuildsBeforeJump)
+            {
+                problems.Add($"自检小地图: 点小地图那一拍拆建了 {map.BlocksRebuilds - rebuildsBeforeJump} 次块集合——它只动相机，几何一个都没变");
+            }
+
+            if (!Same(Read(), Expect(_view.Zoom, _view.PanX, _view.PanY)))
+            {
+                problems.Add("自检小地图: 点小地图落定以后视口矩形与真相机对不上");
+            }
+
             var finalFrame = Frame();
 
             Diagnostics.Write(
                 $"selftest 小地图: 无字方框（{texts} 枚文字）、{Placed().Count} 格入图、s={finalFrame.S:0.####}；" +
                 $"矩形跟相机（含平移 PanShift 预览与滚轮缓动预览），手势全程拆建 {gestureDelta} 次（应 0）；" +
-                $"挪/加/删各一拍拆建到位");
+                $"挪/加/删各一拍拆建到位；点地图 ({jumpMapX:0.#},{jumpMapY:0.#}) → 世界 ({wantWorldX:0.#},{wantWorldY:0.#})，PanShift 全程 0");
         }
         finally
         {

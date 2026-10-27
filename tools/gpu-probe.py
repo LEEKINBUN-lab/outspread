@@ -223,7 +223,9 @@ def one_run(exe, board, log, zoom, world, gesture, seconds, flags=(), settle=2.2
     before = log.stat().st_size if log.exists() else 0
 
     # 探针跑 seconds+4：采样窗（含起手的等待）要整个落在它还活着的时候里。
-    extra = [*flags] if gesture == "idle" else [*flags, f"--{gesture}-probe", str(int((seconds + 4) * 1000))]
+    flag = "--zoom-band" if gesture == "band" else f"--{gesture}-probe"
+
+    extra = [] if gesture == "idle" else [*flags, flag, str(int((seconds + 4) * 1000))]
 
     # 静置那一档要等得更久：起来头几秒里还有自愈（往稳定目录拷 42MB）、快捷方式对齐、
     # JIT 与首帧重建。拿 2.2 秒就去采，量到的是"开机"不是"静置"——21% 就是这么冒出来的。
@@ -251,8 +253,9 @@ def one_run(exe, board, log, zoom, world, gesture, seconds, flags=(), settle=2.2
         tail = handle.read()
 
     line = next((row for row in tail.splitlines() if " 帧 · 每帧均" in row), "")
-    control = next((row for row in tail.splitlines() if "drag 正对照" in row), "")
-    frames = re.search(r"(?:pan|zoom|drag) \d+ms: (\d+) 帧", line)
+    control = next((row for row in tail.splitlines() if "正对照" in row), "")
+    band = next((row for row in tail.splitlines() if "band 正对照" in row), "")
+    frames = re.search(r"(?:pan|zoom|drag|band) \d+ms: (\d+) 帧", line)
     per_frame = re.search(r"每帧均 ([0-9.]+)ms", line)
     visible = re.search(r"可见 (\d+) 枚", line)
     elements = re.search(r"板面元素 (\d+) 个", line)
@@ -268,6 +271,7 @@ def one_run(exe, board, log, zoom, world, gesture, seconds, flags=(), settle=2.2
         "visible": int(visible.group(1)) if visible else 0,
         "elements": int(elements.group(1)) if elements else 0,
         "drag_px": drag_px,
+        "band": band.split(": ", 1)[1] if band else "",
         "gpu": read["avg"] if read else None,
         "cpu": cpu.get("value", float("nan")),
     }
@@ -343,10 +347,9 @@ def main():
         big_fit = fit_zoom(load_board(big)["span"])
 
         configs = [
-            ("总览·平移", board, fit, centre, "pan"),
+            ("50%↔150% 来回", board, 1.0, centre, "band"),
             ("总览·来回滚轮", board, fit, centre, "zoom"),
-            ("600 格总览·平移", big, big_fit, big_center, "pan"),
-            ("600 格总览·滚轮", big, big_fit, big_center, "zoom"),
+            ("总览·平移", board, fit, centre, "pan"),
         ]
 
         print(f"总览档（每档 {args.repeats} 发取中位）：你那块板 {geo['cards']} 格要 {fit:.3f}× 才装得下，"
@@ -366,6 +369,7 @@ def main():
                 f"{median(run['elements'] for run in runs):>8.0f}"
                 f"  [{', '.join(f'{value:.2f}' for value in gpus)}]"
             )
+            print(f"{'':<18}└ {runs[len(runs) // 2]['band']}")
 
         return 0
 

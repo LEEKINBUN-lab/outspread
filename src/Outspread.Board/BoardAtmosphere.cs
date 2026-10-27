@@ -37,6 +37,15 @@ partial class MainWindow
     private bool? _floorIsDark;
 
     private bool _inkedOnce;
+
+    /// <summary>当前这张点阵位图是按哪一档缩放画的（0＝还没有）。缩放中途靠它算 drift。</summary>
+    private double _gridPaintZoom;
+
+    /// <summary>点阵真正重画了多少发、其中多少发是"换了尺寸所以重新 new 一张位图＋一块缓冲"。
+    /// 那两个数由缩放探针报出来：LOH 上反复 new 5MB 就是几十毫秒那一抖的候选。</summary>
+    internal int _gridRepaints;
+
+    internal int _gridResized;
     private bool? _vignetteIsDark;
 
     /// <summary>
@@ -100,6 +109,7 @@ partial class MainWindow
             GridLayer.Source = null;
             GridLayer.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
             _gridKey = string.Empty;
+            _gridPaintZoom = 0;
             return;
         }
 
@@ -108,20 +118,47 @@ partial class MainWindow
         // Whole layout pixels, or the Image gets resampled and a 2px dot smears into a grey smear.
         // 边长再取整到 64 的倍数：缩放中途每一发只比上一发宽几个像素，取整之后同一张位图能复用
         // （配合 _gridBuffer 那一块），不必每发重新分配。多出来的那一条被 BoardArea.Clip 裁掉。
-        var tileWidth = Math.Ceiling((width + period) / GridTileQuantum) * GridTileQuantum;
-        var tileHeight = Math.Ceiling((height + period) / GridTileQuantum) * GridTileQuantum;
-        var key = $"{zoom:0.####}|{width:0}|{height:0}|{scale:0.###}|{NoteStyling.IsDark}";
+        // 位图的边长按"最宽的那一档周期"留，不按当下这一档。
+        // 原来按 `width + period` 取整到 64 的倍数：缩放中途 period 跟着 zoom 走，于是每跨一格
+        // 就要重新 new 一张位图＋一块缓冲（都在大对象堆上）。10-27 实测：50%↔150% 来回滚 10 秒
+        // 重画 338 次、其中 84 次换了尺寸，分配 462MB，逼出 27 次 gen2 全堆回收——
+        // 那一下一下的顿挫就是它。留成定长之后，缩放中途一次都不再换尺寸。
+        // 乘那一下 (1 + GridDriftLimit) 是因为下面要把位图**缩小**显示（drift 可以小于 1），
+        // 留出来的这一条保证缩到最狠那一档时右边和下边仍然盖得住视口＋一个周期。
+        var slack = BoardGrid.PeriodFor(MaxZoom);
+        var tileWidth = Math.Ceiling(((width + slack) * (1 + GridDriftLimit)) / GridTileQuantum) * GridTileQuantum;
+        var tileHeight = Math.Ceiling(((height + slack) * (1 + GridDriftLimit)) / GridTileQuantum) * GridTileQuantum;
+        var key = $"{width:0}|{height:0}|{scale:0.###}|{NoteStyling.IsDark}";
 
-        if (key != _gridKey)
+        // 这张位图是按"画它的那一档缩放"画的，显示时整体乘 drift = 真相机/那一档。
+        // 点距与相位都跟着真相机走（相位仍按当前 period 取模），所以缩放中途点阵是**连续跟手**的，
+        // 只有点的粗细跟着漂最多 GridDriftLimit；漂出那一档才重画一次。
+        // 原来每一帧都重画：10-27 实测同一手势 342 次重画＝每帧把一张 5MB 纹理重传一次 GPU
+        // （那一档 GPU 17.3% 就是这么来的），而其中绝大多数帧的缩放只差百分之几，重画不值。
+        var drift = _gridPaintZoom > 0 ? zoom / _gridPaintZoom : 0.0;
+
+        if (key != _gridKey || Math.Abs(drift - 1) > GridDriftLimit)
         {
             _gridKey = key;
+            _gridPaintZoom = zoom;
+            drift = 1.0;
+
             PaintGrid(tileWidth, tileHeight, scale, zoom, inked);
+        }
+
+        if (Math.Abs(GridLayer.Width - (tileWidth * drift)) > 0.5)
+        {
+            GridLayer.Width = tileWidth * drift;
+            GridLayer.Height = tileHeight * drift;
         }
 
         // 平移只改这一处：点阵跟着相位走，位图不重画。
         GridOffset.X = BoardGrid.Phase(panX, period) - period;
         GridOffset.Y = BoardGrid.Phase(panY, period) - period;
     }
+
+    /// <summary>点阵允许"靠缩放顶过去"的漂移上限（比例）。超过它才重画一次。</summary>
+    private const double GridDriftLimit = 0.06;
 
     private void ApplyBoardFloor()
     {
@@ -177,6 +214,8 @@ partial class MainWindow
         WriteableBitmap bitmap;
         byte[] buffer;
 
+        _gridRepaints++;
+
         if (_gridBitmap is { } cached && _gridBuffer is { } cachedBuffer
             && cached.PixelWidth == pixelsW && cached.PixelHeight == pixelsH)
         {
@@ -186,6 +225,10 @@ partial class MainWindow
         }
         else
         {
+            // 换一次尺寸就 new 一张位图＋一块 5MB 缓冲（大对象堆）：缩放中途每跨一格
+            // 64 像素的档就付一次。这两个计数由缩放带探针报出来，不藏。
+            _gridResized++;
+
             bitmap = new WriteableBitmap(pixelsW, pixelsH);
             buffer = new byte[bitmap.PixelBuffer.Length];
             _gridBitmap = bitmap;

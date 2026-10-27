@@ -143,6 +143,13 @@ public partial class App : Application
         {
             window.BeginDragProbe(dragProbe);
         }
+
+        var bandProbe = ProbeMilliseconds("--zoom-band");
+
+        if (bandProbe > 0)
+        {
+            window.BeginZoomBandProbe(bandProbe);
+        }
     }
 
     /// <summary>把当前构建对齐进稳定目录，并把开始菜单那枚指过去。成 → true；不成还把原因留在 <paramref name="why"/> 里。</summary>

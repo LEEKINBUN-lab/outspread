@@ -8454,6 +8454,42 @@ public sealed partial class MainWindow : Window
             $"· 拖动已起 {_nodeDragStarted} · 视觉 {(_realized.TryGetValue(node.Id, out var visual) ? $"Canvas.Left {Canvas.GetLeft(visual):0} Top {Canvas.GetTop(visual):0}" : "未实格化")}"));
     });
 
+    /// <summary>
+    /// 50%↔150% 那一带来回缩那几秒——他说"查看总览且不断放大缩小"就是这一档。
+    /// 之前量的都是"停在某一档"或"压在 0.25 那道线上"，这一带跨的是点阵的<b>换档与换尺寸</b>，
+    /// 没量过就没有数。收场那一行报的是这一发的代价由什么组成：重画几次、其中几次换了尺寸
+    /// （换一次就在大对象堆上 new 一张位图＋一块 5MB 缓冲）、分配了多少、GC 收了几次。
+    /// </summary>
+    public void BeginZoomBandProbe(int milliseconds) => WaitUntilLaidOut("band", () =>
+    {
+        var allocated = GC.GetTotalAllocatedBytes(true);
+        var gen0 = GC.CollectionCount(0);
+        var gen2 = GC.CollectionCount(2);
+        var repaints = _gridRepaints;
+        var resized = _gridResized;
+
+        RunGestureProbe(milliseconds, "band", frame =>
+        {
+            // 60 帧走完一个 50%→150%→50%：连续滚的形状（每帧约 1.9%），不是"滚一格停手"。
+            var phase = (1 - Math.Cos((frame % 60) / 60.0 * Math.PI * 2)) / 2;
+
+            _view.ZoomAt(
+                BoardArea.ActualWidth / 2,
+                BoardArea.ActualHeight / 2,
+                (0.5 + phase) / _view.Zoom,
+                MinZoom,
+                MaxZoom);
+
+            // 只走相机＋排布那两笔。原来这里还跟着清一次 _gridKey（那是"提交那一拍"才做的事），
+            // 于是每一帧都被强制重画，量到的其实是探针自己在画——分档那套白装了。
+            ArrangeAll();
+            ProjectSelection();
+        }, () => Diagnostics.Write(
+            $"band 正对照: 点阵重画 {_gridRepaints - repaints} 次（其中换尺寸、在 LOH 上 new 5MB 的 {_gridResized - resized} 次）· " +
+            $"这一发分配 {(GC.GetTotalAllocatedBytes(true) - allocated) / 1048576:0}MB · " +
+            $"GC gen0 {GC.CollectionCount(0) - gen0} 次／gen2 {GC.CollectionCount(2) - gen2} 次"));
+    });
+
     /// <summary>每一帧调一次 <paramref name="step"/>，跑满 <paramref name="milliseconds"/> 就自报读数并结束进程。</summary>
     /// <param name="onReport">收场前补一句自己的对照（例如"格子到底走了几像素"）——没有它，
     /// 一枚"什么都不做"的探针和一枚真在动的探针会吐出一模一样的读数。</param>

@@ -143,6 +143,32 @@ public class NoteSurfaceTests
     }
 
     [Fact]
+    public void The_shadow_level_of_detail_holds_its_state_inside_the_hysteresis_band()
+    {
+        /* 10-27 量出来的那一发：他那块「Agent 出口」装进视口正好是 0.244×，压在阈值上。
+           裸阈值比较会让来回滚轮每帧翻一次档，而每翻一次全部可见格都要重铺阴影层——
+           同装置实测 104ms/帧；退开到 0.40× 只要 8.3ms。所以这一级 LOD 带一圈迟滞：
+           低于阈值一定关、要回到阈值以上一整带才开，中间那一段**保持上一拍的状态**。 */
+        const double line = NoteSurface.ShadowMinZoom;
+        const double band = line + NoteSurface.ShadowLodBand;
+
+        Assert.False(NoteSurface.ShadowLod(0.10, wasOn: true));      // 深处：一定要关
+        Assert.False(NoteSurface.ShadowLod(line - 0.001, wasOn: true));
+        Assert.True(NoteSurface.ShadowLod(1.0, wasOn: false));       // 高处：一定要开
+        Assert.True(NoteSurface.ShadowLod(band, wasOn: false));
+
+        // 中间这一段：两向都保持原样——这正是"压在阈值上来回滚轮"待的那一段。
+        var middle = line + (NoteSurface.ShadowLodBand / 2);
+
+        Assert.True(NoteSurface.ShadowLod(middle, wasOn: true), "在迟滞带里，本来画阴影的不该被关掉");
+        Assert.False(NoteSurface.ShadowLod(middle, wasOn: false), "在迟滞带里，本来画底线的不该被翻开");
+
+        // 正对照：裸阈值比较在阈值两侧给出**不同**答案——那正是"相机压在阈值上、来回滚轮
+        // 每帧翻一次档"的成因（第一版我把这一条写成在阈值同侧比，闸当场把它红了）。
+        Assert.NotEqual(NoteSurface.DrawsShadow(line), NoteSurface.DrawsShadow(line - 0.01));
+    }
+
+    [Fact]
     public void Different_ids_really_do_sit_at_different_heights()
     {
         // A seeded lift that never varied would make the whole recipe decoration. Seven ids is

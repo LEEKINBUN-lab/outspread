@@ -182,12 +182,23 @@ def load_board(src):
     cards = [n for n in doc.get("nodes", []) if n.get("type") == "text"]
     xs = [c.get("x", 0) for c in cards]
     ys = [c.get("y", 0) for c in cards]
+    ws = [c.get("width", 0) for c in cards]
+    hs = [c.get("height", 0) for c in cards]
 
     return {
         "cards": len(cards),
         "dense": (statistics.fmean(xs), statistics.fmean(ys)),
         "empty": (max(xs) + 3000, min(ys) if ys else 0),
+        "span": (min(xs), min(ys), max(x + w for x, w in zip(xs, ws)), max(y + h for y, h in zip(ys, hs))),
     }
+
+
+def fit_zoom(span, width=1320, height=802, margin=48):
+    """整块板装进视口要哪一档缩放——"总览"不是一个感觉词，它是一个能算出来的数。"""
+    w = (span[2] - span[0]) + (2 * margin)
+    h = (span[3] - span[1]) + (2 * margin)
+
+    return max(0.05, min(width / w, height / h))
 
 
 def write_sidecar(board, zoom, world):
@@ -310,11 +321,53 @@ def main():
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--shapes", action="store_true",
                     help="跑「格数」矩阵：把「便签一多」拆成 板上总量 / 视野里可见 两个轴，不跑默认那六档")
+    ap.add_argument("--overview", action="store_true",
+                    help="跑「总览」那一档：相机缩到整块板刚好装进视口，再量平移与来回滚轮")
     args = ap.parse_args()
 
     root = Path(os.environ.get("TEMP", "/tmp")) / "outspread-gpu"
     root.mkdir(parents=True, exist_ok=True)
     log = Path(os.environ.get("LOCALAPPDATA", "")) / "Outspread/board.log"
+
+    if args.overview:
+        board = root / "probe.canvas"
+        shutil.copyfile(args.src, board)
+
+        geo = load_board(board)
+        span = geo["span"]
+        fit = fit_zoom(span)
+        centre = ((span[0] + span[2]) / 2, (span[1] + span[3]) / 2)
+
+        big = root / "shape-600-0.canvas"
+        big_center = make_board(big, 600, 0)
+        big_fit = fit_zoom(load_board(big)["span"])
+
+        configs = [
+            ("总览·平移", board, fit, centre, "pan"),
+            ("总览·来回滚轮", board, fit, centre, "zoom"),
+            ("600 格总览·平移", big, big_fit, big_center, "pan"),
+            ("600 格总览·滚轮", big, big_fit, big_center, "zoom"),
+        ]
+
+        print(f"总览档（每档 {args.repeats} 发取中位）：你那块板 {geo['cards']} 格要 {fit:.3f}× 才装得下，"
+              f"合成 600 格要 {big_fit:.3f}×")
+        print(f"{'档':<18}{'帧数':>7}{'每帧ms':>9}{'GPU中位%':>10}{'CPU占一核%':>11}{'可见':>6}{'元素':>8}  GPU 各发")
+
+        for label, path, zoom, center, gesture in configs:
+            runs = [one_run(args.exe, path, log, zoom, center, gesture, args.seconds) for _ in range(args.repeats)]
+            gpus = sorted(run["gpu"] for run in runs if run["gpu"] is not None)
+
+            print(
+                f"{label:<18}{median(run['frames'] for run in runs):>7.0f}"
+                f"{median(run['per_frame'] for run in runs):>9}"
+                f"{median(gpus):>10.2f}"
+                f"{median(run['cpu'] for run in runs):>11.2f}"
+                f"{median(run['visible'] for run in runs):>6.0f}"
+                f"{median(run['elements'] for run in runs):>8.0f}"
+                f"  [{', '.join(f'{value:.2f}' for value in gpus)}]"
+            )
+
+        return 0
 
     if args.shapes:
         shapes = [

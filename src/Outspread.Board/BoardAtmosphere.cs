@@ -35,9 +35,17 @@ partial class MainWindow
     private byte[]? _gridBuffer;
     private Rect? _clipRect;
     private bool? _floorIsDark;
+
+    private bool _inkedOnce;
     private bool? _vignetteIsDark;
 
-    private void UpdateAtmosphere() => UpdateAtmosphereAt(_view.Zoom, _view.PanX, _view.PanY, forensics: true);
+    /// <summary>
+    /// 按"相机在这一帧的样子"画底下那两层。
+    /// </summary>
+    /// <param name="forensics">要不要顺手数一遍墨。那一发要 3–6ms：它把整张缓冲再扫一遍，
+    /// 只在"位图到底有没有点上墨"这件事值得证的时候才付（启动后第一发、自检、以及 --perf）。
+    /// 10-27 量总览那一档时它是白交的：每跨一次缩放档都要重画点阵，而每一次都数一遍墨。</param>
+    private void UpdateAtmosphere(bool forensics = false) => UpdateAtmosphereAt(_view.Zoom, _view.PanX, _view.PanY, forensics);
 
     /// <summary>
     /// 按"相机在这一帧的样子"画底下那两层。
@@ -52,6 +60,14 @@ partial class MainWindow
     /// </remarks>
     private void UpdateAtmosphereAt(double zoom, double panX, double panY, bool forensics)
     {
+        // 每一发起来后头一次重画都要留下那行取证读数（"位图有没有墨"这件事只能在那一帧证一次）；
+        // 之后的重画不再扫第二遍——缩放中途每跨一档都要重画，那 3–6ms 是白交的。
+        var inked = forensics || !_inkedOnce;
+
+        if (inked)
+        {
+            _inkedOnce = true;
+        }
         var width = BoardArea.ActualWidth;
         var height = BoardArea.ActualHeight;
 
@@ -99,7 +115,7 @@ partial class MainWindow
         if (key != _gridKey)
         {
             _gridKey = key;
-            PaintGrid(tileWidth, tileHeight, scale, zoom, forensics);
+            PaintGrid(tileWidth, tileHeight, scale, zoom, inked);
         }
 
         // 平移只改这一处：点阵跟着相位走，位图不重画。

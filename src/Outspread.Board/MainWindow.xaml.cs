@@ -8347,11 +8347,15 @@ public sealed partial class MainWindow : Window
             frame % 4 is 0 or 1 ? 3 : -3)));    // 两轴都要来回：只在 X 上乒乓的话，Y 每帧单向漂 3 像素，
                                                 // 10 秒就漂出 1400 像素——"600 格·平移 可见 3 枚"量的其实是空地
 
-    /// <summary>持续滚轮那几秒：缩放才是他报"卡"的那一拍，之前只量过平移，那一半根本没有数。</summary>
+    /// <summary>
+    /// 持续滚轮那几秒：缩放才是他报"卡"的那一拍，之前只量过平移，那一半根本没有数。
+    /// 两向交替（进一格、退一格）：一路只往一个方向滚会一路爬到缩放上限，
+    /// 那量到的就不是"他停下来的那一档"了。
+    /// </summary>
     public void BeginZoomProbe(int milliseconds) => WaitUntilLaidOut("zoom", () =>
-        RunGestureProbe(milliseconds, "zoom", _ =>
+        RunGestureProbe(milliseconds, "zoom", frame =>
         {
-            ApplyWheel(new Point(BoardArea.ActualWidth / 2, BoardArea.ActualHeight / 2), 120);
+            ApplyWheel(new Point(BoardArea.ActualWidth / 2, BoardArea.ActualHeight / 2), frame % 2 == 0 ? 120 : -120);
             CommitWheelPreview();
         }));
 
@@ -8657,7 +8661,7 @@ public sealed partial class MainWindow : Window
                 }
             }
         });
-        Bench("  └ UpdateAtmosphere 点阵", 12, () => UpdateAtmosphere());
+        Bench("  └ UpdateAtmosphere 点阵", 12, () => UpdateAtmosphere(forensics: true));
         Bench("  └ PaintLinks 连线", 12, () => PaintLinks());
         Bench("  └ BuildDisplays 摆位表", 12, () => { var kept = BuildDisplays().Count; if (kept < 0) { Diagnostics.Write("no"); } });
         Bench("  └ EmptyGroupIds 空组", 12, () => { var kept = EmptyGroupIds().Count; if (kept < 0) { Diagnostics.Write("no"); } });
@@ -8697,7 +8701,7 @@ public sealed partial class MainWindow : Window
 
         // 平移每一帧走的就是这一发：相机 + 预览位移 + 点阵 + 小地图视口。10% CPU 到底花在哪，看它。
         Bench("一发平移（ApplyPanPreview）", 20, () => ApplyPanPreview(-18, 0));
-        Bench("  └ 其中点阵 UpdateAtmosphere", 20, () => UpdateAtmosphere());
+        Bench("  └ 其中点阵 UpdateAtmosphere", 20, () => UpdateAtmosphere(forensics: true));
         Bench("  └ 其中小地图 SyncViewport", 20, () => SyncMiniMapViewport());
         Bench("一发滚轮（预览+提交）", 10, () =>
         {

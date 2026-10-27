@@ -832,6 +832,23 @@ public sealed class NodeVisual : ContentControl
     /// 换档只改这两个数——合成器的事，不是重新排版的事。</summary>
     private readonly ScaleTransform _paintZoom = new();
 
+    /// <summary>"阴影 ↔ 一条底线"这一级 LOD 的当前状态（null＝这一格还没判过）。</summary>
+    private bool? _shadowLod;
+
+    /// <summary>
+    /// 这一格该不该画阴影。判断本身在 <see cref="NoteSurface.ShadowLod"/>（带迟滞，可单测），
+    /// 这里只存"上一拍是什么"——那一拍不能没有：没有它，压在阈值上的板子来回滚轮每帧都要
+    /// 把全部可见格的阴影层重铺一遍（实测 104ms/帧 vs 8.3ms）。
+    /// </summary>
+    private bool ShadowLod(double zoom)
+    {
+        var next = NoteSurface.ShadowLod(zoom, _shadowLod ?? NoteSurface.DrawsShadow(zoom));
+
+        _shadowLod = next;
+
+        return next;
+    }
+
     private readonly Grid _paint = new();
 
     /// <summary>卡面裁剪矩形随尺寸重建一次就够（剔除/改大小那一拍才变）。</summary>
@@ -1184,7 +1201,7 @@ public sealed class NodeVisual : ContentControl
             display.ShownFrame,
             display.FoldDX,
             display.FoldDY,
-            NoteSurface.DrawsShadow(view.Zoom),
+            ShadowLod(view.Zoom),
             ShowText ? 0 : TierFor((int)(_worldBox.Width * view.Zoom * Math.Max(1, rasterizationScale))),
             XamlRoot is null,
             _firstLine,
@@ -2016,9 +2033,11 @@ public sealed class NodeVisual : ContentControl
 
         // 阴影几何是世界数（内容层那枚变换把它投到屏幕上），键里不再带逐档缩放——
         // 只有"影↔线"那一级 LOD 翻档（跨过 ShadowMinZoom）才值得重铺一次。
-        var key = $"{NoteSurface.DrawsShadow(view.Zoom)}|{node.Width:0.#}|{node.Height:0.#}|{NoteStyling.IsDark}";
+        // 翻不翻这一档读的是 <see cref="ShadowLod"/>（带迟滞），不是裸阈值比较。
+        var shadowed = ShadowLod(view.Zoom);
+        var key = $"{shadowed}|{node.Width:0.#}|{node.Height:0.#}|{NoteStyling.IsDark}";
 
-        if (!NoteSurface.DrawsShadow(view.Zoom))
+        if (!shadowed)
         {
             // tldraw's own degradation is two things at once: the shadow goes away AND one bottom
             // line appears. Dropping the shadow without the line leaves a card with no edge at all.

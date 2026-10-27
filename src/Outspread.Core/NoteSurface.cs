@@ -69,6 +69,24 @@ public static class NoteSurface
     /// <summary>The bottom line's width in world units when the shadow is off.</summary>
     public const double FallbackLineWidth = 2;
 
+    /// <summary>迟滞带的宽度（缩放档）：阈值上方这一段里，阴影保持它原来的状态不翻。</summary>
+    public const double ShadowLodBand = 0.05;
+
+    /// <summary>
+    /// "阴影 ↔ 一条底线"这一级 LOD 的<b>下一状态</b>——带一圈迟滞，所以它要看上一拍是什么。
+    /// </summary>
+    /// <remarks>
+    /// 为什么不是裸阈值比较：板子缩到正好压在 <see cref="ShadowMinZoom"/> 上时（他那块「Agent 出口」
+    /// 装进视口正好是 0.244×），来回滚轮等于每帧翻一次档，而每翻一次全部可见格都要重铺阴影层——
+    /// 同装置实测 <b>104ms/帧</b>，把相机退开到 0.40× 只要 8.3ms。那 0.05 档里两种画法在屏幕上
+    /// 差不到一个像素（阴影在世界数下只有 5–16 像素），代价却差一个数量级。
+    /// </remarks>
+    /// <param name="wasOn">这一格上一拍是画阴影还是画底线。</param>
+    public static bool ShadowLod(double zoom, bool wasOn)
+        => zoom < ShadowMinZoom ? false
+            : zoom >= ShadowMinZoom + ShadowLodBand ? true
+            : wasOn;
+
     /// <summary>One layer of a shadow: how far it drops, how soft, how tucked in, how dark.</summary>
     /// <param name="OffsetY">Downward shift in world units. tldraw never shifts sideways.</param>
     /// <param name="Blur">Softness radius in world units.</param>

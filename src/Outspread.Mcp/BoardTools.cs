@@ -327,6 +327,79 @@ public sealed class BoardTools
             + (stillOpen.Count > 0 ? $"\n还没结的 {stillOpen.Count} 格留在同一个组里平铺：{string.Join("、", stillOpen.Select(node => node.Id.Length > 8 ? node.Id[..8] : node.Id))}" : "");
     }
 
+    [McpServerTool(Name = "board_tidy"), Description(
+        "把整块板收紧：每个组（和每张散卡）当成一块，按原来的阅读顺序从上往下摞起来，块与块之间只留一条缝。"
+        + "不改组内摆法、不改正文、不删任何东西，只挪位置。他 10-27 说过两次：组与组之间空出半屏，可读性太差。")]
+    public static string BoardTidy(
+        [Description("块与块之间的缝，像素，默认 48")] int gap = 48,
+        [Description("画板文件路径。不填就用你的「Agent 出口」板。")] string? board = null)
+    {
+        var path = ResolveBoard(board);
+
+        if (!File.Exists(path))
+        {
+            return $"{path} 还没有这块板。";
+        }
+
+        var document = CanvasStore.Load(path);
+        var byId = document.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+        var blocks = new List<(List<string> Ids, double X, double Y, double Width, double Height)>();
+
+        foreach (var group in document.Nodes.Where(node => node.Kind == CanvasNodeKind.Group))
+        {
+            var ids = new List<string> { group.Id };
+            ids.AddRange((group.GroupMemberIds ?? []).Where(byId.ContainsKey));
+            var members = ids.Select(id => byId[id]).ToList();
+
+            blocks.Add((
+                ids,
+                members.Min(node => node.X),
+                members.Min(node => node.Y),
+                members.Max(node => node.X + node.Width) - members.Min(node => node.X),
+                members.Max(node => node.Y + node.Height) - members.Min(node => node.Y)));
+        }
+
+        var inGroup = document.Nodes
+            .Where(node => node.Kind == CanvasNodeKind.Group)
+            .SelectMany(node => node.GroupMemberIds ?? [])
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var node in document.Nodes.Where(node => node.Kind != CanvasNodeKind.Group && !inGroup.Contains(node.Id)))
+        {
+            blocks.Add(([node.Id], node.X, node.Y, node.Width, node.Height));
+        }
+
+        if (blocks.Count == 0)
+        {
+            return $"{path}：板上没有可收的东西。";
+        }
+
+        // 按"上边、再左边"排：他看板的顺序就是这块板的阅读顺序，收紧之后不许打乱。
+        var ordered = blocks.OrderBy(block => block.Y).ThenBy(block => block.X).ToList();
+        var patch = new DocPatch();
+        // 左边对齐到 0：负数坐标虽然能画，但他的板从 0 开始看最顺。
+        const double left = 0;
+        var top = ordered.Min(block => block.Y);
+
+        foreach (var block in ordered)
+        {
+            var dx = left - block.X;
+            var dy = top - block.Y;
+
+            foreach (var id in block.Ids)
+            {
+                patch.SetNumber(id, "x", byId[id].X + dx);
+                patch.SetNumber(id, "y", byId[id].Y + dy);
+            }
+
+            top += block.Height + Math.Max(8, gap);
+        }
+
+        CanvasStore.SavePatch(path, patch);
+
+        return $"已收紧 {ordered.Count} 块（组和散卡各算一块），块间缝 {Math.Max(8, gap)}px，整块板高 {top - Math.Max(8, gap):0}px。组内摆法一个字没动。";
+    }
+
     [McpServerTool(Name = "board_read"), Description(
         "读一块板：每格一行，给编号、首行、标签、位置。想知道板子上现在有什么就先叫它。"
         + "收尾的那一发就靠它当凭据：返回第二行按 @t轮次给出「还欠几格」，把那个数写进汇报。")]

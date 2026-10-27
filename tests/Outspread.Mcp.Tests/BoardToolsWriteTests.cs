@@ -235,6 +235,41 @@ public sealed class BoardToolsWriteTests : IDisposable
             $"{node.Id} 探出了组框"));
     }
 
+    [Fact]
+    public void Tidying_pulls_the_blocks_together_without_touching_what_is_inside_them()
+    {
+        // 他 10-27 的截图：组与组之间空出半屏。收紧只挪块的位置，组内相对摆法一个字节不改。
+        var board = Path.Combine(_root, "散得很开.canvas");
+        var doc = new JsonObject
+        {
+            ["nodes"] = new JsonArray(
+                Note("u1", 0, 0, 360, 120, "@t甲 甲组第一格"),
+                Note("u2", 40, 40, 360, 120, "@t甲 甲组第二格"),
+                new JsonObject { ["id"] = "g1", ["type"] = "group", ["label"] = "甲", ["x"] = -12, ["y"] = -12, ["width"] = 412, ["height"] = 172, ["members"] = new JsonArray("u1", "u2") },
+                Note("u3", 900, 3000, 360, 120, "@t乙 乙组一格"),
+                new JsonObject { ["id"] = "g2", ["type"] = "group", ["label"] = "乙", ["x"] = 888, ["y"] = 2988, ["width"] = 384, ["height"] = 144, ["members"] = new JsonArray("u3") }),
+            ["edges"] = new JsonArray(),
+        };
+
+        File.WriteAllText(board, doc.ToJsonString());
+
+        BoardTools.BoardTidy(gap: 48, board: board);
+
+        var after = CanvasStore.Load(board);
+        var g1 = after.Find("g1")!;
+        var g2 = after.Find("g2")!;
+        var u1 = after.Find("u1")!;
+        var u2 = after.Find("u2")!;
+
+        // 块与块之间只留一条缝：第二块的顶边 = 第一块底边 + 48。
+        Assert.Equal(g1.Y + g1.Height + 48, g2.Y, 3);
+        Assert.Equal(g1.X, g2.X, 3);
+
+        // 组内错位保留：两格的相对偏移还是 40,40。
+        Assert.Equal(40, u2.X - u1.X, 3);
+        Assert.Equal(40, u2.Y - u1.Y, 3);
+    }
+
     private static JsonObject Note(string id, int x, int y, int width, int height, string text)
         => new()
         {

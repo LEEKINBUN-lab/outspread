@@ -408,6 +408,89 @@ public sealed class BoardTools
         return $"已收紧 {ordered.Count} 块（组和散卡各算一块），块间缝 {Math.Max(8, gap)}px，整块板高 {top - Math.Max(8, gap):0}px。组内摆法一个字没动。";
     }
 
+    [McpServerTool(Name = "board_inbox"), Description(
+        "他要你做的事都在板上：这枚工具对比「上次 agent 读到的那一版」，列出**新加的**和**他改过的**格子，"
+        + "外加所有 @a 工单。判据是正文哈希，不是「他没说话所以没改」。"
+        + "每轮开头叫一次；处理完再叫一次 ack=true 把账抹平——账不抹平，你会一直看到同一批。")]
+    public static string BoardInbox(
+        [Description("true＝把当前这一版记成「已读」；不填只读不动账")] bool ack = false,
+        [Description("画板文件路径。不填就用你的「Agent 出口」板。")] string? board = null)
+    {
+        var path = ResolveBoard(board);
+
+        if (!File.Exists(path))
+        {
+            return $"{path} 还没有这块板。";
+        }
+
+        var markerPath = path + ".inbox.json";
+        var seen = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        try
+        {
+            if (File.Exists(markerPath)
+                && JsonNode.Parse(File.ReadAllText(markerPath)) is JsonObject recorded)
+            {
+                foreach (var (id, value) in recorded)
+                {
+                    seen[id] = value?.GetValue<string>() ?? string.Empty;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException)
+        {
+            seen.Clear();
+        }
+
+        var now = CanvasStore.Load(path).Nodes
+            .Where(node => node.Kind != CanvasNodeKind.Group)
+            .ToDictionary(node => node.Id, node => Convert.ToHexString(CanvasStore.Sha256Of(System.Text.Encoding.UTF8.GetBytes(node.Text ?? string.Empty))), StringComparer.Ordinal);
+
+        var lines = new List<string>();
+
+        foreach (var node in CanvasStore.Load(path).Nodes.Where(node => node.Kind != CanvasNodeKind.Group))
+        {
+            var hash = now[node.Id];
+            var isTicket = Tags.Of(node.Text).Any(tag => tag.Equals("#a", StringComparison.OrdinalIgnoreCase));
+            var added = !seen.ContainsKey(node.Id);
+            var edited = !added && seen[node.Id] != hash;
+
+            if (!added && !edited && !isTicket)
+            {
+                continue;
+            }
+
+            var first = (node.Text ?? string.Empty).Split('\n')
+                .FirstOrDefault(line => !Tags.LooksLikePropertyLine(line) && line.Trim().Length > 0) ?? string.Empty;
+            var why = added ? "新" : edited ? "改" : "工单";
+
+            lines.Add($"{why} {node.Id} | {first[..Math.Min(50, first.Length)]}");
+        }
+
+        if (ack)
+        {
+            var json = new JsonObject();
+
+            foreach (var (id, hash) in now.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                json[id] = hash;
+            }
+
+            try
+            {
+                File.WriteAllText(markerPath, json.ToJsonString());
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return $"账没抹上（{ex.Message}）：下一轮还会看到同一批。";
+            }
+        }
+
+        return lines.Count == 0
+            ? "没有新东西：他没动板，也没有工单。"
+            : $"{lines.Count} 处要你看：" + (ack ? "（已抹平这次读到的这一版）" : string.Empty) + "\n" + string.Join("\n", lines);
+    }
+
     [McpServerTool(Name = "board_tickets"), Description(
         "列出他在板上打的 @a 工单。判据：格子里有一个**恰好叫 a 的标签**——他打 @a，板子会存成 @ta（标签 a），"
         + "所以按字面找 \"@a\" 会全漏掉（10-27 实测漏了三张）。收尾前叫一次：有工单就开工单，别等他踢。")]

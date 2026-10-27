@@ -408,6 +408,47 @@ public sealed class BoardTools
         return $"已收紧 {ordered.Count} 块（组和散卡各算一块），块间缝 {Math.Max(8, gap)}px，整块板高 {top - Math.Max(8, gap):0}px。组内摆法一个字没动。";
     }
 
+    [McpServerTool(Name = "board_tickets"), Description(
+        "列出他在板上打的 @a 工单。判据：格子里有一个**恰好叫 a 的标签**——他打 @a，板子会存成 @ta（标签 a），"
+        + "所以按字面找 \"@a\" 会全漏掉（10-27 实测漏了三张）。收尾前叫一次：有工单就开工单，别等他踢。")]
+    public static string BoardTickets(
+        [Description("画板文件路径。不填就扫所有开着的板。")] string? board = null)
+    {
+        var paths = board is { Length: > 0 }
+            ? [ResolveBoard(board)]
+            : new[] { ResolveBoard(null) };
+
+        var lines = new List<string>();
+
+        foreach (var path in paths.Distinct())
+        {
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            foreach (var node in CanvasStore.Load(path).Nodes)
+            {
+                if (node.Kind == CanvasNodeKind.Group)
+                {
+                    continue;
+                }
+
+                if (!Tags.Of(node.Text).Any(tag => tag.Equals("#a", StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                var first = (node.Text ?? string.Empty).Split('\n')
+                    .FirstOrDefault(line => !Tags.LooksLikePropertyLine(line) && line.Trim().Length > 0) ?? string.Empty;
+
+                lines.Add($"{node.Id} | {first[..Math.Min(60, first.Length)]} | {Path.GetFileName(path)}");
+            }
+        }
+
+        return lines.Count == 0 ? "没有工单。" : $"工单 {lines.Count} 张：\n" + string.Join("\n", lines);
+    }
+
     [McpServerTool(Name = "board_read"), Description(
         "读一块板：每格一行，给编号、首行、标签、位置。想知道板子上现在有什么就先叫它。"
         + "收尾的那一发就靠它当凭据：返回第二行按 @t轮次给出「还欠几格」，把那个数写进汇报。")]

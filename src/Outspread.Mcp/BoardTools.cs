@@ -164,11 +164,11 @@ public sealed class BoardTools
             .Select(node => node.Id)
             .ToList();
 
-        // 堆之前先统一框：一摞里高低不齐就叠不拢。界面那发「按最小的统一」能量字体，每格贴自己的正文；
-        // MCP 这一侧没有字体引擎，量不到，所以取"最窄宽 × 这群里最高的现框"——**只会偏高、不会裁字**，
-        // 板子下次按正文贴时自己会收下来（他 10-26 定的语义是各自贴正文，这发是它的保守上界）。
+        // 堆之前先统一框：一摞里高低不齐就叠不拢。与界面上「按最小的统一」同一条规矩——
+        // 宽、高各取组内最小，允许裁字（他 10-26 22:5x 定的：堆叠换的就是占得少）。
+        // 这一侧不需要字体引擎：min 宽 × min 高，两边算出来的框一模一样。
         var width = wanted.Min(node => node.Width);
-        var height = wanted.Max(node => node.Height);
+        var height = wanted.Min(node => node.Height);
         var boxes = wanted.Select(node => new Aligning.Placed(node.Id, node.X, node.Y, width, height)).ToList();
         var stacked = Aligning.Stack(boxes);
 
@@ -210,7 +210,7 @@ public sealed class BoardTools
 
         CanvasStore.SavePatch(path, patch);
 
-        return $"已把 {wanted.Count} 格统一成 {width:0}×{height:0} 并叠进分组「{name}」（组 {groupId}）"
+        return $"已把 {wanted.Count} 格收成组内最窄最矮的 {width:0}×{height:0}（正文放不下的那几格会被渐隐收尾）并叠进分组「{name}」（组 {groupId}）"
             + (blocked.Count == 0 ? "。" : $"\n没收进去、还在等他的有 {blocked.Count} 格：{string.Join("、", blocked)}");
     }
 

@@ -4276,15 +4276,15 @@ public sealed partial class MainWindow : Window
             menu.Items.Add(submenu);
         }
 
-        // 两档都要能一眼够到：按最大＝谁都别裁的同一个框，按最小＝宽收到最窄、高各自贴正文
-        // （他 10-26 21:5x 否掉了"最小公框"：那批卡宽本来就全一样，那一档点出来和按最大没区别）。
+        // 两档都要能一眼够到：按最大＝谁都别裁的同一个框；按最小＝宽高各取组内最小、**可能裁字**
+        // （他 10-26 22:5x 定档：那一档换的是省地方，被压掉的正文靠渐隐收尾）。
         var uniform = new MenuFlyoutSubItem { Text = "统一便签大小" };
 
-        var widest = new MenuFlyoutItem { Text = "按最大的统一（同一个框）" };
+        var widest = new MenuFlyoutItem { Text = "按最大的统一（同一个框，不裁字）" };
         widest.Click += (_, _) => UniformNoteSizes(bySmallest: false);
         uniform.Items.Add(widest);
 
-        var tightest = new MenuFlyoutItem { Text = "按最小的统一（各自贴正文）" };
+        var tightest = new MenuFlyoutItem { Text = "按最小的统一（最窄最矮，会裁字）" };
         tightest.Click += (_, _) => UniformNoteSizes(bySmallest: true);
         uniform.Items.Add(tightest);
 

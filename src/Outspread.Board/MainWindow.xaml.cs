@@ -8552,6 +8552,25 @@ public sealed partial class MainWindow : Window
             return total;
         }
 
+        // 一格到底挂了哪些元素：按类型数一遍，才知道该削谁。
+        static void Histogram(DependencyObject root, Dictionary<string, int> into)
+        {
+            var name = root.GetType().Name;
+            into[name] = into.TryGetValue(name, out var seen) ? seen + 1 : 1;
+
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            {
+                Histogram(VisualTreeHelper.GetChild(root, i), into);
+            }
+        }
+
+        if (_realized.Values.FirstOrDefault() is { } sample)
+        {
+            var histogram = new Dictionary<string, int>(StringComparer.Ordinal);
+            Histogram(sample, histogram);
+            Diagnostics.Write("perf 单格元素: " + string.Join("、", histogram.OrderByDescending(pair => pair.Value).Select(pair => $"{pair.Key}×{pair.Value}")));
+        }
+
         var process = System.Diagnostics.Process.GetCurrentProcess();
         Diagnostics.Write($"perf 内存: 常驻 {process.WorkingSet64 / 1048576}MB · 托管堆 {GC.GetTotalMemory(false) / 1048576}MB · 板面元素 {Count(PanLayer)} 个 · 每格均 {Count(PanLayer) * 1.0 / Math.Max(1, _realized.Count):0.#} 个");
 

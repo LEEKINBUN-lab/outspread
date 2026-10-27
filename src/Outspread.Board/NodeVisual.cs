@@ -391,7 +391,6 @@ public sealed class NodeVisual : ContentControl
 
         Grid.SetRow(_md, 0);
         Grid.SetRow(_chips, 1);
-        _textHost.Children.Add(_md);
         _textHost.Children.Add(_chips);
         if (Kind == CanvasNodeKind.Group)
         {
@@ -432,11 +431,14 @@ public sealed class NodeVisual : ContentControl
         Grid.SetRow(_headerHost, 0);
         Grid.SetRow(_table, 1);
         Grid.SetRow(_textHost, 2);
-        _content.Children.Add(_headerHost);
         _content.Children.Add(_textHost);
-        _content.Children.Add(_table);
 
         ShowText = Kind != CanvasNodeKind.File || !LooksLikeImage(node.FilePath);
+        if (entity?.Table is not null && !_content.Children.Contains(_table))
+        {
+            _content.Children.Add(_table);
+        }
+
         _table.Visibility = entity?.Table is null ? Visibility.Collapsed : Visibility.Visible;
 
         _surface.Child = ShowText ? _content : _image;
@@ -1313,6 +1315,11 @@ public sealed class NodeVisual : ContentControl
                 NoteStyling.IsDark);
         }
 
+        if (_entityHeader is not null && !_content.Children.Contains(_headerHost))
+        {
+            _content.Children.Insert(0, _headerHost);
+        }
+
         _headerHost.Visibility = _entityHeader is null ? Visibility.Collapsed : Visibility.Visible;
         _headerHost.Height = headerWorld;
         _table.Visibility = isTable ? Visibility.Visible : Visibility.Collapsed;
@@ -1442,6 +1449,11 @@ public sealed class NodeVisual : ContentControl
                        || _totalLines - _firstLine > _visibleLines;
 
             _label.Visibility = blocks ? Visibility.Collapsed : Visibility.Visible;
+            if (blocks && !_textHost.Children.Contains(_md))
+            {
+                _textHost.Children.Insert(0, _md);   // 文字下面/牌子上面：顺序沿用原来那一挂
+            }
+
             _md.Visibility = blocks ? Visibility.Visible : Visibility.Collapsed;
 
             // 有牌子时，多出来的那一行会被文本宿主继续画进牌子带（它不按行高裁字），

@@ -187,6 +187,66 @@ public sealed class BoardToolsWriteTests : IDisposable
             $"{node.Id} 探出了组框"));
     }
 
+    [Fact]
+    public void In_one_round_the_settled_ones_stack_and_the_open_one_stays_flat_in_the_same_group()
+    {
+        // 他 10-27 的摆法：一轮一个组；已勾的叠成一摞，没勾的平铺在下面——不散落、也不叠。
+        var board = Path.Combine(_root, "一轮混着.canvas");
+
+        var doc = new JsonObject
+        {
+            ["nodes"] = new JsonArray(
+                Note("u1", 0, 0, 400, 200, "@t那轮 @n1 @b1\n已经结了的"),
+                Note("u2", 420, 0, 360, 160, "@t那轮 @n2 @b1\n也已经结了"),
+                Note("u3", 0, 400, 300, 140, "@t那轮 @n3 @b0\n还在等他拍")),
+            ["edges"] = new JsonArray(),
+        };
+
+        File.WriteAllText(board, doc.ToJsonString());
+
+        var receipt = BoardTools.BoardArchive("那轮（一半一半）", ["u1", "u2", "u3"], board);
+
+        var document = CanvasStore.Load(board);
+        var group = Assert.Single(document.Nodes.Where(node => node.Kind == CanvasNodeKind.Group));
+        var first = document.Find("u1")!;
+        var second = document.Find("u2")!;
+        var open = document.Find("u3")!;
+
+        // 已结的两格叠成一摞：尺寸收到组内最窄最矮（360×160），位置是错开的（叠起来本来就这样）。
+        Assert.Equal(360, first.Width, 3);
+        Assert.Equal(160, first.Height, 3);
+        Assert.Equal(360, second.Width, 3);
+        Assert.Equal(160, second.Height, 3);
+        Assert.True(Math.Abs(first.X - second.X) < 60 && Math.Abs(first.Y - second.Y) < 60, "两格没有叠在一起");
+
+        // 没结的那格不叠：落在那摞下面、不和它重叠，尺寸也不被改动，但仍在同一枚组里。
+        Assert.True(open.Y >= Math.Max(first.Y, second.Y) + Math.Max(first.Height, second.Height) - 1, "未结那格没挪到摞下面");
+        Assert.Equal(300, open.Width, 3);
+        Assert.Equal(140, open.Height, 3);
+        Assert.Contains("u3", group.GroupMemberIds!);
+        Assert.Equal(3, group.GroupMemberIds!.Count);
+        Assert.Contains("1 格留在同一个组里平铺", receipt);
+
+        // 框盖住叠的那摞，也盖住平铺的那张。
+        Assert.All([first, second, open], node => Assert.True(
+            group.X <= node.X && group.Y <= node.Y
+            && group.X + group.Width >= node.X + node.Width
+            && group.Y + group.Height >= node.Y + node.Height,
+            $"{node.Id} 探出了组框"));
+    }
+
+    private static JsonObject Note(string id, int x, int y, int width, int height, string text)
+        => new()
+        {
+            ["id"] = id,
+            ["type"] = "text",
+            ["x"] = x,
+            ["y"] = y,
+            ["width"] = width,
+            ["height"] = height,
+            ["text"] = text,
+        };
+
     private static BoardCard Card(string kind, string text) => new() { Kind = kind, Text = text };
 
     /// <summary>

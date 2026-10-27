@@ -165,6 +165,18 @@ public sealed class BoardTools
         }
 
         var document = CanvasStore.Load(path);
+
+        // 编号对不上必须说出来：10-27 我喂了一串截断的编号，工具一声不吭只收了 3/5 格，
+        // 于是"这一轮已收全"是句假话。宁可整发不动，也不要在少收几格的时候报成功。
+        var missing = ids is { Length: > 0 }
+            ? ids.Where(id => document.Find(id) is null).ToList()
+            : [];
+
+        if (missing.Count > 0)
+        {
+            return $"{path} 里找不到这些编号：{string.Join("、", missing)}——这一发没动盘。";
+        }
+
         var wanted = ids is { Length: > 0 }
             ? ids.Select(document.Find).Where(node => node is not null).Select(node => node!).ToList()
             : document.Nodes
@@ -173,9 +185,9 @@ public sealed class BoardTools
                 .Where(node => !AwaitsHim(node))
                 .ToList();
 
-        if (wanted.Count < 2)
+        if (wanted.Count == 0)
         {
-            return $"只有 {wanted.Count} 格可收：堆叠至少要两格，这一发没动盘。";
+            return $"{path}：没有可收的格子，这一发没动盘。";
         }
 
         var blocked = document.Nodes
@@ -183,42 +195,79 @@ public sealed class BoardTools
             .Select(node => node.Id)
             .ToList();
 
-        // 堆之前先统一框：一摞里高低不齐就叠不拢。与界面上「按最小的统一」同一条规矩——
-        // 宽、高各取组内最小，允许裁字（他 10-26 22:5x 定的：堆叠换的就是占得少）。
+        var settled = wanted.Where(node => !AwaitsHim(node)).ToList();
+
+        // 叠之前先统一框：一摞里高低不齐就叠不拢。与界面上「按最小的统一」同一条规矩——
+        // 宽、高各取**这一摞里**最小，允许裁字（他 10-26 22:5x 定的：堆叠换的就是占得少）。
         // 这一侧不需要字体引擎：min 宽 × min 高，两边算出来的框一模一样。
-        var width = wanted.Min(node => node.Width);
-        var height = wanted.Min(node => node.Height);
-        var boxes = wanted.Select(node => new Aligning.Placed(node.Id, node.X, node.Y, width, height)).ToList();
-        var stacked = Aligning.Stack(boxes);
+        var width = settled.Count > 0 ? settled.Min(node => node.Width) : 0;
+        var height = settled.Count > 0 ? settled.Min(node => node.Height) : 0;
 
-        if (!stacked.Ok)
-        {
-            return $"堆叠没算成（需 {stacked.Needed}，有 {stacked.Have}），这一发没动盘。";
-        }
-
+        // 一轮 = 一个组；组里已勾的叠成一摞，没勾的平铺在下面（他 10-27 定的摆法）。
+        // 平铺的用自己原来的尺寸：它们还在等他看，被收成最小反而不好读。
+        var stillOpen = wanted.Where(node => AwaitsHim(node)).ToList();
         var patch = new DocPatch();
+        var placed = new List<Aligning.Placed>();
 
-        foreach (var move in stacked.Moves)
+        if (settled.Count >= 2)
         {
-            patch.SetNumber(move.Id, "width", width);
-            patch.SetNumber(move.Id, "height", height);
-            patch.SetNumber(move.Id, "x", move.X);
-            patch.SetNumber(move.Id, "y", move.Y);
+            var stack = Aligning.Stack(settled
+                .Select(node => new Aligning.Placed(node.Id, node.X, node.Y, width, height))
+                .ToList());
+
+            if (!stack.Ok)
+            {
+                return $"堆叠没算成（需 {stack.Needed}，有 {stack.Have}），这一发没动盘。";
+            }
+
+            foreach (var move in stack.Moves)
+            {
+                patch.SetNumber(move.Id, "width", width);
+                patch.SetNumber(move.Id, "height", height);
+                patch.SetNumber(move.Id, "x", move.X);
+                patch.SetNumber(move.Id, "y", move.Y);
+                placed.Add(new Aligning.Placed(move.Id, move.X, move.Y, width, height));
+            }
+        }
+        else if (settled.Count == 1)
+        {
+            // 只有一格"已结"：不叠（叠不出来），就把它摆在组的左上角，免得它孤零零杵在别处。
+            var only = settled[0];
+            var x = Math.Min(only.X, stillOpen.Count > 0 ? stillOpen.Min(node => node.X) : only.X);
+            var y = Math.Min(only.Y, stillOpen.Count > 0 ? stillOpen.Min(node => node.Y) : only.Y);
+
+            patch.SetNumber(only.Id, "x", x);
+            patch.SetNumber(only.Id, "y", y);
+            placed.Add(new Aligning.Placed(only.Id, x, y, only.Width, only.Height));
         }
 
-        var moved = stacked.Moves
-            .Select(move => new Aligning.Placed(move.Id, move.X, move.Y, width, height))
-            .ToList();
+        var stackLeft = placed.Count > 0 ? placed.Min(item => item.X) : 0;
+        var stackBottom = placed.Count > 0 ? placed.Max(item => item.Y + item.Height) : 0;
+        var openLeft = stackLeft;
+        var openTop = placed.Count > 0 ? stackBottom + ColumnGap : 0;
+
+        foreach (var node in stillOpen)
+        {
+            patch.SetNumber(node.Id, "x", openLeft);
+            patch.SetNumber(node.Id, "y", openTop);
+            placed.Add(new Aligning.Placed(node.Id, openLeft, openTop, node.Width, node.Height));
+            openLeft += node.Width + ColumnGap;
+        }
+
+        if (placed.Count == 0)
+        {
+            return $"{path}：这批没有可摆的格子，这一发没动盘。";
+        }
 
         var groupId = into_group is { Length: > 0 } ? into_group : NodeIds.New(NodeIds.AgentNamespace);
         var frame = new JsonObject
         {
             ["label"] = name,
-            ["x"] = (long)Math.Floor(moved.Min(item => item.X) - 12),
-            ["y"] = (long)Math.Floor(moved.Min(item => item.Y) - 12),
-            ["width"] = (long)Math.Ceiling(moved.Max(item => item.X + item.Width) - moved.Min(item => item.X) + 24),
-            ["height"] = (long)Math.Ceiling(moved.Max(item => item.Y + item.Height) - moved.Min(item => item.Y) + 24),
-            ["members"] = new JsonArray(stacked.Moves.Select(move => (JsonNode)JsonValue.Create(move.Id)!).ToArray()),
+            ["x"] = (long)Math.Floor(placed.Min(item => item.X) - 12),
+            ["y"] = (long)Math.Floor(placed.Min(item => item.Y) - 12),
+            ["width"] = (long)Math.Ceiling(placed.Max(item => item.X + item.Width) - placed.Min(item => item.X) + 24),
+            ["height"] = (long)Math.Ceiling(placed.Max(item => item.Y + item.Height) - placed.Min(item => item.Y) + 24),
+            ["members"] = new JsonArray(placed.Select(item => (JsonNode)JsonValue.Create(item.Id)!).ToArray()),
         };
 
         if (into_group is { Length: > 0 })
@@ -264,16 +313,18 @@ public sealed class BoardTools
 
         if (viewProblem is null)
         {
-            foreach (var move in stacked.Moves)
+            // 只钉"叠成一摞"的那些：平铺的未结卡还归「随文字」管，改了字仍跟着长。
+            foreach (var node in settled)
             {
-                view.MarkManualSize(move.Id);
+                view.MarkManualSize(node.Id);
             }
 
             view.Save(sidecar);
         }
 
-        return $"已把 {wanted.Count} 格收成组内最窄最矮的 {width:0}×{height:0}（正文放不下的那几格会被渐隐收尾）并叠进分组「{name}」（组 {groupId}）"
-            + (blocked.Count == 0 ? "。" : $"\n没收进去、还在等他的有 {blocked.Count} 格：{string.Join("、", blocked)}");
+        return $"一轮一格组：「{name}」（{placed.Count} 格）"
+            + (settled.Count > 0 ? $"\n已结的 {settled.Count} 格收成组内最窄最矮的 {width:0}×{height:0}，叠成一摞" : "\n这一轮还没有已结的格子，没有可叠的")
+            + (stillOpen.Count > 0 ? $"\n还没结的 {stillOpen.Count} 格留在同一个组里平铺：{string.Join("、", stillOpen.Select(node => node.Id.Length > 8 ? node.Id[..8] : node.Id))}" : "");
     }
 
     [McpServerTool(Name = "board_read"), Description(

@@ -1287,9 +1287,11 @@ public sealed class NodeVisual : ContentControl
     private void UpdateOverflowFades(CanvasNode node, BoardViewState view, double headerScreen)
     {
         var textCard = ShowText && Kind != CanvasNodeKind.Group;
-        var shown = view.Zoom >= 0.5;
-        var above = textCard && shown && _firstLine > 0;
-        var below = textCard && shown && _hasMore;
+        // 渐隐只取决于"内容画不画得下"，与 zoom 无关（他 10-27 的工单：缩放时看到的必须是同一张卡）。
+        // 以前这里有一道 view.Zoom >= 0.5 的门槛：缩到总览那一档，淡出变成硬切一行，
+        // 于是每一档缩放都要重算一遍——既改内容又花计算。
+        var above = textCard && _firstLine > 0;
+        var below = textCard && _hasMore;
 
         _fadeAbove.Visibility = above ? Visibility.Visible : Visibility.Collapsed;
         _fadeBelow.Visibility = below ? Visibility.Visible : Visibility.Collapsed;

@@ -8529,11 +8529,31 @@ public sealed partial class MainWindow : Window
 
         var anchor = new Point(BoardArea.ActualWidth / 2, BoardArea.ActualHeight / 2);
 
+        // 平移每一帧走的就是这一发：相机 + 预览位移 + 点阵 + 小地图视口。10% CPU 到底花在哪，看它。
+        Bench("一发平移（ApplyPanPreview）", 20, () => ApplyPanPreview(-18, 0));
+        Bench("  └ 其中点阵 UpdateAtmosphere", 20, () => UpdateAtmosphere());
+        Bench("  └ 其中小地图 SyncViewport", 20, () => SyncMiniMapViewport());
         Bench("一发滚轮（预览+提交）", 10, () =>
         {
             ApplyWheel(anchor, 120);
             CommitWheelPreview();
         });
+
+        // 内存账：他现在 200MB 上下，先量清楚是谁占的——每格视觉里到底挂了几个元素。
+        static int Count(DependencyObject root)
+        {
+            var total = 1;
+
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            {
+                total += Count(VisualTreeHelper.GetChild(root, i));
+            }
+
+            return total;
+        }
+
+        var process = System.Diagnostics.Process.GetCurrentProcess();
+        Diagnostics.Write($"perf 内存: 常驻 {process.WorkingSet64 / 1048576}MB · 托管堆 {GC.GetTotalMemory(false) / 1048576}MB · 板面元素 {Count(PanLayer)} 个 · 每格均 {Count(PanLayer) * 1.0 / Math.Max(1, _realized.Count):0.#} 个");
 
         Diagnostics.Write("PERF DONE");
     }

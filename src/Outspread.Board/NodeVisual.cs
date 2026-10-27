@@ -1686,7 +1686,8 @@ public sealed class NodeVisual : ContentControl
         _ => string.Empty,
     };
 
-    private static bool LooksLikeImage(string? path)
+    /// <summary>构造那一侧的判定（图和字谁在）。增量重建对账时要按同一把尺算，所以不许有第二份。</summary>
+    internal static bool LooksLikeImage(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))
         {

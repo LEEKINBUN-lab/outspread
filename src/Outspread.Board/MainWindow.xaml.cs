@@ -49,6 +49,13 @@ public sealed partial class MainWindow : Window
 
     private readonly Dictionary<string, NodeVisual> _realized = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// 每一格"立着的那张卡是按什么造的"那本账（键见 <see cref="ConstructionStamp"/>）。
+    /// 与 <see cref="_realized"/> 同生同死：<see cref="Rebuild"/> 拿它对账，只对不拆——
+    /// 少了这本账，"这张卡还在不在"根本判不出"要不要换"。
+    /// </summary>
+    private readonly Dictionary<string, string> _stamps = new(StringComparer.Ordinal);
+
     private readonly HashSet<string> _selection = new(StringComparer.Ordinal);
 
     private readonly DispatcherQueueTimer _saveTimer;
@@ -665,12 +672,91 @@ public sealed partial class MainWindow : Window
     // Realisation
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// 增量重建：只处理需要处理的格子——新增的建、删除的拆、构造变了的那几格换掉，其余原样留着。
+    /// </summary>
+    /// <remarks>
+    /// 这里原来是"清一层＋每格 new 一枚 <see cref="NodeVisual"/>"：同一块 300 格＋30 组的合成板上
+    /// 平均 750ms、最慢 890ms（<c>--perf</c>，视口 1320×802；修尺以前那版量到的是 382ms，因为视口还是
+    /// 0×0、逐格 Update 一圈都没跑），而他一次编辑落定、一次外部并入、一次排列都要走到这儿——
+    /// 卡顿工单②的"唯一重活"就是这一发。
+    /// <para>
+    /// 敢留的依据是分工：<b>位置、尺寸、正文、配色、标记</b>都由 <see cref="ArrangeAll"/> 那一圈
+    /// <c>visual.Update</c> 逐拍改（它本来就每一拍都跑，内部还有阴影／牌子／markdown 三把记忆化的尺），
+    /// 拆了重造对它们没有任何好处。需要重造的只有<b>构造那一刻定下来的</b>那几样：换了类型、
+    /// 图与字换了边、实体卡换了对象（标题／元信息／牌子／缩略图／表格内容）、换了块板子。
+    /// 这几样收进 <see cref="ConstructionStamp"/> 那一把尺，对不上才换。
+    /// </para>
+    /// <para>
+    /// 留下来的卡片带着上一拍的画面状态，两处按"新卡片本来是什么样"补回去：警示环（组钮拖那一拍的
+    /// 蓝／红圈）归零；正在抖的那一手（查找跳过来的 240ms）不留——它的落点写在动画完成那一发里，
+    /// 留下一张正在播动画的卡片会和这一拍的排布打架，重铸一张才和以前一致。
+    /// </para>
+    /// </remarks>
     private void Rebuild()
     {
-        ItemLayer.Children.Clear();
-        _realized.Clear();
+        var started = Stopwatch.GetTimestamp();
 
-        // 卡片是重铸的，摊开那一层也就没了宿主：状态跟着清，别留一个指向旧格子的组名。
+        // ---- 对账：这一拍的文档 vs 还立着的那些卡片 ----
+        var planned = new Dictionary<string, (CanvasNode Node, EntityCardInfo? Entity, string Stamp)>(StringComparer.Ordinal);
+        var order = new List<string>(_document.Nodes.Count);
+
+        foreach (var node in _document.Nodes)
+        {
+            // 实体卡那一份读数是构造的一部分，也是账的一部分：算一次、两处用，文件系统只问一遍。
+            var entity = DescribeEntity(node);
+
+            planned[node.Id] = (node, entity, ConstructionStamp(node, entity));
+            order.Add(node.Id);
+        }
+
+        // 拆：这一拍没有的（删格、切板）与账对不上的（构造变了的那一格）。
+        var keptCount = 0;
+
+        foreach (var (id, visual) in _realized.ToArray())
+        {
+            var keep = planned.TryGetValue(id, out var next)
+                       && _stamps.TryGetValue(id, out var previous)
+                       && previous == next.Stamp
+                       // 抖着的卡片不许留：见上面那段——它自己会在 240ms 后把位置写回去。
+                       && !visual.IsShaking;
+
+            if (keep)
+            {
+                visual.SetGroupAlert(null);
+                keptCount++;
+
+                continue;
+            }
+
+            ItemLayer.Children.Remove(visual);
+            _realized.Remove(id);
+            _stamps.Remove(id);
+        }
+
+        // 建：新增的与被拆掉的那几格（顺序那一发在下面统一收，这里先添在末尾）。
+        var created = 0;
+
+        foreach (var id in order)
+        {
+            if (_realized.ContainsKey(id))
+            {
+                continue;
+            }
+
+            var entry = planned[id];
+            var visual = CreateVisual(entry.Node, entry.Entity);
+
+            _realized[id] = visual;
+            _stamps[id] = entry.Stamp;
+            ItemLayer.Children.Add(visual);
+
+            created++;
+        }
+
+        RestackItemLayer(order);
+
+        // 卡片可能是留下来的，摊开那一层的宿主还在：状态照旧归零，别留一个指向旧格子的组名。
         ResetFolding();
 
         // 先算一次画面状态：紧接着的读数行与横幅要说"折进了几格"，而那件事只有这里知道。
@@ -694,38 +780,139 @@ public sealed partial class MainWindow : Window
             _selectedEdgeId = keptEdge;
         }
 
-        foreach (var node in _document.Nodes)
-        {
-            var visual = CreateVisual(node);
-
-            _realized[node.Id] = visual;
-            ItemLayer.Children.Add(visual);
-        }
-
         ArrangeAll();
         ProjectSelection();
+
+        var elapsed = Stopwatch.GetElapsedTime(started);
+
+        // 只对"确实花了钱的那一拍"说话（和 ArrangeAll 同一档阈值），否则这一块板的日志会被
+        // 每一次落定刷满。留／铸两个数是这一刀的唯一读数：全铸＝对账没省下东西，全留＝没活干。
+        if (elapsed.TotalMilliseconds > 16)
+        {
+            Diagnostics.Write(
+                $"rebuild 增量: {order.Count} 格对账，留 {keptCount}、铸 {created}，用了 {elapsed.TotalMilliseconds:0.0}ms");
+        }
     }
 
-    private NodeVisual CreateVisual(CanvasNode node)
+    /// <summary>
+    /// 这一格"该被造成什么样"的那把尺。<see cref="NodeVisual"/> 的构造只吃这几样：类型、
+    /// 图与字谁在（由文件后缀定）、实体卡那一份读数、以及这块板子（相对路径按谁的目录解析）。
+    /// 对不上就重铸，对得上就留给 <see cref="ArrangeAll"/> 逐拍改。
+    /// 位置／尺寸／正文／配色／标记都不在这里——它们不是构造，写进来只会把每一拍都变成全拆全建。
+    /// </summary>
+    private string ConstructionStamp(CanvasNode node, EntityCardInfo? entity)
+    {
+        var stamp = new System.Text.StringBuilder();
+
+        stamp.Append(_boardPath ?? "(未定位)")
+            .Append('|').Append((int)node.Kind)
+            .Append('|').Append(NodeVisual.LooksLikeImage(node.FilePath) ? '图' : '字')
+            .Append('|').Append(node.FilePath)
+            .Append('|').Append(node.Url)
+            .Append('|').Append(node.Label)
+            // 表格卡画的是构造那一刻那份表：表文换了必须重铸，不然一格表格会赖在卡上不走。
+            .Append('|').Append(node.Json[EntityCards.TableField]?.ToJsonString() ?? string.Empty);
+
+        if (!ShowNodeText(node))
+        {
+            // 图片那一格还吃"这一份文件此刻在不在"：没了要换成"未找到"那张字，回来了要换回来。
+            // 这正是当年"拿一块丢了图的板子开屏把窗口打死"那一条，尺要跟着它一起改才不撒谎。
+            stamp.Append('|').Append(AssetForNode(node, node.FilePath ?? string.Empty) ?? "(找不到)");
+        }
+
+        if (entity is null)
+        {
+            return stamp.Append("|无实体卡").ToString();
+        }
+
+        stamp.Append('|').Append(entity.Kind)
+            .Append(':').Append(entity.Title)
+            .Append(':').Append(entity.Meta)
+            .Append(':').Append(entity.Badge)
+            .Append(':').Append(entity.BadgeTone)
+            .Append(':').Append(entity.Tip)
+            .Append(':').Append(entity.TargetPath)
+            .Append(':').Append(entity.WebUri?.AbsoluteUri)
+            .Append(":缩略图 ").Append(entity.Thumbnails.Count);
+
+        foreach (var thumb in entity.Thumbnails)
+        {
+            stamp.Append('/').Append(thumb.Path);
+        }
+
+        return stamp.ToString();
+    }
+
+    /// <summary>这一格的图与字谁在——和 <see cref="CreateVisual"/> 里同一句判定，不许写成第二份。</summary>
+    private static bool ShowNodeText(CanvasNode node) => node.Kind != CanvasNodeKind.File || !NodeVisual.LooksLikeImage(node.FilePath);
+
+    /// <summary>
+    /// 这一格的相对资源路径按谁的目录解析成绝对路径（解析不到返回 null）。
+    /// 「所有便签」里每张图片要按它<b>所属的那块板</b>解析，不能拿哨兵当 base。
+    /// </summary>
+    private string? AssetForNode(CanvasNode node, string relative)
+    {
+        if (_boardPath is null)
+        {
+            return null;
+        }
+
+        var basePath = _boardPath;
+
+        if (IsAllNotes(_boardPath))
+        {
+            basePath = BoardMerge.TryUnmerge(node.Id, out var owner, out _) ? owner : UnfiledPath;
+        }
+
+        return AssetStore.ResolveExisting(basePath, relative);
+    }
+
+    /// <summary>
+    /// 把 ItemLayer 的孩子排回文档里 nodes 的顺序（那一份就是叠放顺序）。
+    /// 绝大多数拍子对得上，一句比较就回去了；只有新增落在中间、外部整份重排、或撤销一次置顶
+    /// 才真去重挂——那一发只挪既有的元素，一张卡都不新造。
+    /// </summary>
+    private void RestackItemLayer(IReadOnlyList<string> order)
+    {
+        var children = ItemLayer.Children;
+
+        if (children.Count == order.Count)
+        {
+            var matches = true;
+
+            for (var index = 0; index < order.Count; index++)
+            {
+                if (children[index] is not NodeVisual visual
+                    || !string.Equals(visual.NodeId, order[index], StringComparison.Ordinal))
+                {
+                    matches = false;
+
+                    break;
+                }
+            }
+
+            if (matches)
+            {
+                return;
+            }
+        }
+
+        children.Clear();
+
+        foreach (var id in order)
+        {
+            if (_realized.TryGetValue(id, out var visual))
+            {
+                children.Add(visual);
+            }
+        }
+    }
+
+    private NodeVisual CreateVisual(CanvasNode node, EntityCardInfo? entity)
     {
         // 「所有便签」里每格的图片要按它**所属的那块板**解析（相对路径相对源文件的 assets/），
         // 不能拿哨兵当 base——那会把全部图片解析成"找不到"，甚至踩到 Border.Child 的异常。
-        var visual = new NodeVisual(node, relative =>
-        {
-            if (_boardPath is null)
-            {
-                return null;
-            }
-
-            var basePath = _boardPath;
-
-            if (IsAllNotes(_boardPath))
-            {
-                basePath = BoardMerge.TryUnmerge(node.Id, out var owner, out _) ? owner : UnfiledPath;
-            }
-
-            return AssetStore.ResolveExisting(basePath, relative);
-        }, DescribeEntity(node));
+        var visual = new NodeVisual(node, (relative) => AssetForNode(node, relative), entity);
 
         visual.PointerPressed += OnNodePressed;
 
@@ -6814,8 +7001,11 @@ public sealed partial class MainWindow : Window
         // 相机：幽灵格不许拉远"看到全部"；"回到 100%"以后屏幕上必须有内容。
         SelfTestCameraFraming(problems);
 
-        // 小地图：读数不控制——没有文字、矩形跟相机（含平移/缩放预览）、块只在几何变时拆建（10-28 定档）。
+        // 小地图：框里无字、矩形跟相机（含平移/缩放预览）、块只在几何变时拆建，点它＝视口移过去（10-28 改口）。
         SelfTestMiniMap(problems);
+
+        // 增量重建的对账：改正文/位置/配色不重铸，改构造那几样才重铸，删格不牵连，重排只挪位（卡顿工单②）。
+        SelfTestIncrementalRebuild(problems);
         SelfTestTwoLineNoteAtFractionalZoom(problems);
         SelfTestOverflowCue(problems);
         SelfTestRepairs(problems);
@@ -7207,6 +7397,219 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 增量重建的对账本身要有尺（卡顿工单②的护栏，不是功能测试）——四问：
+    /// ① 只改正文／位置／配色／尺寸的那一拍，卡片对象必须是<b>同一枚</b>，而且坐标跟着这一拍走
+    ///    （留下来 ≠ 冻在旧画面里）；旁边没动的那格也必须是同一枚；
+    /// ② 换了构造那几样才许重铸：表格内容变了、图与字换了边——这两样都定在构造那一刻，
+    ///    留下旧对象就是"一格表格赖在卡上不走"；
+    /// ③ 删掉一格，其余一格都不许被牵连重铸（拆的是那一张，不是整层）；
+    /// ④ 文档的 z 序换了（外部整份重排、撤销一次置顶）时，ItemLayer 必须跟着排回去，
+    ///    而且排的只是挪位子——对象还是那一枚枚。
+    /// 判的都是<b>对象身份</b>：内容那一圈归 ArrangeAll 与 Update，别处已经有发了。
+    /// </summary>
+    private void SelfTestIncrementalRebuild(List<string> problems)
+    {
+        var probe = _document.Nodes.FirstOrDefault(node => node.Kind == CanvasNodeKind.Text);
+        var other = _document.Nodes.FirstOrDefault(node => node.Kind == CanvasNodeKind.Text && node.Id != probe?.Id);
+
+        if (probe is null || other is null)
+        {
+            problems.Add("自检增量重建: 板上凑不出两格文字，这一发不适用");
+
+            return;
+        }
+
+        if (!_realized.TryGetValue(probe.Id, out var probeVisual) || !_realized.TryGetValue(other.Id, out var otherVisual))
+        {
+            problems.Add("自检增量重建: realized 里读不到那两格的对账对象");
+
+            return;
+        }
+
+        // 这一发借了相机（CenterOn），最后一格都不留：后面还有一串按坐标与按时序读数的断言，
+        // 别拿本轮的残留去量它们。造出来的那两格（表格与图片）在各自的段落里已经拆回去了。
+        var saved = (_view.PanX, _view.PanY, _view.Zoom);
+
+        CenterOn(probe);
+        var startText = probe.Text;
+        var startX = probe.X;
+        var startColor = probe.Color;
+        var startWidth = probe.Width;
+
+        // ① 四样都改了：一张都不许重铸，但画面必须跟着这一拍走。
+        probe.Text = "增量重建改过的正文\n第二行也写上";
+        probe.X = startX + 90;
+        probe.Color = "2";
+        probe.Width = startWidth + 40;
+
+        Rebuild();
+
+        if (!ReferenceEquals(_realized[probe.Id], probeVisual))
+        {
+            problems.Add("自检增量重建: 只改了正文/位置/配色/尺寸，那一格却重铸了——对账把 Update 的活抢过去做了");
+        }
+
+        if (!ReferenceEquals(_realized[other.Id], otherVisual))
+        {
+            problems.Add("自检增量重建: 旁边那一格明明没动，也被拆了重铸");
+        }
+
+        if (probeVisual.Visibility == Visibility.Visible
+            && Math.Abs(Canvas.GetLeft(probeVisual) - _view.ToScreenX(probe.X)) > 0.75)
+        {
+            problems.Add(
+                $"自检增量重建: 留下来的卡片没跟这一拍的坐标走（读到 {Canvas.GetLeft(probeVisual):0.##}，" +
+                $"该是 {_view.ToScreenX(probe.X):0.##}）");
+        }
+
+        probe.Text = startText;
+        probe.X = startX;
+        probe.Color = startColor;
+        probe.Width = startWidth;
+
+        Rebuild();
+
+        if (!ReferenceEquals(_realized[probe.Id], probeVisual))
+        {
+            problems.Add("自检增量重建: 改回原样那一拍也重铸了卡片");
+        }
+
+        // ②-a 表格内容变了要重铸：那张表是构造那一刻的对象，Update 只会照旧的那份画。
+        var table = TablePaste.ReadTsv("甲\t乙\n丙\t丁");
+
+        if (table is null)
+        {
+            problems.Add("自检增量重建: 制表符文本没被识别成表格，重铸那一发不适用");
+        }
+        else
+        {
+            var tableNode = CreateTableCard(table, new Point(probe.X + 4000, probe.Y));
+
+            Rebuild();
+
+            if (!_realized.TryGetValue(tableNode.Id, out var firstTable) || !firstTable.IsTableCard)
+            {
+                problems.Add("自检增量重建: 新建的表格卡没立起来");
+            }
+            else
+            {
+                tableNode.Json[EntityCards.TableField] = TablePaste.ReadTsv("甲\t乙\n丙\t丁\n戊\t己")!.ToJson();
+
+                Rebuild();
+
+                if (ReferenceEquals(_realized[tableNode.Id], firstTable))
+                {
+                    problems.Add("自检增量重建: 表格内容改了却留旧卡片——那一格表格会赖在构造那一刻的那份上不走");
+                }
+
+                if (!ReferenceEquals(_realized[probe.Id], probeVisual))
+                {
+                    problems.Add("自检增量重建: 改一格表格把旁边的文字格也重铸了");
+                }
+
+                // ③ 删掉那一格：其余一张都不许被牵连。
+                _document.Remove(tableNode.Id);
+
+                Rebuild();
+
+                if (!ReferenceEquals(_realized[probe.Id], probeVisual) || !ReferenceEquals(_realized[other.Id], otherVisual))
+                {
+                    problems.Add("自检增量重建: 删掉一格把别格的卡片也拆了");
+                }
+
+                if (_realized.ContainsKey(tableNode.Id))
+                {
+                    problems.Add("自检增量重建: 删掉的那一格还赖在 realized 里");
+                }
+            }
+
+            // ②-b 图与字换边也要重铸：谁挂在卡面上是构造那一刻定的。
+            var fileNode = _document.Add(CanvasNodeKind.File, probe.X + 8000, probe.Y, 340, 220, null);
+
+            fileNode.FilePath = "assets/probe-chart.png";
+
+            Rebuild();
+
+            var asImage = _realized.TryGetValue(fileNode.Id, out var imageVisual) ? imageVisual : null;
+
+            if (asImage is null || asImage.ShowText)
+            {
+                problems.Add("自检增量重建: 图片格没按图片造出来");
+            }
+            else
+            {
+                fileNode.FilePath = "assets/probe-chart.txt";
+
+                Rebuild();
+
+                if (ReferenceEquals(_realized[fileNode.Id], asImage))
+                {
+                    problems.Add("自检增量重建: 图与字换了边还留同一枚卡片——卡面上挂的是构造那一刻的那一层");
+                }
+
+                if (!ReferenceEquals(_realized[probe.Id], probeVisual))
+                {
+                    problems.Add("自检增量重建: 换一格的图/字把旁边的文字格也重铸了");
+                }
+            }
+
+            _document.Remove(fileNode.Id);
+
+            // 先把这一发拆干净再对账：删掉的那一格从 realized 里没了，下面的身份比较才不是拿旧账比新账。
+            Rebuild();
+
+            // ④ z 序：整份倒过来排一次，卡片必须换到对的位置上（对象还是那些对象）。
+            var original = _document.Nodes.Select(node => node.Id).ToList();
+            var probeVisuals = _realized.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+
+            foreach (var id in Enumerable.Reverse(original))
+            {
+                _document.BringToFront(id);
+            }
+
+            Rebuild();
+
+            var restacked = ItemLayer.Children.OfType<NodeVisual>().Select(visual => visual.NodeId).ToList();
+            var wanted = _document.Nodes.Select(node => node.Id).ToList();
+            var orderRight = restacked.Count == wanted.Count;
+
+            for (var index = 0; orderRight && index < wanted.Count; index++)
+            {
+                orderRight &= string.Equals(restacked[index], wanted[index], StringComparison.Ordinal);
+            }
+
+            if (!orderRight)
+            {
+                problems.Add(
+                    $"自检增量重建: 文档 z 序改了，ItemLayer 没跟着排（板上 {wanted.Count} 格，层里 {restacked.Count} 枚）");
+            }
+
+            if (probeVisuals.Any(pair => !_realized.TryGetValue(pair.Key, out var now) || !ReferenceEquals(now, pair.Value)))
+            {
+                problems.Add("自检增量重建: 整份重排那一拍把卡片重铸了——挪位子不该花钱造新卡");
+            }
+
+            // 把顺序交回原样：按原来的次序逐格置顶，最后一发的顺序就是原来的顺序。
+            foreach (var id in original)
+            {
+                _document.BringToFront(id);
+            }
+
+            Rebuild();
+        }
+
+        _view.PanX = saved.PanX;
+        _view.PanY = saved.PanY;
+        _view.Zoom = saved.Zoom;
+
+        ArrangeAll();
+
+        Diagnostics.Write(
+            $"selftest 增量重建: 改正文/位置/配色/尺寸与删格都留着原对象（{probe.Id} 一枚到底）；" +
+            "表格内容与图↔字换边各重铸一次；整份重排只挪对象、不重造");
+    }
+
+    /// <summary>
     /// 滚轮 burst：同一锚点上来回 8 发，量"每一发多贵、缓动几帧收敛、点阵重画一发多贵、
     /// 停手提交多贵"，跑完把相机交回去。
     /// </summary>
@@ -7255,8 +7658,24 @@ public sealed partial class MainWindow : Window
         }
 
         // 点阵那一发单独量：同步循环里 33ms 的节流只会让头一帧真重画，量不到第二发的代价。
+        // 两发放一起：第一发冷（可能撞上前面那些测试攒下的垃圾回收），第二发热（同一张位图、同一块缓冲）。
+        // 判据压在热的那一发——这一发要答的是"缓动中逐帧重画站不站得住"，不是"什么时候赶上 GC"。
+        // 冷的数照打进日志，别藏：10-27 14:39 与 14:43 两发同一档缩放、同一尺寸（2.476、1408×896），
+        // 一次 4.3ms 一次 83.5ms，差的是堆不是数学——那条 LOH 抖动的账记在 PaintGrid 换尺寸就重新
+        // new 一张 WriteableBitmap＋一块 byte[]，是下一刀的候选。
+        _gridKey = string.Empty;
+        UpdateAtmosphereAt(_wheelTargetZoom, _view.PanX, _view.PanY, forensics: false);
+
+        var coldStart = Stopwatch.GetTimestamp();
+
+        _gridKey = string.Empty;
+        UpdateAtmosphereAt(_wheelTargetZoom, _view.PanX, _view.PanY, forensics: false);
+
+        var coldMs = (Stopwatch.GetTimestamp() - coldStart) * 1000.0 / Stopwatch.Frequency;
+
         var paintStart = Stopwatch.GetTimestamp();
 
+        _gridKey = string.Empty;
         UpdateAtmosphereAt(_wheelTargetZoom, _view.PanX, _view.PanY, forensics: false);
 
         var paintMs = (Stopwatch.GetTimestamp() - paintStart) * 1000.0 / Stopwatch.Frequency;
@@ -7275,7 +7694,7 @@ public sealed partial class MainWindow : Window
 
         Diagnostics.Write(
             $"selftest 滚轮: {steps} 发预览共 {previewMs:0.0}ms（均 {previewMs / steps:0.00}ms/发，只推目标）、" +
-            $"缓动 {frames} 帧收敛（最慢一帧 {worstFrameMs:0.0}ms）、点阵重画一发 {paintMs:0.0}ms、" +
+            $"缓动 {frames} 帧收敛（最慢一帧 {worstFrameMs:0.0}ms）、点阵重画一发 {paintMs:0.0}ms（热，判据）/{coldMs:0.0}ms（冷，含回收）、" +
             $"停手提交 {commitMs:0.0}ms（一次 ArrangeAll + 网格重绘）");
 
         if (frames > 24)
@@ -7624,22 +8043,47 @@ public sealed partial class MainWindow : Window
     /// 缩放/平移卡的读数装置：同一块板上分别量"重排"、"重建"、"重画点阵"、"一发滚轮"各花多少，
     /// 把"卡"拆到能指认的那一步，而不是猜。跑法：<c>Outspread.Board.exe --perf 路径</c>。
     /// </summary>
-    /// <summary>等板子真载入再开探针：同一拍量会得到假读数。</summary>
+    /// <summary>
+    /// 等板子真载入、也等窗口真排过版再开探针：同一拍量会得到假读数。
+    /// 10-27 那一版的 "ArrangeAll 重排 0.36ms" 就是假读数——那时视口还是 0×0，
+    /// ArrangeAll 走到 <c>width &lt;= 0</c> 那一句就 return 了，剔除与逐格 Update 一次都没跑。
+    /// </summary>
+    /// <remarks>
+    /// 等的方式是计时器，不是 <c>TryEnqueue</c> 串起来的那 240 拍：投递会在第一次布局之前一口气排空
+    /// （实测 14:30:16.088，起来 148ms 就"等满 240 拍"，视口仍是 0×0）。计时器每一跳之间真过帧，
+    /// <c>ActualWidth</c> 才会从 0 变成有数——这把尺不修好，"增量重建"省下的那一半根本量不到。
+    /// </remarks>
     public void BeginPerfProbe()
     {
-        void Try(int attempts)
+        var waiter = DispatcherQueue.CreateTimer();
+        var ticks = 0;
+
+        waiter.Interval = TimeSpan.FromMilliseconds(30);
+        waiter.IsRepeating = true;
+
+        waiter.Tick += (_, _) =>
         {
-            if (_document.Nodes.Count > 0 || attempts >= 120)
+            ticks++;
+
+            var loaded = _document.Nodes.Count > 0;
+            var laidOut = BoardArea.ActualWidth > 0 && BoardArea.ActualHeight > 0;
+
+            if ((loaded && laidOut) || ticks >= 400)
             {
+                waiter.Stop();
+
+                if (!laidOut)
+                {
+                    Diagnostics.Write(
+                        $"perf 注意: 等了 {ticks} 跳（约 {ticks * 30}ms）视口仍是 {BoardArea.ActualWidth:0}x{BoardArea.ActualHeight:0}——" +
+                        "ArrangeAll 与 Rebuild 里那一圈逐格 Update 没活干，那几发读数无效");
+                }
+
                 RunPerfProbe();
-
-                return;
             }
+        };
 
-            DispatcherQueue.TryEnqueue(() => Try(attempts + 1));
-        }
-
-        Try(0);
+        waiter.Start();
     }
 
     public void RunPerfProbe()
@@ -7666,6 +8110,27 @@ public sealed partial class MainWindow : Window
 
         Bench("ArrangeAll 重排", 12, () => ArrangeAll());
         Bench("Rebuild 重建", 8, () => Rebuild());
+
+        // 增量那把尺必须量"真有事的那一拍"：改一格的正文再重建，其余格子原样留着。
+        // 只有"重建"那一发会越跑越快（第二拍起没东西可换），这一发才看得见"换掉几格"的代价。
+        var probe = _document.Nodes.FirstOrDefault(node => node.Kind == CanvasNodeKind.Text);
+
+        if (probe is null)
+        {
+            Diagnostics.Write("perf: 这块板上没有文字格，「Rebuild 改一格」那一发不适用");
+        }
+        else
+        {
+            var tick = 0;
+
+            Bench("Rebuild 改一格（正文换字）", 8, () =>
+            {
+                tick++;
+                probe.Text = $"第 {tick} 拍改的正文\n这一格跟着变，其余格子不许动";
+                Rebuild();
+            });
+        }
+
         Bench("点阵重画（换档）", 8, () =>
         {
             _gridKey = string.Empty;

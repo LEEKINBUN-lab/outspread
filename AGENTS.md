@@ -1,5 +1,9 @@
 # 给在本仓干活的 agent
 
+> **完整的出口流程在 `.qoder/skills/board-outlet/SKILL.md`，每轮照它执行**：
+> 开头 `board_inbox` 对账 → 办完自己打勾 → 打完勾把每一组重新 `board_archive`（已结进摞、未结平铺）
+> → 落板 → `board_tidy` 收紧 → `board_read` 回读凭据。下面只是要点，细节以那份为准。
+
 ## 板子是表达出口，不只是备忘录
 
 这块板子（铺陈 / Outspread）把人的注意力从一大串文字变成一个个具体的格子。

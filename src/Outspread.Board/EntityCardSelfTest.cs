@@ -107,17 +107,19 @@ public sealed partial class MainWindow
             else
             {
                 // 他 10-25 那张截图：输入区越出卡片下沿。编辑框必须留在正文那一块里。
+                // 编辑框是屏幕像素的家具，卡盒现在是世界尺寸——两边同尺要比，先乘回相机。
+                var zoom = _view.Zoom;
                 var bottom = Canvas.GetTop(_editor) + _editor.Height;
-                var cardBottom = Canvas.GetTop(card!) + card!.Height;
+                var cardBottom = Canvas.GetTop(card!) + card!.Height * zoom;
 
                 if (bottom > cardBottom + 1)
                 {
                     problems.Add(
                         $"自检附件卡: 编辑框底 {bottom:0.#}（顶 {Canvas.GetTop(_editor):0.#}、高 {_editor.Height:0.#}）"
-                        + $"越出卡片底 {cardBottom:0.#}（顶 {Canvas.GetTop(card!):0.#}、高 {card!.Height:0.#}、编辑中需要 {_editorGrownWorld:0.#} 世界像素）");
+                        + $"越出卡片底 {cardBottom:0.#}（顶 {Canvas.GetTop(card!):0.#}、高 {card!.Height:0.#}×{zoom:0.##}、编辑中需要 {_editorGrownWorld:0.#} 世界像素）");
                 }
 
-                if (Canvas.GetTop(_editor) < Canvas.GetTop(card!) + card!.EntityHeaderHeight - 1)
+                if (Canvas.GetTop(_editor) < Canvas.GetTop(card!) + card!.EntityHeaderHeight * zoom - 1)
                 {
                     problems.Add("自检附件卡: 编辑框压在卡头上，用户会以为在改文件名");
                 }

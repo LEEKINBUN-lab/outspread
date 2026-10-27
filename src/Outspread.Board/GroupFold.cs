@@ -232,7 +232,8 @@ public sealed partial class MainWindow
 
     private void TweenFold(NodeVisual visual, double toX, double toY, double toOpacity, bool entering)
     {
-        if (visual.RenderTransform is not TranslateTransform shift)
+        // 折叠平移住在卡片根那枚 TranslateTransform 上（屏幕像素）；缩放住在内容层，两枚不打架。
+        if (visual.FoldShift is not { } shift)
         {
             return;
         }

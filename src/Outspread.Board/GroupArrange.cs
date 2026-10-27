@@ -149,8 +149,62 @@ public sealed partial class MainWindow
     /// <summary>没有成员的组：框没有可贴的东西，渲染层把它藏起来，别拿一个空的大方框压着别人的便签。</summary>
     private HashSet<string> EmptyGroupIds()
     {
-        var map = Groups();
         var empty = new HashSet<string>(StringComparer.Ordinal);
+        var frames = new List<CanvasNode>();
+        var rosterless = false;
+
+        foreach (var node in _document.Nodes)
+        {
+            if (node.Kind == CanvasNodeKind.Group)
+            {
+                frames.Add(node);
+                rosterless |= node.GroupMemberIds is null;
+            }
+        }
+
+        if (frames.Count == 0)
+        {
+            return empty;
+        }
+
+        // 每块框都带名单（开板时 MaterializeRosters 抄过一份）：活人过一遍板就够。
+        // 旧写法每发都 GroupMap.Build 全板＋按框 Members——--perf 拆出这是 ArrangeAll 的固定大头之一。
+        if (!rosterless)
+        {
+            var live = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var node in _document.Nodes)
+            {
+                if (node.Kind != CanvasNodeKind.Group)
+                {
+                    live.Add(node.Id);
+                }
+            }
+
+            foreach (var frame in frames)
+            {
+                var any = false;
+
+                foreach (var id in frame.GroupMemberIds!)
+                {
+                    if (live.Contains(id))
+                    {
+                        any = true;
+                        break;
+                    }
+                }
+
+                if (!any)
+                {
+                    empty.Add(frame.Id);
+                }
+            }
+
+            return empty;
+        }
+
+        // 还有别的工具写的、没名单的框：照旧走几何那一本账。
+        var map = Groups();
 
         foreach (var frame in GroupRects())
         {

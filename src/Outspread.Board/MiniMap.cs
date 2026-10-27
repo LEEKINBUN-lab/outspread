@@ -1,5 +1,3 @@
-using System.Globalization;
-using System.Text;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -68,7 +66,13 @@ internal sealed class MiniMap
     private readonly Rectangle _viewport = new();
     private readonly Dictionary<string, Rectangle> _blocks = new(StringComparer.Ordinal);
 
-    private string _stamp = string.Empty;
+    /// <summary>上一拍的几何账：逐格存数、逐格比数。旧的写法每一发拼一串带取整的字符串
+    /// （300 格＝几千次 double.ToString），那是 ArrangeAll 里除逐格更新外最大的一笔固定开销；
+    /// 对账要答的是"几何动没动"，比数就够，不需要字符串。</summary>
+    private readonly List<(string Id, double X, double Y, double Width, double Height, string? Color)> _geometry = [];
+    private bool _geometryDark;
+    private bool _geometrySeen;
+
     private bool _hasContent;
     private double _originX;
     private double _originY;
@@ -159,14 +163,22 @@ internal sealed class MiniMap
     /// </summary>
     public void Sync(IReadOnlyList<CanvasNode> notes)
     {
-        var stamp = Stamp(notes);
+        var dark = NoteStyling.IsDark;
 
-        if (stamp == _stamp)
+        if (GeometrySame(notes, dark))
         {
             return;
         }
 
-        _stamp = stamp;
+        _geometry.Clear();
+
+        foreach (var note in notes)
+        {
+            _geometry.Add((note.Id, note.X, note.Y, note.Width, note.Height, note.Color));
+        }
+
+        _geometryDark = dark;
+        _geometrySeen = true;
         BlocksRebuilds++;
 
         // 主题翻转也走到这一发（账里带着主题位）：重穿一次皮、重取一次颜色令牌，还是那个方法，
@@ -243,28 +255,34 @@ internal sealed class MiniMap
     /// <summary>
     /// 这一拍画过的那本账。对账每拍都跑（O(n) 比数），贵的那一发（拆建矩形）只在账变了才走。
     /// </summary>
-    private string Stamp(IReadOnlyList<CanvasNode> notes)
+    /// <remarks>旧的对账拼一整串带取整的字符串（300 格＝几千次 double.ToString）——比数就够，
+    /// 不需要字符串；那是 ArrangeAll 里除逐格更新外最大的一笔固定开销（--perf 拆出来的）。</remarks>
+    /// <summary>这一拍的几何与上一拍是不是同一笔账：顺序、id、坐标、尺寸、配色、主题，逐格比数。
+    /// 只认"完全一样就不拆建"——动过的拍子本来就该重铺，没动的拍子一格都不许多花钱。</summary>
+    private bool GeometrySame(IReadOnlyList<CanvasNode> notes, bool dark)
     {
-        var stamp = new StringBuilder();
-
-        stamp.Append(NoteStyling.IsDark ? 'D' : 'L');
-
-        foreach (var note in notes)
+        if (!_geometrySeen || dark != _geometryDark || notes.Count != _geometry.Count)
         {
-            stamp.Append(note.Id)
-                .Append(':')
-                .Append(Num(note.X)).Append(',')
-                .Append(Num(note.Y)).Append(',')
-                .Append(Num(note.Width)).Append(',')
-                .Append(Num(note.Height)).Append(',')
-                .Append(note.Color ?? string.Empty)
-                .Append(';');
+            return false;
         }
 
-        return stamp.ToString();
+        for (var index = 0; index < notes.Count; index++)
+        {
+            var note = notes[index];
+            var kept = _geometry[index];
 
-        static string Num(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
+            if (!string.Equals(kept.Id, note.Id, StringComparison.Ordinal)
+                || kept.X != note.X || kept.Y != note.Y
+                || kept.Width != note.Width || kept.Height != note.Height
+                || !string.Equals(kept.Color, note.Color, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
+
 
     /// <summary>
     /// 小块的颜色沿用卡片那套预设号：agent 写的＝5（青，产品里当「蓝」）、decision＝1（红）、

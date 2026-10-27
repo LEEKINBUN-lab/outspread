@@ -960,16 +960,23 @@ public sealed partial class MainWindow : Window
 
         // 小地图跟着这一拍走：小块只在文档几何真变了时才拆建（Sync 里自己对账），
         // 视口矩形按这一拍落定的真相机摆正。增删格、移动、改大小、归档/收紧的提交都过这里。
+        var miniStarted = Stopwatch.GetTimestamp();
         _miniMap.Sync(_document.Nodes.Where(IsPlaceable).ToList());
+        var miniMs = Stopwatch.GetElapsedTime(miniStarted).TotalMilliseconds;
+
+        var syncStarted = Stopwatch.GetTimestamp();
         SyncMiniMapViewport();
+        var syncMs = Stopwatch.GetElapsedTime(syncStarted).TotalMilliseconds;
 
         var visible = 0;
         var started = Stopwatch.GetTimestamp();
+        var guardBefore = NodeVisual.ContentGuardHits;
 
         // 筛选折起来的那几格：它们画在锚点上，所以剔除要按"画在哪儿"判，不按文档里的真位置判——
         // 否则锚点在屏内、真位置在屏外的那一格会在摊开时是空的。
         var displays = BuildDisplays();
         var emptyGroups = EmptyGroupIds();
+        var loopStarted = Stopwatch.GetTimestamp();
 
         foreach (var node in _document.Nodes)
         {
@@ -1024,6 +1031,8 @@ public sealed partial class MainWindow : Window
         }
 
         var elapsed = Stopwatch.GetElapsedTime(started);
+        var loopMs = Stopwatch.GetElapsedTime(loopStarted).TotalMilliseconds;
+        var guardHits = NodeVisual.ContentGuardHits - guardBefore;
 
         // The editor is screen-space furniture: panning or zooming while typing has to
         // move it with the note, or the caret ends up somewhere else on the board.
@@ -1032,7 +1041,8 @@ public sealed partial class MainWindow : Window
         if (elapsed.TotalMilliseconds > 16)
         {
             Diagnostics.Write(
-                $"arrange took {elapsed.TotalMilliseconds:0.0} ms for {_document.Nodes.Count} nodes ({visible} visible)");
+                $"arrange took {elapsed.TotalMilliseconds:0.0} ms for {_document.Nodes.Count} nodes ({visible} visible)" +
+                $"（内容账命中 {guardHits}/{visible}，逐格循环 {loopMs:0.0}ms）");
         }
     }
 
@@ -4788,9 +4798,11 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 缩放一换，牌子就必须按新缩放重画。它只在"内容变了"时才重建，所以缓存键里不带缩放时，
-    /// 牌子会停在上一次缩放的字号上——正文已经放大，牌子还是小字，看着像另一套东西（他 10-26 报的
-    /// "缩放时显示的内容会变化／标签和正文不一样"）。
+    /// 牌子按**世界字号**排一次（12），屏幕上的大小由卡片内容层那枚缩放变换带（变换路线，
+    /// 2026-10-27 他点的工单：缩放＝同一张卡做变换）。旧账"缩放一换牌子必须按新缩放重画"
+    /// 在这一档作废：牌子停在旧缩放字号才是对的——它根本不再按缩放排版，重排的只是变换。
+    /// 这一发钉两件事：① 排版字号恒等于 12（世界）；② 那枚变换恒等于相机缩放，
+    /// 缺一半都会红：①丢了＝有人把缩放又乘回排版里；②丢了＝牌子（连同整张卡）停在小数档。
     /// </summary>
     private void SelfTestChipScalesWithZoom(List<string> problems)
     {
@@ -4804,20 +4816,26 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var expected = NoteType.ChipFont(_view.Zoom);
+        var expected = NoteType.ChipFont(1);
         var actual = card.PaintedChipFontSize;
 
         if (Math.Abs(actual - expected) > 0.51)
         {
-            problems.Add($"自检牌子缩放: 缩放 {Percent()} 下牌子字号 {actual:0.##}，应 {expected:0.##}（牌子停在旧缩放档）");
+            problems.Add($"自检牌子缩放: 缩放 {Percent()} 下牌子排版字号 {actual:0.##}，应恒为世界 {expected:0.##}（有人把缩放又乘进了排版）");
+        }
+        else if (Math.Abs(card.PaintZoomScale - _view.Zoom) > 1e-6)
+        {
+            problems.Add($"自检牌子缩放: 内容层变换 {card.PaintZoomScale:0.####} ≠ 相机 {_view.Zoom:0.####}——卡片没跟上相机");
         }
         else
         {
-            Diagnostics.Write($"selftest 牌子缩放: 缩放 {Percent()} 下牌子字号 {actual:0.##} = 12×缩放");
+            Diagnostics.Write(
+                $"selftest 牌子缩放: 牌子按世界 {actual:0.##} 排版、屏幕 {actual * _view.Zoom:0.##} 由变换 {card.PaintZoomScale:0.####} 带出（缩放 {Percent()}）");
         }
 
         // 牌宽＝字的自然宽（× 不占位，只在悬停时压在牌尾）。这一发钉住两半：
         // × 回到横排里 → 牌子比字宽一截；× 不在树上 → 悬停点不到，删不掉。
+        // 宽度量的是世界版式（变换不改 ActualWidth），所以内距的尺也用世界档。
         BoardArea.UpdateLayout();
 
         var (inFlow, overlay) = card.PaintedChipCrossPlacement;
@@ -4848,6 +4866,149 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 缩放＝同一张卡做变换（2026-10-27 他点的工单，两张截图的根因）。这一发把同一格摆进
+    /// 30%／50%／100%／200% 四档，各量一次签名：可见行数、总行数、窗口起点、"还有没有藏行"、
+    /// 画的是哪一支（块/单字）、牌子亮不亮、上/下渐隐开不开、以及逐行读回的词。
+    /// 四份签名必须完全相同——旧路线里测量缓存的键带着缩放、行高逐项乘缩放再取整，
+    /// 换一档就把视口内每张卡重量一遍，第 3 行时有时无。现在卡按世界单位排一次，
+    /// 换档只动内容层那枚 ScaleTransform，签名不可能随档位动；它要是动了，红。
+    /// </summary>
+    private void SelfTestCardContentZoomInvariant(List<string> problems)
+    {
+        var saved = (_view.PanX, _view.PanY, _view.Zoom);
+
+        // 挑"可能露旧病"的格子：带牌子的、多行的、装不下要裁的——四档都塞得下的短格量不出回归。
+        var candidates = BoardNotes()
+            .Where(node => node.Kind == CanvasNodeKind.Text && _realized.ContainsKey(node.Id))
+            .Where(node =>
+            {
+                var text = node.Text ?? string.Empty;
+
+                if (NoteMarks.Chips(Tags.Read(text), _view.Today).Count > 0 || text.Contains('\n'))
+                {
+                    return true;
+                }
+
+                return MeasureTextHeight(text, node.Width, _view.FontSizeFor(node.Id)) > node.Height + 0.5;
+            })
+            .Take(6)
+            .ToList();
+
+        // 板上凑不出那种形状时兜底一格：至少量内容行数最多的那一格。
+        if (candidates.Count == 0)
+        {
+            var longest = BoardNotes()
+                .Where(node => node.Kind == CanvasNodeKind.Text && _realized.ContainsKey(node.Id))
+                .OrderByDescending(node => (node.Text ?? string.Empty).Split('\n').Length)
+                .FirstOrDefault();
+
+            if (longest is null)
+            {
+                problems.Add("自检缩放内容不变: 这块板上没有可读的文字格，这一发不适用");
+
+                return;
+            }
+
+            candidates.Add(longest);
+        }
+
+        var reports = new List<string>();
+
+        foreach (var target in candidates)
+        {
+            var signatures = new List<string>();
+            var transformReadings = new List<string>();
+            var stateSigs = new List<string>();
+
+            foreach (var zoom in new[] { 0.3, 0.5, 1.0, 2.0 })
+            {
+                _view.Zoom = zoom;
+
+                // 把这一格摆进视口正中：任何一档它都必须被实现、不被剔除——不然签名比的是"没画"。
+                _view.PanX = (BoardArea.ActualWidth / 2) - ((target.X + target.Width / 2) * zoom);
+                _view.PanY = (BoardArea.ActualHeight / 2) - ((target.Y + target.Height / 2) * zoom);
+
+                ArrangeAll();
+                BoardArea.UpdateLayout();
+
+                if (!_realized.TryGetValue(target.Id, out var card) || card.Visibility != Visibility.Visible)
+                {
+                    problems.Add($"自检缩放内容不变: {zoom:P0} 那一档没把 {target.Id} 画进视口——这一档没量到");
+
+                    continue;
+                }
+
+                var (total, visible, first, hasMore, blocks) = card.WindowState();
+                var (above, below, chipsOn, mdOn, bodyOn) = card.OverflowChromeVisible;
+
+                // 词也要进签名：行数一样但画的字不一样（窗口错位、牌子吃掉一行）同样是"换了张卡"。
+                // 词里可能有「｜」，所以逐行内容不参与拆分——它整段放在最后一项，比对按整串比。
+                var words = blocks ? card.PaintedMarkdownWords : card.PaintedBodyText;
+
+                var stateSig = string.Join(
+                    '\n',
+                    $"总={total}",
+                    $"可见={visible}",
+                    $"起={first}",
+                    $"藏={(hasMore ? 1 : 0)}",
+                    $"支={(blocks ? "块" : "单")}",
+                    $"牌={(chipsOn ? 1 : 0)}",
+                    $"上淡={(above ? 1 : 0)}",
+                    $"下淡={(below ? 1 : 0)}",
+                    $"画支={(mdOn ? "md" : bodyOn ? "字" : "无")}",
+                    $"词={words}");
+
+                stateSigs.Add(stateSig);
+                transformReadings.Add($"{zoom:0.##}→{card.PaintZoomScale:0.####}");
+                signatures.Add($"格={target.Id} 档={zoom:0.##}\n{stateSig}");
+            }
+
+            // 内容层变换那一枚必须跟着相机走——它是"卡跟上相机"的唯一通道，四档各对一次。
+            var transformsOk = transformReadings.TrueForAll(reading =>
+            {
+                var parts = reading.Split('→');
+
+                return parts.Length == 2
+                    && double.TryParse(parts[0], out var want) && double.TryParse(parts[1], out var got)
+                    && Math.Abs(got - want) < 1e-6;
+            });
+
+            if (stateSigs.Count == 4 && transformsOk && stateSigs.Distinct(StringComparer.Ordinal).Count() == 1)
+            {
+                var firstState = stateSigs[0].Split('\n');
+
+                reports.Add(
+                    $"{target.Id}（{firstState[0][2..]}、{firstState[1][3..]}、{firstState[3][2..]}、牌 {firstState[5][2..]}、" +
+                    $"淡 {firstState[6][2..]}/{firstState[7][2..]}、变换 {string.Join('/', transformReadings)}）");
+            }
+            else
+            {
+                if (!transformsOk)
+                {
+                    problems.Add($"自检缩放内容不变: {target.Id} 的内容层变换没跟上相机（{string.Join(" ", transformReadings)}）");
+                }
+
+                if (stateSigs.Count > 1 && stateSigs.Distinct(StringComparer.Ordinal).Count() > 1)
+                {
+                    problems.Add(
+                        $"自检缩放内容不变: {target.Id} 在四档下不是同一张卡——\n{string.Join("\n----\n", signatures)}");
+                }
+            }
+        }
+
+        if (reports.Count > 0)
+        {
+            Diagnostics.Write($"selftest 缩放内容不变: {reports.Count} 格在 30/50/100/200% 四档签名一致——{string.Join("；", reports)}");
+        }
+
+        _view.PanX = saved.PanX;
+        _view.PanY = saved.PanY;
+        _view.Zoom = saved.Zoom;
+
+        ArrangeAll();
+    }
+
+    /// <summary>
     /// Exercises the camera, the realisation and the adorner without a mouse, so the
     /// parts that can be measured alone are measured on every run rather than only when
     /// somebody happens to drag.
@@ -4869,6 +5030,11 @@ public sealed partial class MainWindow : Window
 
         // 组框与空组的读数要取在这一拍：后面的排布/拖拽会真的改动成员。
         SelfTestChipScalesWithZoom(problems);
+
+        // 验收①（他 10-27 的工单）：同一格在 30%/50%/100%/200% 四档下，可见行数、牌子、
+        // 渐隐开关必须一字不差——缩放是变换，不是重排。放在最前面：后面的每一发都会改板面。
+        SelfTestCardContentZoomInvariant(problems);
+
         SelfTestIconsUseDesignGrid(problems);
         SelfTestGroups(problems);
         SelfTestMarkChipEdits(problems);
@@ -5524,7 +5690,6 @@ public sealed partial class MainWindow : Window
 
             var lines = Markdown.Lines(plain.Text);
             var type = NoteTypography.For(_view.FontSizeFor(plain.Id));
-            var zoom = _view.Zoom;
 
             /* 行高规则要跟**这台投影的文本引擎**对齐，不是跟浏览器：Leading×Scale 是小数
                (28.35)，而引擎一行只给整像素。实测到的表是四舍五入(half-up)：
@@ -5579,8 +5744,9 @@ public sealed partial class MainWindow : Window
                 }
 
                 // The frame and the block have to be the same arithmetic. If the measure rounds a
-                // heading away and the paint keeps it, this is where it shows.
-                var needed = lines.Sum(line => MarkdownPaint.Box(type, zoom, line)) + Math.Clamp(type.Padding * zoom, 0, 60) * 2;
+                // heading away and the paint keeps it, this is where it shows. 两边都是世界数
+                // （卡按世界排版，缩放只在内容层那枚变换上——框高 blocky.Height 也是世界）。
+                var needed = lines.Sum(line => MarkdownPaint.Box(type, 1, line)) + type.Padding * 2;
 
                 if (blocky.Height + 0.001 < needed)
                 {

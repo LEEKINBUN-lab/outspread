@@ -13,10 +13,16 @@ namespace Outspread.Board;
 /// One node, placed in screen coordinates, carrying the paper shadow instead of a border.
 /// </summary>
 /// <remarks>
-/// The size and the font size are computed from the camera on every view change instead of
-/// letting a render transform stretch an already rasterised node: at 3× a transformed
-/// <see cref="TextBlock"/> shows smeared glyphs, and reading a note after zooming in is most
-/// of what this board is for.
+/// <para>
+/// 缩放＝同一张卡做变换（2026-10-27 他点的工单，替代 10-24 之前"每档重排"的旧账）。
+/// 卡片的一切几何——字号、行高、内距、行数、牌子、渐隐——都在<b>世界单位</b>下排一次；
+/// 缩放只改内容层那枚 <see cref="_paintZoom"/>。旧的"每拍按 view.Zoom 重算"路线删掉了：
+/// 它让测量缓存的键里带着缩放，换一档就把视口内每张卡重量一遍（300 格板上一次滚轮 115–165ms），
+/// 而且行高逐项乘缩放后的取整误差随档位变，同一格在 160% 掉一行、在 100% 又长回来——
+/// 他两张截图里"第 3 行时有时无"就是这个。世界排版＋一层变换让行数天然与缩放无关。
+/// 变换走 <see cref="FrameworkElement.RenderTransform"/>（在 <c>_paint</c> 那层，不是布局变换），
+/// 所以它不吃 <c>UseLayoutRounding</c> 的账；命中区跟着变换走（名牌那枚负移就是同一条机制）。
+/// </para>
 ///
 /// The visible card is an inner <see cref="Border"/> rather than this control's own
 /// Background, because <see cref="ContentControl"/>'s default template places its content
@@ -49,8 +55,9 @@ public sealed class NodeVisual : ContentControl
     private readonly Microsoft.UI.Xaml.Shapes.Rectangle _press = new() { IsHitTestVisible = false };
 
     /// <summary>
-    /// The 2px edge bar an <c>@d…</c> date earns. Screen pixels, not world ones: it is a signal to be
-    /// noticed at any zoom, and a bar that thins to nothing at 40% is the same silence as no bar.
+    /// The 2px edge bar an <c>@d…</c> date earns. 世界单位，随卡缩放（变换路线）：色条和纸面是
+    /// 同一件东西的一部分，缩到总览时整张卡一起变小——"同一张卡每档一致"优先于"每档都 2 屏幕像素"，
+    /// 后者会让色条相对卡身的粗细随档位变。
     /// </summary>
     private readonly Microsoft.UI.Xaml.Shapes.Rectangle _dueBar = new()
     {
@@ -157,6 +164,10 @@ public sealed class NodeVisual : ContentControl
     private string _mdMeasureKey = string.Empty;
     private double _mdTotalHeight;
     private List<double> _mdHeights = [];
+
+    /// <summary>两条裁线按对账换（每发 new 一枚几何体＝每发脏一次合成，白花钱）。</summary>
+    private string _labelClipKey = string.Empty;
+    private string _mdClipKey = string.Empty;
 
     /// <summary>Screen y of the last fully visible text line's bottom — where the bottom fade starts.
     /// The old fixed-height band fell inside a large paragraph gap and looked like no fade at all.</summary>
@@ -360,8 +371,8 @@ public sealed class NodeVisual : ContentControl
         UseLayoutRounding = false;
         IsHitTestVisible = true;
 
-        // 折叠走平移，不走 Canvas 位置：那条"不用 render transform"的规矩针对的是缩放（字形会糊），
-        // 平移不改缩放，PanLayer 自己就是靠一枚 TranslateTransform 走的。
+        // 折叠与缩放分家：根上这一枚只管平移（屏幕像素），缩放住在内容层 _paintZoom（变换路线）。
+        // 两层各走各的，撤销一次筛选就是把平移归零，不会碰缩放。
         RenderTransform = _fold;
 
         HorizontalContentAlignment = HorizontalAlignment.Stretch;
@@ -429,22 +440,25 @@ public sealed class NodeVisual : ContentControl
 
         _surface.Child = ShowText ? _content : _image;
 
-        var paint = new Grid();
-        paint.Children.Add(_bands);
-        paint.Children.Add(_surface);
-        paint.Children.Add(_fadeAbove);
-        paint.Children.Add(_fadeBelow);
-        paint.Children.Add(_press);
-        paint.Children.Add(_groupHalo);
-        paint.Children.Add(_frame);
-        paint.Children.Add(_grab);
-        paint.Children.Add(_namePlate);
+        // 缩放走这一层变换：卡内一切几何按世界单位排版，_paintZoom 把整层投到屏幕。
+        // 布局盒（根控件的 Width/Height）也是世界尺寸，Canvas 落位仍是屏幕坐标——
+        // 命中与绘制都跟着变换走（名牌的负移抬升就是同一条机制），所以"看到的"和"点到的"不散架。
+        _paint.RenderTransform = _paintZoom;
+        _paint.Children.Add(_bands);
+        _paint.Children.Add(_surface);
+        _paint.Children.Add(_fadeAbove);
+        _paint.Children.Add(_fadeBelow);
+        _paint.Children.Add(_press);
+        _paint.Children.Add(_groupHalo);
+        _paint.Children.Add(_frame);
+        _paint.Children.Add(_grab);
+        _paint.Children.Add(_namePlate);
         // Once, here. It used to hang off Update behind a `!_dueBar.IsLoaded` guard, which is not a
         // membership test: a card updated twice before the tree has loaded — which is what a rebuild
         // inside one synchronous pass does — took IsLoaded as false and added a rectangle that was
         // already a child, and XAML answers that with 0x800F1000. Visibility is what Update changes.
-        paint.Children.Add(_dueBar);
-        Content = paint;
+        _paint.Children.Add(_dueBar);
+        Content = _paint;
 
         // 第二行（元信息＋动作）由悬停决定亮不亮。选中不跟着亮：选中那一拍右侧会浮出操作条，
         // 两样叠在同一列上；键盘与触屏走的是右键菜单里那两条"打开原件 / 在文件夹中打开"。
@@ -809,8 +823,74 @@ public sealed class NodeVisual : ContentControl
         public static readonly Display None = new(null, null, false, null, null);
     }
 
-    /// <summary>折叠的位移走这一枚变换：它不改 Canvas 上的位置，所以撤销一次筛选就是把它归零。</summary>
+    /// <summary>折叠的位移走这一枚变换：它不改 Canvas 上的位置，所以撤销一次筛选就是把它归零。
+    /// 它挂在卡片根上、<b>屏幕像素</b>计；缩放那一枚在 <see cref="_paintZoom"/>（内容层），两者互不搭。</summary>
     private readonly TranslateTransform _fold = new();
+
+    /// <summary>内容层的那一枚缩放：卡内一切几何都是世界单位，这一枚把世界投到屏幕上。
+    /// 换档只改这两个数——合成器的事，不是重新排版的事。</summary>
+    private readonly ScaleTransform _paintZoom = new();
+
+    private readonly Grid _paint = new();
+
+    /// <summary>卡面裁剪矩形随尺寸重建一次就够（剔除/改大小那一拍才变）。</summary>
+    private string _clipKey = string.Empty;
+
+    /// <summary>内容账：卡片画什么的全部输入。账不脏，Update 只走相机段（落位＋变换）。
+    /// 注意里面<b>没有裸的 view.Zoom</b>——缩放的两处真实后果（阴影 LOD 与图分辨率档）已折算成
+    /// ShadowLod／DecodeTier 两个阈值位。带裸缩放就是把"每档重量每张卡"请回来（这正是这次要杀的旧账）。</summary>
+    private (
+        string Id,
+        string? Text,
+        string? Url,
+        string? Label,
+        string? FilePath,
+        string? Color,
+        double Width,
+        double Height,
+        double FontSize,
+        bool Dark,
+        int Today,
+        string? TagFilter,
+        int? DueFilter,
+        bool? DoneFilter,
+        bool Filtering,
+        bool Revealed,
+        bool FoldedAway,
+        string? Suffix,
+        Grouping.Rect? Shown,
+        double? FoldDX,
+        double? FoldDY,
+        bool ShadowLod,
+        int DecodeTier,
+        bool NoRoot,
+        int FirstLine) _contentStamp;
+
+    private bool _contentStampValid;
+
+    /// <summary>诊断读数：内容账命中/整跑的次数（--perf 与 arrange 日志用，测完不删——它是下一刀的秒表）。</summary>
+    internal static long ContentGuardHits;
+    internal static long ContentFullRuns;
+
+    /// <summary>自检读回：内容层当前的缩放倍数（应等于相机 zoom）。</summary>
+    internal double PaintZoomScale => _paintZoom.ScaleX;
+
+    /// <summary>折叠位移的读写口（屏幕像素）：GroupFold 的 Storyboard Target 走这一枚，不认变换组。</summary>
+    internal TranslateTransform FoldShift => _fold;
+
+    /// <summary>自检读回：内容层（纸、字、牌子、渐隐、阴影）当前的可见态——缩放四档必须一格不差。</summary>
+    internal (bool Above, bool Below, bool Chips, bool Markdown, bool Body) OverflowChromeVisible
+        => (
+            _fadeAbove.Visibility == Visibility.Visible,
+            _fadeBelow.Visibility == Visibility.Visible,
+            _chips.Visibility == Visibility.Visible,
+            _md.Visibility == Visibility.Visible,
+            _label.Visibility == Visibility.Visible
+        );
+
+
+    /// <summary>自检读回：非 markdown 那一支实际画进卡上的字。</summary>
+    internal string PaintedBodyText => _label.Text;
 
     public void Update(CanvasNode node, BoardViewState view, double rasterizationScale, Display? display = null)
     {
@@ -819,6 +899,67 @@ public sealed class NodeVisual : ContentControl
         _windowNode = node;
         _windowView = view;
         _windowScale = rasterizationScale;
+
+        // ── 相机段：每一拍都走，全是赋数，不量字、不建对象。
+        // 组框在筛选时画在"看得见的那几格"的包围盒上——框跟着便签走，而文档里那份一个字节不动。
+        var shown = display.ShownFrame ?? new Grouping.Rect(node.Id, node.X, node.Y, node.Width, node.Height);
+
+        Canvas.SetLeft(this, view.ToScreenX(shown.X));
+        Canvas.SetTop(this, view.ToScreenY(shown.Y));
+
+        // 布局盒＝世界尺寸；屏幕上的大小由内容层的 _paintZoom 投出来。换档那一拍这里一个数都不变，
+        // 变的只有下面那两行——这就是"缩放＝同一张卡做变换，不是重排所有可见卡"。
+        Width = Math.Max(2, shown.Width);
+        Height = Math.Max(2, shown.Height);
+        _paintZoom.ScaleX = _paintZoom.ScaleY = view.Zoom;
+
+        if (display.FoldDX is { } foldXNow && display.FoldDY is { } foldYNow)
+        {
+            _fold.X = foldXNow;
+            _fold.Y = foldYNow;
+        }
+
+        // ── 内容账：卡片画什么，只取决于这十来项——没有相机缩放（缩放的两档后果 DecodeTier/
+        // ShadowLod 已折算进去）。账没脏就到此为止：平移的每一帧、缩放的每一拍，逐格走的
+        // 只有上面那五句。旧的每一拍都把标记重析、刷子重建、几串键重拼一遍——300 格板上
+        // 那就是 ArrangeAll 里剩下的二十毫秒（--perf 拆出来的账）。
+        var stamp = (
+            node.Id,
+            node.Text,
+            node.Url,
+            node.Label,
+            node.FilePath,
+            node.Color,
+            node.Width,
+            node.Height,
+            view.FontSizeFor(node.Id),
+            NoteStyling.IsDark,
+            view.Today.DayNumber,
+            view.TagFilter,
+            (int?)view.DueFilter,
+            view.DoneFilter,
+            view.Filtering,
+            display.Revealed,
+            display.FoldedAway,
+            display.Suffix,
+            display.ShownFrame,
+            display.FoldDX,
+            display.FoldDY,
+            NoteSurface.DrawsShadow(view.Zoom),
+            ShowText ? 0 : TierFor((int)(node.Width * view.Zoom * Math.Max(1, rasterizationScale))),
+            XamlRoot is null,
+            _firstLine);
+
+        if (_contentStampValid && stamp.Equals(_contentStamp))
+        {
+            ContentGuardHits++;
+
+            return;
+        }
+
+        ContentFullRuns++;
+        _contentStamp = stamp;
+        _contentStampValid = true;
 
         var surface = NoteStyling.SurfaceFor(node.Color);
         var ink = NoteStyling.InkFor(node.Color, surface);
@@ -843,14 +984,6 @@ public sealed class NodeVisual : ContentControl
         Opacity = display.FoldedAway ? 0d : shows ? 1d : 0.22d;
         _label.Foreground = new SolidColorBrush(isGroup ? NoteStyling.InkFor(null, NoteStyling.SurfaceFor(null)) : ink);
 
-        // 组框在筛选时画在"看得见的那几格"的包围盒上——框跟着便签走，而文档里那份一个字节不动。
-        var shown = display.ShownFrame ?? new Grouping.Rect(node.Id, node.X, node.Y, node.Width, node.Height);
-
-        Canvas.SetLeft(this, view.ToScreenX(shown.X));
-        Canvas.SetTop(this, view.ToScreenY(shown.Y));
-        Width = Math.Max(2, shown.Width * view.Zoom);
-        Height = Math.Max(2, shown.Height * view.Zoom);
-
         // 色条的高度必须取**这一帧**的 Height。原来它排在 Width/Height 之前，缩放后拿到的是上一帧的
         // 高度，于是 2px 条短一截、又被 Grid 居中——上下各缺一块（他 10-24 报的"左缘没盖满"）。
         if (NoteMarks.BarFor(due, NoteStyling.IsDark) is { } tint && !isGroup)
@@ -873,52 +1006,62 @@ public sealed class NodeVisual : ContentControl
 
         // The clip lives on the card now, so the shadow band below it can be painted; text that
         // no longer fits still stays inside the card instead of spilling over a neighbour.
-        _surface.Clip = new RectangleGeometry { Rect = new Windows.Foundation.Rect(0, 0, Width, Height) };
+        // 卡面尺寸是世界数：只有改大小/剔除那一拍才变——每发滚轮都 new 一枚几何体会把排版弄脏，
+        // 这里按尺寸对账，变了才换。
+        var clipKey = $"{Width:0.###}|{Height:0.###}";
+
+        if (!string.Equals(clipKey, _clipKey, StringComparison.Ordinal))
+        {
+            _clipKey = clipKey;
+            _surface.Clip = new RectangleGeometry { Rect = new Windows.Foundation.Rect(0, 0, Width, Height) };
+        }
+
         Clip = null;
 
         var type = NoteTypography.For(view.FontSizeFor(node.Id));
 
         // A picture fills its card; only text gets the inset. The three numbers (size, leading,
-        // padding) come from one NoteType so they cannot drift apart.
-        _surface.Padding = ShowText ? new Thickness(Math.Clamp(type.Padding * view.Zoom, 0, 60)) : new Thickness(0);
+        // padding) come from one NoteType so they cannot drift apart. 全是世界单位——换档不动它们。
+        _surface.Padding = ShowText ? new Thickness(type.Padding) : new Thickness(0);
 
         var isTable = _entity?.Table is not null;
-        var inset = Math.Clamp(type.Padding * view.Zoom, 0, 60);
-        var headerScreen = _entityHeader is null ? 0 : _entityHeader.HeaderWorld * view.Zoom;
-        var bodyScreen = Math.Max(0, (isTable ? Height : Math.Max(Height, 0)) - (inset * 2));
+        var inset = type.Padding;
+        var headerWorld = _entityHeader is null ? 0 : _entityHeader.HeaderWorld;
+        var bodyWorld = Math.Max(0, Height - (inset * 2));
 
         // 表格按它自己的行数占高度（每行 30 世界像素，被压小的一格降到 18），剩下的那一截才是备注。
         // 先给备注留一行，表格才有"挤不掉的字"；两者都放不下时表格保住最小行高，备注吃渐隐。
-        var tableScreen = 0d;
+        var tableWorld = 0d;
 
         if (isTable)
         {
-            var leading = Math.Max(4, type.Leading * view.Zoom);
+            var leading = type.Leading;
             var note = EntityCards.NoteOf(node);
-            var noteWant = Math.Max(1, NaturalVisualLines(note.Length == 0 ? " " : note, Math.Max(20, Width - (inset * 2)), Math.Max(4, type.Size * view.Zoom), leading)) * leading;
+            var noteWant = Math.Max(1, NaturalVisualLines(note.Length == 0 ? " " : note, Math.Max(20, Width - (inset * 2)), type.Size, leading)) * leading;
             var rows = _entity!.Table!.RowCount;
-            var natural = rows * EntityCardLayout.TableLineWorld * view.Zoom;
-            var floor = Math.Min(rows * 18 * view.Zoom, Math.Max(0, bodyScreen - headerScreen));
+            var natural = rows * EntityCardLayout.TableLineWorld;
+            var floor = Math.Min(rows * 18, Math.Max(0, bodyWorld - headerWorld));
 
-            tableScreen = Math.Min(
-                Math.Clamp(bodyScreen - headerScreen - noteWant, floor, natural),
-                Math.Max(0, bodyScreen - headerScreen));
+            tableWorld = Math.Min(
+                Math.Clamp(bodyWorld - headerWorld - noteWant, floor, natural),
+                Math.Max(0, bodyWorld - headerWorld));
 
+            // 表格按世界单位排一次；屏幕上的大小归内容层那枚变换。
             _table.Render(
                 _entity.Table,
-                view.Zoom,
+                1.0,
                 Math.Max(20, Width - (inset * 2)),
-                tableScreen,
+                tableWorld,
                 ink,
                 NoteStyling.IsDark);
         }
 
         _headerHost.Visibility = _entityHeader is null ? Visibility.Collapsed : Visibility.Visible;
-        _headerHost.Height = headerScreen;
+        _headerHost.Height = headerWorld;
         _table.Visibility = isTable ? Visibility.Visible : Visibility.Collapsed;
 
         _entityHeader?.Apply(
-            view.Zoom,
+            1.0,
             ink,
             NoteStyling.ToColor(Badge.Muted(NoteStyling.IsDark)),
             NoteStyling.IsDark);
@@ -931,14 +1074,13 @@ public sealed class NodeVisual : ContentControl
         }
         else if (ShowText)
         {
-            var leading = Math.Max(4, type.Leading * view.Zoom);
-            var band = NoteType.ChipBand(view.Zoom);
+            var leading = type.Leading;
+            var band = NoteType.ChipBand(1);
 
-            // 牌子之间的空隙也按缩放走：固定 4 像素在 400% 时贴在一起，在 50% 时又显得散开——
-            // 同一排牌子的节奏不该随相机变。
-            _chips.Spacing = 4 * Math.Max(0.05, view.Zoom);
+            // 牌子之间的空隙也随卡缩放（变换路线）：节奏是世界的一部分，不该随相机变。
+            _chips.Spacing = 4;
 
-            _label.FontSize = Math.Max(4, type.Size * view.Zoom);
+            _label.FontSize = type.Size;
             _label.LineHeight = leading;
 
             // 表格卡这一格吃的字是卡下面那几行备注；表的 markdown 只是表格自己的备份，不拿来当正文。
@@ -959,17 +1101,16 @@ public sealed class NodeVisual : ContentControl
             // 不许出现"半行字被横切"。卡片高度可能是在网页那侧量出来的——同一串字在
             // 微软雅黑下会比 Chrome 多占一行；也可能被手柄压小。两种情况下都只允许整行截断，
             // 并用省略号说明"后面还有"，而不是让最后一行露出半截。
-            var room = Math.Max(0, Height - (inset * 2) - headerScreen - tableScreen);
+            var room = Math.Max(0, Height - (inset * 2) - headerWorld - tableWorld);
 
-            // 行数按**世界尺寸**取整，或至少给浮点留一个 epsilon：所有量都乘过 zoom，
-            // 76 高、17 内距、21 行高在 160% 时得到 2.0000000000000004 还是 1.9999999999999998
-            // 全看这一发的乘除顺序——后者 floor 成 1，第二行整行消失，屏幕上看不出还有内容。
-            // 他 10-25 报的"编辑完不长大、渐隐也没提示"就是这一格（同样 42/21 在别的缩放是 2）。
+            // 行数按**世界尺寸**取整，浮点留 epsilon 那条规矩不变：现在所有量本来就是世界数，
+            // 换档不再乘来乘去，160% 那一发 42/21 的取整事故（他 10-25 报的"编辑完不长大"）
+            // 从根上没了——同一档位内算式一字不变，档位之间更是同一份缓存。
             const double lineEpsilon = 1e-6;
 
             // 正文能用到卡片下沿（下内距被下一行的半行借走），所以"完整行数"只扣上内距；
             // 用两倍内距算会把本可以显示的下一行提前判成溢出，于是只能整行显示/整行消失。
-            var lineRoom = Math.Max(0, Height - inset - headerScreen - tableScreen);
+            var lineRoom = Math.Max(0, Height - inset - headerWorld - tableWorld);
             var withChips = (int)Math.Floor(((room - band) / leading) + lineEpsilon);
 
             IReadOnlyList<NoteMarks.Mark> chips = isGroup ? Array.Empty<NoteMarks.Mark>() : NoteMarks.Chips(marks, view.Today);
@@ -981,10 +1122,10 @@ public sealed class NodeVisual : ContentControl
 
             if (showChips)
             {
-                PaintChips(chips, view.Zoom, ink, surface);
+                PaintChips(chips, ink, surface);
             }
 
-            // The room the words actually get, in screen pixels: the marks band is chrome and sits
+            // The room the words actually get, in world units: the marks band is chrome and sits
             // under them, so it comes off before anything asks how many lines fit.
             var roomText = Math.Max(0, showChips ? room - band : room);
 
@@ -1003,7 +1144,7 @@ public sealed class NodeVisual : ContentControl
 
             _firstLine = Math.Clamp(_firstLine, 0, Math.Max(0, _totalLines - 1));
 
-            var innerWidth = Math.Max(20, (node.Width * view.Zoom) - (inset * 2));
+            var innerWidth = Math.Max(20, node.Width - (inset * 2));
 
             var blocks = (Kind == CanvasNodeKind.Text || _entity is not null) && Markdown.LooksLikeMarkdown(marks.Body);
 
@@ -1016,7 +1157,7 @@ public sealed class NodeVisual : ContentControl
                 {
                     var allLines = Markdown.Lines(marks.Body);
 
-                    if (MarkdownPaint.Count(type, view.Zoom, allLines, roomText) >= allLines.Count)
+                    if (MarkdownPaint.Count(type, 1, allLines, roomText) >= allLines.Count)
                     {
                         _firstLine = 0;
                     }
@@ -1050,22 +1191,27 @@ public sealed class NodeVisual : ContentControl
             // 而底部渐隐只能停在牌子顶边——渐变带下面于是又露出半行实字（他 10-26 的截图）。
             // 把正文裁在牌子顶边：渐隐的实色一端正好压在这条裁线上，下面一个像素都不漏。
             // markdown 走 _md，也共用这条裁线；两条路各裁自己的宿主。
-            var textRowHeight = Math.Max(0, Height - (inset * 2) - headerScreen - tableScreen - band);
+            var textRowHeight = Math.Max(0, Height - (inset * 2) - headerWorld - tableWorld - band);
 
-            if (blocks)
+            // 裁线是世界数：只有改大小/换那一拍才动。每发都 new 一枚几何体会白脏一次排版，
+            // 这里按"裁不裁＋裁到哪"对账，变了才换（_labelClipKey 兼记 null 那一档）。
+            var labelClipKey = blocks ? "none" : showChips && _hasMore ? $"{innerWidth:0.###}|{textRowHeight:0.###}" : "off";
+
+            if (!string.Equals(labelClipKey, _labelClipKey, StringComparison.Ordinal))
             {
-                _label.Clip = null;
-            }
-            else if (showChips && _hasMore)
-            {
-                _label.Clip = new RectangleGeometry
+                _labelClipKey = labelClipKey;
+
+                if (labelClipKey == "off" || labelClipKey == "none")
                 {
-                    Rect = new Windows.Foundation.Rect(0, 0, innerWidth, textRowHeight),
-                };
-            }
-            else
-            {
-                _label.Clip = null;
+                    _label.Clip = null;
+                }
+                else
+                {
+                    _label.Clip = new RectangleGeometry
+                    {
+                        Rect = new Windows.Foundation.Rect(0, 0, innerWidth, textRowHeight),
+                    };
+                }
             }
 
             // 实体卡和表格卡的备注区天生是空的，空着不像"可以写"。所以在真正能输入的那块位置上
@@ -1093,12 +1239,13 @@ public sealed class NodeVisual : ContentControl
 
                 // 按“这一宽度下实际换行后的高度”量，不再按源行数：一段长句会换好几行，
                 // 旧算法把它当一行，于是内容已经溢出还判“全放得下”——教程里没有渐隐就是这个。
-                var measureKey = $"{marks.Body}|{type.Size}|{view.Zoom:0.####}|{_firstLine}|{innerWidth:0.##}|{NoteStyling.IsDark}|{XamlRoot is null}";
+                // 键里不再有缩放：量一次，四档通用（这条正是"缩放那一拍不再逐格重量"的落点）。
+                var measureKey = $"{marks.Body}|{type.Size}|{_firstLine}|{innerWidth:0.##}|{NoteStyling.IsDark}|{XamlRoot is null}";
 
                 if (!string.Equals(measureKey, _mdMeasureKey, StringComparison.Ordinal))
                 {
                     _mdMeasureKey = measureKey;
-                    var measured = MarkdownPaint.Measured(type, view.Zoom, lines, innerWidth, inkBrush, quoteBrush, barBrush, XamlRoot);
+                    var measured = MarkdownPaint.Measured(type, 1, lines, innerWidth, inkBrush, quoteBrush, barBrush, XamlRoot);
                     _mdTotalHeight = measured.Total;
                     _mdHeights = measured.Heights;
 
@@ -1106,7 +1253,7 @@ public sealed class NodeVisual : ContentControl
                     if (_mdTotalHeight <= 0.5 && lines.Count > 0)
                     {
                         _mdHeights = lines
-                            .Select(line => (double)Math.Max(4, Math.Round(type.Leading * view.Zoom * line.Scale, MidpointRounding.AwayFromZero)))
+                            .Select(line => (double)Math.Max(4, Math.Round(type.Leading * line.Scale, MidpointRounding.AwayFromZero)))
                             .ToList();
                         _mdTotalHeight = _mdHeights.Sum();
                     }
@@ -1128,7 +1275,7 @@ public sealed class NodeVisual : ContentControl
 
                 _hasMore = _mdTotalHeight > roomText + 0.5;
                 _visibleLines = Math.Max(1, fullCount);
-                _belowFadeTop = inset + headerScreen + tableScreen + fullHeight;
+                _belowFadeTop = inset + headerWorld + tableWorld + fullHeight;
 
                 // 窗口走了第几行必须进这把钥匙：滚完两行以后不能还画上一屏字。
                 var key = $"{measureKey}|{ink}";
@@ -1138,22 +1285,34 @@ public sealed class NodeVisual : ContentControl
                     _mdKey = key;
                     _md.Children.Clear();
 
-                    foreach (var element in MarkdownPaint.PaintAll(type, view.Zoom, lines, inkBrush, quoteBrush, barBrush))
+                    foreach (var element in MarkdownPaint.PaintAll(type, 1, lines, inkBrush, quoteBrush, barBrush))
                     {
                         _md.Children.Add(element);
                     }
                 }
 
-                _md.Clip = showChips && _hasMore
-                    ? new RectangleGeometry { Rect = new Windows.Foundation.Rect(0, 0, innerWidth, textRowHeight) }
-                    : null;
+                // markdown 共用牌子顶边那条裁线；也按对账换。
+                var mdClipKey = showChips && _hasMore ? $"{innerWidth:0.###}|{textRowHeight:0.###}" : "off";
+
+                if (!string.Equals(mdClipKey, _mdClipKey, StringComparison.Ordinal))
+                {
+                    _mdClipKey = mdClipKey;
+                    _md.Clip = mdClipKey == "off"
+                        ? null
+                        : new RectangleGeometry { Rect = new Windows.Foundation.Rect(0, 0, innerWidth, textRowHeight) };
+                }
             }
             else
             {
                 // 渐隐从最后一条完整行的底边开始：行距再大，这条带子也一直盖到卡底，
                 // 不会只盖住空白、让下面的字看起来“没有渐隐”。
-                _belowFadeTop = inset + headerScreen + tableScreen + (_visibleLines * leading);
-                _md.Clip = null;
+                _belowFadeTop = inset + headerWorld + tableWorld + (_visibleLines * leading);
+
+                if (!string.Equals("off", _mdClipKey, StringComparison.Ordinal))
+                {
+                    _mdClipKey = "off";
+                    _md.Clip = null;
+                }
 
                 // 还有内容时多放一行在卡底外面：卡自己会裁掉大半行，渐隐再压上去，
                 // 屏幕上就露出"半行正在淡出"，而不是一行都不剩、只剩一片空白。
@@ -1197,7 +1356,7 @@ public sealed class NodeVisual : ContentControl
             }
         }
 
-        UpdateOverflowFades(node, view, headerScreen + tableScreen);
+        UpdateOverflowFades(node, view, headerWorld + tableWorld);
 
         // Update 每拍都把 _frame 的描边按默认虚线铺回去；警示态（组钮拖那一拍）要压过它。
         ApplyGroupAlert();
@@ -1209,11 +1368,9 @@ public sealed class NodeVisual : ContentControl
     /// </summary>
     private void PaintGroupPlate(CanvasNode node, BoardViewState view, NoteType type, Display display)
     {
-        var zoom = view.Zoom;
-
-        // 组名也是正文的一部分：和正文同一条缩放尺，不能在低倍时被 10px 地板撑大。
-        _label.FontSize = Math.Max(1, type.Size * zoom);
-        _label.LineHeight = Math.Max(1, type.Leading * zoom);
+        // 组名和正文走同一把世界尺：换档不动字号，屏幕上的大小归内容层那枚变换。
+        _label.FontSize = type.Size;
+        _label.LineHeight = type.Leading;
 
         var text = DisplayText(node);
 
@@ -1284,7 +1441,7 @@ public sealed class NodeVisual : ContentControl
     /// 内容画不下时不再挂"更多 ↓"角标（他嫌突兀），改成在卡片上/下边缘压一道"表面色↔透明"的
     /// 渐隐遮罩：底下还有行就把最后一行淡进卡底；往上翻过则顶部淡一道。无字，靠视觉暗示。
     /// </summary>
-    private void UpdateOverflowFades(CanvasNode node, BoardViewState view, double headerScreen)
+    private void UpdateOverflowFades(CanvasNode node, BoardViewState view, double headerWorld)
     {
         var textCard = ShowText && Kind != CanvasNodeKind.Group;
         // 渐隐只取决于"内容画不画得下"，与 zoom 无关（他 10-27 的工单：缩放时看到的必须是同一张卡）。
@@ -1306,19 +1463,19 @@ public sealed class NodeVisual : ContentControl
         // 渐隐贴着**正文区**的上下边，而不是卡片外沿：卡片还有一圈内距，压在外沿上的
         // 那道只会盖住空白，文字一点都没被淡到（他 10-25 的第二张截图就是这一格）。
         var type = NoteTypography.For(view.FontSizeFor(node.Id));
-        var inset = Math.Clamp(type.Padding * view.Zoom, 0, 60);
-        var leading = Math.Max(4, type.Leading * view.Zoom);
+        var inset = type.Padding;
+        var leading = type.Leading;
 
         // 带子少于一整行高就等于没开：它整条躺在行与行的空隙里，一个字都不吃
         // （他 10-26 第一条说的"明明有渐隐但是看似没有生效"）。
-        var aboveHeight = Math.Min(Math.Max(inset + leading, leading), Math.Max(8, Height - headerScreen));
+        var aboveHeight = Math.Min(Math.Max(inset + leading, leading), Math.Max(8, Height - headerWorld));
 
         // 牌子那一排（标签／日期／序号）是常驻 chrome，**渐隐绝不能吃在它们身上**。
         // 以前这道遮罩永远贴着卡片外沿：有牌子时正文被裁的那条边在它上面一截，于是
         // 该淡的地方硬切、牌子反倒被抹掉下沿（他 10-25 的 @n7：两个读数同一个根因）。
         // 有牌子时：正文区的下沿在"卡片外沿－下内距－牌子带"那里（有牌子时正文借不到下内距，
         // 见上面 Padding 那一发），所以把遮罩从底沿抬起 内距＋牌子带 这么多。
-        var chips = _chips.Visibility == Visibility.Visible ? NoteType.ChipBand(view.Zoom) : 0;
+        var chips = _chips.Visibility == Visibility.Visible ? NoteType.ChipBand(1) : 0;
         var bottomMargin = chips > 0 ? inset + chips : 0;
         var fadeBottom = Math.Max(0, Height - bottomMargin);
 
@@ -1332,14 +1489,14 @@ public sealed class NodeVisual : ContentControl
             8,
             Math.Max(8, fadeBottom));
 
-        _fadeAbove.Margin = new Thickness(0, headerScreen, 0, 0);
+        _fadeAbove.Margin = new Thickness(0, headerWorld, 0, 0);
         _fadeBelow.Margin = new Thickness(0, 0, 0, bottomMargin);
 
         var paper = new Rgb(surface.R, surface.G, surface.B);
 
         if (above)
         {
-            ApplyFade(_fadeAbove, aboveHeight, headerScreen, Height, paper, solidAtBottom: false);
+            ApplyFade(_fadeAbove, aboveHeight, headerWorld, Height, paper, solidAtBottom: false);
         }
 
         if (below)
@@ -1538,7 +1695,9 @@ public sealed class NodeVisual : ContentControl
             return;
         }
 
-        var key = $"{view.Zoom:0.###}|{node.Width:0.#}|{node.Height:0.#}|{NoteStyling.IsDark}";
+        // 阴影几何是世界数（内容层那枚变换把它投到屏幕上），键里不再带逐档缩放——
+        // 只有"影↔线"那一级 LOD 翻档（跨过 ShadowMinZoom）才值得重铺一次。
+        var key = $"{NoteSurface.DrawsShadow(view.Zoom)}|{node.Width:0.#}|{node.Height:0.#}|{NoteStyling.IsDark}";
 
         if (!NoteSurface.DrawsShadow(view.Zoom))
         {
@@ -1549,7 +1708,7 @@ public sealed class NodeVisual : ContentControl
                 _shadowKey = "line";
                 _bands.Children.Clear();
                 _press.Visibility = Visibility.Collapsed;
-                _surface.BorderThickness = new Thickness(0, 0, 0, Math.Max(1, NoteSurface.FallbackLineWidth * view.Zoom));
+                _surface.BorderThickness = new Thickness(0, 0, 0, NoteSurface.FallbackLineWidth);
             }
 
             return;
@@ -1572,7 +1731,7 @@ public sealed class NodeVisual : ContentControl
         // collapsed the two outer layers into one soft ellipse; a single sample point agreed
         // with it and his eye did not — an ellipse fades for about twice as long and never shows
         // where one layer's tail ends, so the card read as floating rather than sitting on paper.
-        foreach (var band in NoteSurface.BandsFor(node.Id, view.Zoom, node.Width, node.Height))
+        foreach (var band in NoteSurface.BandsFor(node.Id, 1.0, node.Width, node.Height))
         {
             if (band.Inset || band.Width <= 0 || band.Height <= 0)
             {
@@ -1611,7 +1770,7 @@ public sealed class NodeVisual : ContentControl
             _bands.Children.Add(rect);
         }
 
-        var press = NoteSurface.BandsFor(node.Id, view.Zoom, node.Width, node.Height)
+        var press = NoteSurface.BandsFor(node.Id, 1.0, node.Width, node.Height)
             .FirstOrDefault(band => band.Inset);
 
         if (press is { Width: > 0 })
@@ -1650,9 +1809,10 @@ public sealed class NodeVisual : ContentControl
     /// a pan re-runs <c>Update</c> for every card, and re-making a chip mid-hover would hide the ×
     /// the delete depends on.
     /// </summary>
-    private void PaintChips(IReadOnlyList<NoteMarks.Mark> chips, double zoom, Color ink, Color surface)
+    private void PaintChips(IReadOnlyList<NoteMarks.Mark> chips, Color ink, Color surface)
     {
-        var key = $"{zoom:0.####}|{surface}|{string.Join("/", chips.Select(chip => $"{chip.Source}={chip.Label}"))}";
+        // 键里不再带缩放：牌子按世界字号排一次，屏幕上的大小归内容层那枚变换。
+        var key = $"{surface}|{string.Join("/", chips.Select(chip => $"{chip.Source}={chip.Label}"))}";
 
         if (key == _chipKey)
         {
@@ -1671,7 +1831,7 @@ public sealed class NodeVisual : ContentControl
 
             _chips.Children.Add(ChromeStyling.Chip(
                 chip,
-                NoteType.ChipFont(zoom),
+                NoteType.ChipFont(1),
                 ink,
                 surface,
                 () => RemoveMark?.Invoke(NodeId, source),

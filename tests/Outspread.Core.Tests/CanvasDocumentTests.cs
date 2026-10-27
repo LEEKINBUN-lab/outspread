@@ -310,4 +310,29 @@ public class CanvasDocumentTests
         Assert.Contains("40.0", once, StringComparison.Ordinal);
         Assert.Equal(once, CanvasDocument.Parse(once).ToJson());
     }
+
+    [Fact]
+    public void Find_and_NodesWhere_answer_the_same_and_read_the_live_json()
+    {
+        /* 10-27 把 Find 从"先物化整张 Nodes 再扫"改成"直接扫 JSON、只造命中那一枚"，并给了
+           NodesWhere 一枚同样的形状：拖一格每一帧要调它好几枚，而 `Nodes` 那个属性每读一次就为
+           **全部**节点各 new 一枚包装——600 格的板上那就是每帧白造两千多枚对象
+           （"便签一多拖动就卡"里实测到的那 2.8ms）。
+           钉两件事：命中与不命中的答案一个都没变；盘上改过之后两条路读到的都是新值（不许退化成快照）。 */
+        var document = CanvasDocument.Parse(SampleJson);
+
+        Assert.NotNull(document.Find("u111111111111"));
+        Assert.Null(document.Find("nope"));
+        Assert.Equal(10, document.Find("u111111111111")!.X);
+
+        Assert.Equal(
+            ["u111111111111"],
+            document.NodesWhere(id => id.StartsWith("u", StringComparison.Ordinal)).Select(node => node.Id).ToArray());
+
+        document.Find("u111111111111")!.X = 77;
+
+        Assert.Equal(77, document.NodesWhere(id => id == "u111111111111").Single().X);
+        Assert.Equal(77, document.Nodes[0].X);
+        Assert.Equal(77, document.Find("u111111111111")!.X);
+    }
 }

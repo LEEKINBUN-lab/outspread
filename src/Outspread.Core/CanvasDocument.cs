@@ -319,13 +319,42 @@ public sealed class CanvasDocument
         return new CanvasDocument(root, nodes);
     }
 
+    /// <summary>
+    /// 逐格扫一遍 JSON，**只对通过筛选的那几枚**造 <see cref="CanvasNode"/>。
+    /// </summary>
+    /// <remarks>
+    /// 给"指针每一帧都要扫全板"的那几条路（拖动时的对齐扫描就是）。直接 <c>foreach (_document.Nodes)</c>
+    /// 也能写，但那个属性每读一次就为**全部**节点各 new 一枚包装——600 格的板上一帧四次，
+    /// 就是"便签一多，拖动变卡"里真正在付费的那一笔（10-27 实测：每帧 0.844ms@60 格 → 2.394ms@600 格）。
+    /// </remarks>
+    public IEnumerable<CanvasNode> NodesWhere(Func<string, bool> keepId)
+    {
+        foreach (var item in _nodes)
+        {
+            if (item is not JsonObject obj)
+            {
+                continue;
+            }
+
+            var id = ReadId(obj);
+
+            if (keepId(id))
+            {
+                yield return new CanvasNode(obj);
+            }
+        }
+    }
+
     public CanvasNode? Find(string id)
     {
-        foreach (var node in Nodes)
+        // 直接扫 JSON，别走 `Nodes`：那个属性每读一次就 new 一整张表（N 枚 CanvasNode），
+        // 而 Find 在指针每一帧要被调好几枚——10-27 量到"拖一格每帧 2.4ms（600 格）"，
+        // 其中三枚物化就是这里来的。这里只造命中那一枚。
+        for (var index = 0; index < _nodes.Count; index++)
         {
-            if (string.Equals(node.Id, id, StringComparison.Ordinal))
+            if (_nodes[index] is JsonObject node && ReadId(node) == id)
             {
-                return node;
+                return new CanvasNode(node);
             }
         }
 

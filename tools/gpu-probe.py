@@ -205,7 +205,7 @@ def write_sidecar(board, zoom, world):
     sidecar.write_text(json.dumps(existing, ensure_ascii=False), encoding="utf-8")
 
 
-def one_run(exe, board, log, zoom, world, gesture, seconds, flags=()):
+def one_run(exe, board, log, zoom, world, gesture, seconds, flags=(), settle=2.2):
     """跑一档：摆好相机 → 起界面 → 并发采 GPU 与进程 CPU → 读回探针那一行。"""
     write_sidecar(board, zoom, world)
 
@@ -217,7 +217,7 @@ def one_run(exe, board, log, zoom, world, gesture, seconds, flags=()):
     # 静置那一档要等得更久：起来头几秒里还有自愈（往稳定目录拷 42MB）、快捷方式对齐、
     # JIT 与首帧重建。拿 2.2 秒就去采，量到的是"开机"不是"静置"——21% 就是这么冒出来的。
     proc = subprocess.Popen([exe, "--board", str(board), *extra])
-    time.sleep(14.0 if gesture == "idle" else 2.2)
+    time.sleep(14.0 if gesture == "idle" else settle)
 
     cpu = {}
 
@@ -240,14 +240,23 @@ def one_run(exe, board, log, zoom, world, gesture, seconds, flags=()):
         tail = handle.read()
 
     line = next((row for row in tail.splitlines() if " 帧 · 每帧均" in row), "")
+    control = next((row for row in tail.splitlines() if "drag 正对照" in row), "")
     frames = re.search(r"(?:pan|zoom|drag) \d+ms: (\d+) 帧", line)
     per_frame = re.search(r"每帧均 ([0-9.]+)ms", line)
+    visible = re.search(r"可见 (\d+) 枚", line)
     elements = re.search(r"板面元素 (\d+) 个", line)
+
+    # 拖一格那一档的自检：格子到底被拖走了几像素。没动就等于"这一发什么都没做"，
+    # 那种读数会低得好看（0.056ms/帧），不写进表里就会被我当成结论读。
+    moved = re.findall(r"从 \((-?[\d.]+)，(-?[\d.]+)\) 走到了 \((-?[\d.]+)，(-?[\d.]+)\)", control)
+    drag_px = abs(float(moved[0][2]) - float(moved[0][0])) + abs(float(moved[0][3]) - float(moved[0][1])) if moved else 0.0
 
     return {
         "frames": int(frames.group(1)) if frames else 0,
         "per_frame": float(per_frame.group(1)) if per_frame else None,
+        "visible": int(visible.group(1)) if visible else 0,
         "elements": int(elements.group(1)) if elements else 0,
+        "drag_px": drag_px,
         "gpu": read["avg"] if read else None,
         "cpu": cpu.get("value", float("nan")),
     }
@@ -259,6 +268,38 @@ def median(values, fallback=float("nan")):
     return statistics.median(filled) if filled else fallback
 
 
+def make_board(path, near, far=0, cell=(360, 88), gap=24, columns=3):
+    """合成一块板：`near` 格铺在密区，`far` 格甩到 60000 之外（同尺寸同内容，只是看不见）。
+
+    这是为了把"便签一多"拆成两个轴：板上**总共**多少格（遍历/对账那条路），
+    和视野里**压着**多少格（每帧参与合成的那批）。只报"实格 73"分不开这两件事。
+    """
+    nodes = []
+
+    for index in range(near + far):
+        x = (index % columns) * (cell[0] + gap)
+        y = (index // columns) * (cell[1] + gap)
+
+        if index >= near:
+            x += 60000
+
+        nodes.append({
+            "id": f"s{index:012d}",
+            "type": "text",
+            "x": x,
+            "y": y,
+            "width": cell[0],
+            "height": cell[1],
+            "text": f"### 格子 {index}\n\n@t形状\n2026-10-27 21:00",
+        })
+
+    Path(path).write_text(json.dumps({"nodes": nodes, "edges": []}, ensure_ascii=False), encoding="utf-8")
+
+    rows = -(-near // columns)
+
+    return ((columns - 1) * (cell[0] + gap) / 2, (rows - 1) * (cell[1] + gap) / 2)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -267,10 +308,52 @@ def main():
     ap.add_argument("--src", default=str(REPO / "boards/Agent 出口.canvas"))
     ap.add_argument("--seconds", type=float, default=10.0)
     ap.add_argument("--repeats", type=int, default=3)
+    ap.add_argument("--shapes", action="store_true",
+                    help="跑「格数」矩阵：把「便签一多」拆成 板上总量 / 视野里可见 两个轴，不跑默认那六档")
     args = ap.parse_args()
 
     root = Path(os.environ.get("TEMP", "/tmp")) / "outspread-gpu"
     root.mkdir(parents=True, exist_ok=True)
+    log = Path(os.environ.get("LOCALAPPDATA", "")) / "Outspread/board.log"
+
+    if args.shapes:
+        shapes = [
+            ("60 总·拖一格", 60, 0, 1.0, "drag"),
+            ("60 总·平移", 60, 0, 1.0, "pan"),
+            ("600 总·拖一格", 60, 540, 1.0, "drag"),
+            ("600 总·平移", 60, 540, 1.0, "pan"),
+            ("600 满视野·拖一格", 600, 0, 0.25, "drag"),
+            ("600 满视野·平移", 600, 0, 0.25, "pan"),
+        ]
+
+        print(f"形状矩阵（每档 {args.repeats} 发取中位）：把「便签一多」拆成 板上总量 / 视野里可见 两个轴")
+        print(f"{'档':<18}{'帧数':>7}{'每帧ms':>9}{'GPU中位%':>10}{'CPU占一核%':>11}{'可见':>6}{'拖距px':>9}{'元素':>8}  GPU 各发")
+
+        for label, near, far, zoom, gesture in shapes:
+            board = root / f"shape-{near}-{far}.canvas"
+
+            runs = [
+                # 每一发都重新生成板子：拖完那一格会被存进盘，下一发就从"已经被拖走的位置"接着拖
+                # ——600 格那一档量出 0.088ms/帧（比 60 格还快十倍）就是这么来的。
+                one_run(args.exe, board, log, zoom,
+                        make_board(board, near, far), gesture, args.seconds, settle=8.0)
+                for _ in range(args.repeats)
+            ]
+            gpus = sorted(run["gpu"] for run in runs if run["gpu"] is not None)
+
+            print(
+                f"{label:<18}{median(run['frames'] for run in runs):>7.0f}"
+                f"{median(run['per_frame'] for run in runs):>9}"
+                f"{median(gpus):>10.2f}"
+                f"{median(run['cpu'] for run in runs):>11.2f}"
+                f"{median(run['visible'] for run in runs):>6.0f}"
+                f"{median(run['drag_px'] for run in runs):>9.0f}"
+                f"{median(run['elements'] for run in runs):>8.0f}"
+                f"  [{', '.join(f'{value:.2f}' for value in gpus)}]"
+            )
+
+        return 0
+
     board = root / "probe.canvas"
 
     shutil.copyfile(args.src, board)
@@ -306,10 +389,14 @@ def main():
     print(f"{'对照·睡着':<12}{'—':>7}{'—':>9}{'—':>10}{zero:>11.2f}{'—':>7}")
 
     for label, zoom, world, gesture, flags in configs:
-        runs = [
-            one_run(args.exe, board, log, zoom, world, gesture, args.seconds, flags)
-            for _ in range(args.repeats)
-        ]
+        runs = []
+
+        for _ in range(args.repeats):
+            # 每一发都从原始那份重拷：拖一格会把格子写进盘，下一发就从"已经被拖走的位置"接着拖。
+            shutil.copyfile(args.src, board)
+            shutil.copyfile(str(args.src) + ".view.json", str(board) + ".view.json")
+
+            runs.append(one_run(args.exe, board, log, zoom, world, gesture, args.seconds, flags))
         gpus = sorted(run["gpu"] for run in runs if run["gpu"] is not None)
 
         print(

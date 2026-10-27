@@ -4393,22 +4393,15 @@ public sealed partial class MainWindow : Window
             var moving = new Box(primaryStart.X + deltaX, primaryStart.Y + deltaY, primary.Width, primary.Height);
 
             var selected = gesture.StartGeometry.Keys;
-            var others = new List<Box>();
 
-            foreach (var node in _document.Nodes)
-            {
-                if (selected.Contains(node.Id))
-                {
-                    continue;
-                }
-
-                // Only what is on screen can be aligned to, which also keeps a huge board
-                // from testing thousands of edges per pointer message.
-                if (_realized.TryGetValue(node.Id, out var visual) && visual.IsHitTestVisible)
-                {
-                    others.Add(new Box(node.X, node.Y, node.Width, node.Height));
-                }
-            }
+            // 能当对齐基准的本来只有视野里那几十格，所以只给它们造包装。
+            // 原来这里 `foreach (_document.Nodes)`——那个属性每读一次就为**全部**节点各 new 一枚，
+            // 600 格的板子每按一次指针就白造 600 枚对象（"便签一多拖动就卡"里的那一笔）。
+            var others = _document
+                .NodesWhere(id => !selected.Contains(id)
+                    && _realized.TryGetValue(id, out var visual) && visual.IsHitTestVisible)
+                .Select(node => new Box(node.X, node.Y, node.Width, node.Height))
+                .ToList();
 
             var viewport = _view.WorldViewport(BoardArea.ActualWidth, BoardArea.ActualHeight);
 
@@ -8349,7 +8342,10 @@ public sealed partial class MainWindow : Window
     /// 相机不会跑掉；跑完自己收场，绝不留一枚实例在后台吃 CPU。
     /// </summary>
     public void BeginPanProbe(int milliseconds) => WaitUntilLaidOut("pan", () =>
-        RunGestureProbe(milliseconds, "pan", frame => ApplyPanPreview(frame % 2 == 0 ? 6 : -6, 3)));
+        RunGestureProbe(milliseconds, "pan", frame => ApplyPanPreview(
+            frame % 2 == 0 ? 6 : -6,
+            frame % 4 is 0 or 1 ? 3 : -3)));    // 两轴都要来回：只在 X 上乒乓的话，Y 每帧单向漂 3 像素，
+                                                // 10 秒就漂出 1400 像素——"600 格·平移 可见 3 枚"量的其实是空地
 
     /// <summary>持续滚轮那几秒：缩放才是他报"卡"的那一拍，之前只量过平移，那一半根本没有数。</summary>
     public void BeginZoomProbe(int milliseconds) => WaitUntilLaidOut("zoom", () =>
@@ -8373,20 +8369,52 @@ public sealed partial class MainWindow : Window
         // 必须挑**此刻在屏幕上的**那一格：10-27 第一发拿的是"文档里第一个文字格"，
         // 而相机是脚本摆的（当时停在 250% 的密区中心），那一格早在视野外——
         // 于是"拖一格 GPU 只 0.10%"其实是"拖了一格没人看得见的东西"。
+        // 挑"文档里离视口中心最近的那一格"，不靠 Canvas 位置：探针起来那一拍 Canvas.Left/Top
+        // 还没被排过版（GetLeft 一律回 0），按屏幕位置筛等于把全部格子都当成"在 (0,0) 可见"——
+        // 于是 600 格那两档拖的其实是一格视野外的东西，GPU 整列采不到数。
+        var centreWorldX = _view.ToWorldX(BoardArea.ActualWidth / 2);
+        var centreWorldY = _view.ToWorldY(BoardArea.ActualHeight / 2);
+
         bool OnScreen(CanvasNode candidate)
         {
-            if (candidate.Kind != CanvasNodeKind.Text || !_realized.TryGetValue(candidate.Id, out var visual))
+            if (candidate.Kind != CanvasNodeKind.Text)
             {
                 return false;
             }
 
-            var left = Canvas.GetLeft(visual);
-            var top = Canvas.GetTop(visual);
-
-            return left is > -120 and < 1300 && top is > -120 and < 780;
+            return _view.ToScreenX(candidate.X) < BoardArea.ActualWidth
+                && _view.ToScreenY(candidate.Y) < BoardArea.ActualHeight
+                && _view.ToScreenX(candidate.X + candidate.Width) > 0
+                && _view.ToScreenY(candidate.Y + candidate.Height) > 0;
         }
 
-        if (_document.Nodes.FirstOrDefault(OnScreen) is not { } node)
+        CanvasNode? Nearest()
+        {
+            CanvasNode? best = null;
+            var bestDistance = double.MaxValue;
+
+            foreach (var candidate in _document.Nodes)
+            {
+                if (!OnScreen(candidate))
+                {
+                    continue;
+                }
+
+                var dx = (candidate.X + (candidate.Width / 2)) - centreWorldX;
+                var dy = (candidate.Y + (candidate.Height / 2)) - centreWorldY;
+                var distance = (dx * dx) + (dy * dy);
+
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    best = candidate;
+                }
+            }
+
+            return best;
+        }
+
+        if (Nearest() is not { } node)
         {
             Diagnostics.Write("drag 探针: 屏幕上没有可拖的文字格（这一发的相机对着一片空地），量不到拖动的价钱");
             Environment.Exit(1);
@@ -8458,7 +8486,7 @@ public sealed partial class MainWindow : Window
 
             Diagnostics.Write(
                 $"{label} {milliseconds}ms: {frames} 帧 · 每帧均 {total / Math.Max(1, frames):0.###}ms 最慢 {slowest:0.###}ms · " +
-                $"缩放 {Percent()} · 实格 {_realized.Count} 枚 · 板面元素 {CountDescendants(PanLayer)} 个");
+                $"缩放 {Percent()} · 实格 {_realized.Count} 枚 · 可见 {VisibleNotes()} 枚 · 板面元素 {CountDescendants(PanLayer)} 个");
             Diagnostics.Write("PAN DONE");
 
             // 探针必须自己收场：WinUI 3 关掉最后一扇窗口并不会结束进程，留着它就是一个
@@ -8831,6 +8859,23 @@ public sealed partial class MainWindow : Window
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// 此刻与视口有交的文字格有几枚——探针要报的就是这个数，不是"实格"那枚。
+    /// 区别是这一发的全部意义：他报的是"便签一多就卡"，而"多"有两个轴（板上总共多少格、
+    /// 视野里压着多少格），只有报同一个数才能把两轴分开。
+    /// </summary>
+    private int VisibleNotes()
+    {
+        var width = BoardArea.ActualWidth;
+        var height = BoardArea.ActualHeight;
+
+        return _document.Nodes.Count(candidate => candidate.Kind != CanvasNodeKind.Group
+            && _view.ToScreenX(candidate.X) < width
+            && _view.ToScreenY(candidate.Y) < height
+            && _view.ToScreenX(candidate.X + candidate.Width) > 0
+            && _view.ToScreenY(candidate.Y + candidate.Height) > 0);
     }
 
     /// <summary>整棵视觉树里有多少个元素——perf 与平移探针报的是同一个数，两边必须同尺。</summary>

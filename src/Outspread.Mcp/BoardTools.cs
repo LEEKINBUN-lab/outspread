@@ -268,6 +268,12 @@ public sealed class BoardTools
             return $"{path}：这批没有可摆的格子，这一发没动盘。";
         }
 
+
+        // 组名格式是规范，不是可选：MM-dd HH:mm · 轮次。没带时间就补上——优先用这一轮标题卡里的落板时间，
+        // 没时间戳（老内容）才用当下。他 10-27：光一个标题，以后按轮次排序就是灾难。
+        name = WithStamp(name, BlockTime(
+            wanted.ToDictionary(node => node.Id, node => node, StringComparer.Ordinal),
+            wanted.Select(node => node.Id).ToList()));
         var groupId = into_group is { Length: > 0 } ? into_group : NodeIds.New(NodeIds.AgentNamespace);
         var frame = new JsonObject
         {
@@ -838,6 +844,19 @@ public sealed class BoardTools
             : Path.GetDirectoryName(BoardLocator.FallbackPath())!;
 
         return Path.Combine(directory, "Agent 出口.canvas");
+    }
+
+    /// <summary>组名前面必须有「MM-dd HH:mm · 」。已经有就原样返回，没有就补——规范不许漏。</summary>
+    private static string WithStamp(string name, DateTime? when)
+    {
+        var trimmed = name.Trim();
+
+        if (System.Text.RegularExpressions.Regex.IsMatch(trimmed, @"^\d{2}-\d{2} \d{2}:\d{2} · "))
+        {
+            return trimmed;
+        }
+
+        return $"{(when ?? DateTime.Now):MM-dd HH:mm} · {trimmed}";
     }
 
     /// <summary>横排一行最多多宽；超过就换行。</summary>

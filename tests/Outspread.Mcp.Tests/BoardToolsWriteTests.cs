@@ -171,7 +171,7 @@ public sealed class BoardToolsWriteTests : IDisposable
         var group = Assert.Single(after.Nodes.Where(node => node.Kind == CanvasNodeKind.Group));
         var kept = after.Nodes.Where(node => node.Kind != CanvasNodeKind.Group).OrderBy(node => node.X).ToList();
 
-        Assert.Equal("MCP 出口那轮（已结）", group.Label);
+        Assert.EndsWith("· MCP 出口那轮（已结）", group.Label);          // 组名必须带 MM-dd HH:mm 前缀
         Assert.Equal([groupId], after.Nodes.Where(node => node.Kind == CanvasNodeKind.Group).Select(node => node.Id));
         Assert.Equal(["u1".ToLowerInvariant(), "u2".ToLowerInvariant()], group.GroupMemberIds!.Select(id => id.ToLowerInvariant()));
         Assert.Contains("MCP 出口那轮（已结）", receipt);

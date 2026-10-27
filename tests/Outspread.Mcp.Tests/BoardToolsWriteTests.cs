@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Outspread.Core;
 using Outspread.Mcp;
 
@@ -107,6 +108,83 @@ public sealed class BoardToolsWriteTests : IDisposable
         // 沿用他自己那行的号，不再叠第二个号，也不把 4 这个空号发出去。
         Assert.Equal([3, 99], kept.Order().ToArray());
         Assert.Contains("@n—（沿用你写的标记行）", receipt);
+    }
+
+
+    [Fact]
+    public void A_batch_lands_as_a_named_group_in_a_grid_not_one_long_snake()
+    {
+        var board = SeededBoard(ordinal: 0);
+
+        BoardTools.BoardPost(
+            "一批四件",
+            [
+                Card("decision", "要他拍的"),
+                Card("risk", "一处缺陷"),
+                Card("task", "一条待办"),
+                Card("note", "一条结论"),
+            ],
+            round: "编组",
+            board: board,
+            columns: 3);
+
+        var document = CanvasStore.Load(board);
+        var group = Assert.Single(document.Nodes.Where(node => node.Kind == CanvasNodeKind.Group));
+
+        // 组名就是这一批的小标题，成员是标题卡 + 四张卡：他以后按名字找，不用靠位置。
+        Assert.Equal("一批四件", group.Label);
+        Assert.Equal(5, group.GroupMemberIds?.Count);
+
+        var cards = document.Nodes.Where(node => node.Kind != CanvasNodeKind.Group).ToList();
+        // 去掉种板子那一格（u1）和标题卡，只看这一批落下的四张。
+        var body = cards
+            .Where(node => node.Id != "u1")
+            .Where(node => !(node.Text ?? string.Empty).StartsWith("### ", StringComparison.Ordinal))
+            .ToList();
+
+        // 四件事排成两行（3 + 1），不是四行——那正是他 10-27 否掉的一字长蛇阵。
+        Assert.Equal(2, body.Select(node => node.Y).Distinct().Count());
+        Assert.Equal(3, body.Count(node => Math.Abs(node.Y - body.Min(item => item.Y)) < 0.5));
+    }
+
+    [Fact]
+    public void Archiving_can_reuse_the_group_he_drew_and_just_rename_it()
+    {
+        // 他 10-27 把组名写成了给我的话（"改成合适的名字"）：那一枚组要就地改名换成员，
+        // 不能甩一枚新组、把他画的那个框留在原地。
+        var board = Path.Combine(_root, "他画的框.canvas");
+        var groupId = "uf947930abcdef";
+
+        File.WriteAllText(board, """
+            {"nodes":[
+              {"id":"u1","type":"text","x":0,"y":0,"width":400,"height":300,"text":"一条已经看完的结论"},
+              {"id":"u2","type":"text","x":0,"y":320,"width":300,"height":140,"text":"另一条已经看完的结论"},
+              {"id":"uf947930abcdef","type":"group","x":-12,"y":-12,"width":424,"height":484,"label":"改成合适的名字","members":["u1","u2"]}
+            ],"edges":[]}
+            """);
+
+        var receipt = BoardTools.BoardArchive("MCP 出口那轮（已结）", ["u1", "u2"], board, into_group: groupId);
+
+        var after = CanvasStore.Load(board);
+        var group = Assert.Single(after.Nodes.Where(node => node.Kind == CanvasNodeKind.Group));
+        var kept = after.Nodes.Where(node => node.Kind != CanvasNodeKind.Group).OrderBy(node => node.X).ToList();
+
+        Assert.Equal("MCP 出口那轮（已结）", group.Label);
+        Assert.Equal([groupId], after.Nodes.Where(node => node.Kind == CanvasNodeKind.Group).Select(node => node.Id));
+        Assert.Equal(["u1".ToLowerInvariant(), "u2".ToLowerInvariant()], group.GroupMemberIds!.Select(id => id.ToLowerInvariant()));
+        Assert.Contains("MCP 出口那轮（已结）", receipt);
+
+        // 两格都收到组内最窄最矮：宽取 300、高取 140。
+        Assert.All(kept, node => Assert.Equal(300, node.Width, 3));
+        Assert.All(kept, node => Assert.Equal(140, node.Height, 3));
+
+        // 框必须盖住每一格：10-27 实测漏过——板子把没挂手动尺寸的格子按正文量高后，
+        // 摞里最下面那格探出组框 9px。框按拍完的尺寸算，尺寸又必须钉得住，这两条缺一个就会露角。
+        Assert.All(kept, node => Assert.True(
+            group.X <= node.X && group.Y <= node.Y
+            && group.X + group.Width >= node.X + node.Width
+            && group.Y + group.Height >= node.Y + node.Height,
+            $"{node.Id} 探出了组框"));
     }
 
     private static BoardCard Card(string kind, string text) => new() { Kind = kind, Text = text };

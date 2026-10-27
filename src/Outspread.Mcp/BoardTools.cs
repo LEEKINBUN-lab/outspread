@@ -57,76 +57,94 @@ public sealed class BoardTools
         var patch = new DocPatch();
         var written = new List<string>();
         var seq = NextSequence(document);
+        var titleId = NodeIds.New(NodeIds.AgentNamespace);
+        var groupId = NodeIds.New(NodeIds.AgentNamespace);
+        var members = new List<string> { titleId };
 
-        patch.Additions.Add(Card(NodeIds.New(NodeIds.AgentNamespace), left, top, $"### {title}\n\n{tag}\n{DateTime.Now:yyyy-MM-dd HH:mm}", rowWidth, 88));
+        // 先按"要他动作的在前"排队（决定→风险→待办→结论），再像写字一样从左往右、满一行换行。
+        // 10-27 之前是按类型各占一整行：四件事就排成一条竖长蛇，他明确否掉了。
+        var ordered = cards.Where(card => !string.IsNullOrWhiteSpace(card.Text)).ToList();
+        var prepared = new List<(string Id, string Kind, string Text, string Label, double Height)>();
+
+        foreach (var entry in ordered)
+        {
+            var kind = KindOf(entry.Kind);
+            var body = entry.Text.Trim();
+
+            // 标记行放最前面：他板子上那套约定是"@n8 @b0 换行 正文"，牌子才会落到卡片左下角。
+            // 每一格都要有自己的号——结论也要，因为他想引用"你写的那条结论"时只能靠 @n。
+            // @b 只给要他动作的三档挂：结论挂上牌子，"还欠几格"就会把无关的结论算进他的负担。
+            var stamped = !Tags.LooksLikePropertyLine(body.Split('\n')[0]);
+            var marks = string.Empty;
+            int? ordinal = null;
+
+            if (stamped)
+            {
+                ordinal = ++seq;
+                marks = kind == "note" ? $"{tag} @n{ordinal}" : $"{tag} @n{ordinal} @b0";
+            }
+
+            // 高度按**折行后**的行数估（一行按 15px 一个汉字算），再多留两行：
+            // 只数硬换行会把一句长句当一行，卡片短一截，多出来的那行被渐隐吃掉——看着像话没说完。
+            var wrapped = body.Split('\n')
+                .Sum(line => Math.Max(1, (int)Math.Ceiling(line.Length / (CardWidth / 15.0))));
+
+            prepared.Add((
+                NodeIds.New(NodeIds.AgentNamespace),
+                kind,
+                marks.Length == 0 ? body : $"{marks}\n{body}",
+                ordinal is { } number ? $"@n{number}" : "@n—（沿用你写的标记行）",
+                Math.Max(CardHeight, 44 + (22 * (wrapped + 2)))));
+        }
+
+        var additions = new List<AddedNode>
+        {
+            Card(titleId, left, top, $"### {title}\n\n{tag}\n{DateTime.Now:yyyy-MM-dd HH:mm}", rowWidth, 88),
+        };
 
         var rowTop = top + 88 + ColumnGap;
 
-        // 分带：要他拍的在最上面，然后风险、待办，结论永远垫底——他扫一眼看到的是"要我决定的"，
-        // 不是 agent 干了什么。
-        foreach (var band in cards.GroupBy(card => KindOf(card.Kind)).OrderBy(group => BandOrder(group.Key)))
+        for (var index = 0; index < prepared.Count; index += across)
         {
-            var rowTallest = 0.0;
-            var slot = 0;
+            var row = prepared.Skip(index).Take(across).ToList();
+            var rowTallest = row.Max(item => item.Height);
 
-            foreach (var entry in band)
+            for (var slot = 0; slot < row.Count; slot++)
             {
-                var body = entry.Text.Trim();
+                var item = row[slot];
+                var x = left + (slot * (CardWidth + ColumnGap));
 
-                if (body.Length == 0)
-                {
-                    continue;
-                }
-
-                if (slot % across == 0 && slot > 0)
-                {
-                    rowTop += rowTallest + ColumnGap;
-                    rowTallest = 0;
-                }
-
-                // 标记行放最前面：他板子上那套约定是"@n8 @b0 换行 正文"，牌子才会落到卡片左下角。
-                // 每一格都要有自己的号——结论也要，因为他想引用"你写的那条结论"时只能靠 @n。
-                // @b 只给要他动作的三档挂：结论挂上牌子，"还欠几格"就会把无关的结论算进他的负担。
-                var stamped = !Tags.LooksLikePropertyLine(body.Split('\n')[0]);
-                var marks = string.Empty;
-                int? ordinal = null;
-
-                if (stamped)
-                {
-                    ordinal = ++seq;
-                    marks = band.Key == "note" ? $"{tag} @n{ordinal}" : $"{tag} @n{ordinal} @b0";
-                }
-
-                var text = marks.Length == 0 ? body : $"{marks}\n{body}";
-
-                // 高度按**折行后**的行数估（一行按 15px 一个汉字算），再多留两行：
-                // 只数硬换行会把一句长句当一行，卡片短一截，多出来的那行被渐隐吃掉——看着像话没说完。
-                var wrapped = body.Split('\n')
-                    .Sum(line => Math.Max(1, (int)Math.Ceiling(line.Length / (CardWidth / 15.0))));
-                var height = Math.Max(CardHeight, 44 + (22 * (wrapped + 2)));
-                var x = left + ((slot % across) * (CardWidth + ColumnGap));
-
-                patch.Additions.Add(Card(
-                    NodeIds.New(NodeIds.AgentNamespace),
-                    x,
-                    rowTop,
-                    text,
-                    CardWidth,
-                    height,
-                    ColourOf(band.Key)));
-
-                // 回执要说真话：这一格实际挂上的号才是它能被引用的号（没挂的就直说，别报一个板子上不存在的号）。
-                written.Add($"{(ordinal is { } number ? $"@n{number}" : "@n—（沿用你写的标记行）")} {band.Key} {x:0},{rowTop:0} {height:0}");
-                rowTallest = Math.Max(rowTallest, height);
-                slot++;
+                additions.Add(Card(item.Id, x, rowTop, item.Text, CardWidth, item.Height, ColourOf(item.Kind)));
+                members.Add(item.Id);
+                written.Add($"{item.Label} {item.Kind} {x:0},{rowTop:0} {item.Height:0}");
             }
 
-            rowTop += rowTallest + BandGap;
+            rowTop += rowTallest + ColumnGap;
         }
+
+        // 一批一格组：同一批写下的东西在板上自成一块带着名字的方框（他 10-27 要的）。
+        // 组先放进去、卡片压在它上面，免得框线盖住正文。等他的卡可以在这个组里，但绝不被叠起来。
+        patch.Additions.Add(new AddedNode
+        {
+            Id = groupId,
+            Json = new JsonObject
+            {
+                ["id"] = groupId,
+                ["type"] = "group",
+                ["label"] = title.Trim(),
+                ["x"] = (long)Math.Floor(left - 12),
+                ["y"] = (long)Math.Floor(top - 12),
+                ["width"] = (long)Math.Ceiling((double)(rowWidth + 24)),
+                ["height"] = (long)Math.Ceiling((double)(rowTop - ColumnGap - top + 24)),
+                ["members"] = new JsonArray(members.Select(member => (JsonNode)JsonValue.Create(member)!).ToArray()),
+            },
+        });
+
+        patch.Additions.AddRange(additions);
 
         CanvasStore.SavePatch(path, patch);
 
-        return $"已写到 {path}\n标签：{tag}\n落了 {written.Count} 条 + 1 枚标题卡（一行 {across} 张，按类型分带）：\n{string.Join("\n", written)}";
+        return $"已写到 {path}\n标签：{tag}\n分组：「{title.Trim()}」（{members.Count} 格）\n落了 {written.Count} 条 + 1 枚标题卡（一行 {across} 张，满行换行）：\n{string.Join("\n", written)}";
     }
 
     [McpServerTool(Name = "board_archive"), Description(
@@ -136,7 +154,8 @@ public sealed class BoardTools
     public static string BoardArchive(
         [Description("分组的名字，会成为组名牌，例如「已归档·MCP 那轮叙述」")] string name,
         [Description("要收进去的格子编号。不填就把板上所有没在组里、且不需要他动作的文字格收进去。")] string[]? ids = null,
-        [Description("画板文件路径。不填就用你的「Agent 出口」板。")] string? board = null)
+        [Description("画板文件路径。不填就用你的「Agent 出口」板。")] string? board = null,
+        [Description("已有组的编号：给了就复用这枚组（改名、重新框住、换成员），不再新建一枚。")] string? into_group = null)
     {
         var path = ResolveBoard(board);
 
@@ -191,24 +210,67 @@ public sealed class BoardTools
             .Select(move => new Aligning.Placed(move.Id, move.X, move.Y, width, height))
             .ToList();
 
-        var groupId = NodeIds.New(NodeIds.AgentNamespace);
-
-        patch.Additions.Add(new AddedNode
+        var groupId = into_group is { Length: > 0 } ? into_group : NodeIds.New(NodeIds.AgentNamespace);
+        var frame = new JsonObject
         {
-            Id = groupId,
-            Json = new JsonObject
+            ["label"] = name,
+            ["x"] = (long)Math.Floor(moved.Min(item => item.X) - 12),
+            ["y"] = (long)Math.Floor(moved.Min(item => item.Y) - 12),
+            ["width"] = (long)Math.Ceiling(moved.Max(item => item.X + item.Width) - moved.Min(item => item.X) + 24),
+            ["height"] = (long)Math.Ceiling(moved.Max(item => item.Y + item.Height) - moved.Min(item => item.Y) + 24),
+            ["members"] = new JsonArray(stacked.Moves.Select(move => (JsonNode)JsonValue.Create(move.Id)!).ToArray()),
+        };
+
+        if (into_group is { Length: > 0 })
+        {
+            // 复用他那枚组：他把组名写成了给我的话（"改成合适的名字"），这里就地改名换成员，
+            // 不再甩一枚新组、把他画的那个框留在原地。
+            if (document.Find(into_group) is null)
             {
-                ["id"] = groupId,
-                ["type"] = "group",
-                ["label"] = name,
-                ["x"] = (long)Math.Floor(moved.Min(item => item.X) - 12),
-                ["y"] = (long)Math.Floor(moved.Min(item => item.Y) - 12),
-                ["width"] = (long)Math.Ceiling(moved.Max(item => item.X + item.Width) - moved.Min(item => item.X) + 24),
-                ["height"] = (long)Math.Ceiling(moved.Max(item => item.Y + item.Height) - moved.Min(item => item.Y) + 24),
-            },
-        });
+                return $"{path} 里没有 {into_group} 这枚组，这一发没动盘。";
+            }
+
+            foreach (var (field, value) in frame)
+            {
+                patch.Set(groupId, field, value);
+            }
+        }
+        else
+        {
+            patch.Additions.Add(new AddedNode
+            {
+                Id = groupId,
+                Json = new JsonObject
+                {
+                    ["id"] = groupId,
+                    ["type"] = "group",
+                    ["label"] = name,
+                    ["x"] = frame["x"]!.DeepClone(),
+                    ["y"] = frame["y"]!.DeepClone(),
+                    ["width"] = frame["width"]!.DeepClone(),
+                    ["height"] = frame["height"]!.DeepClone(),
+                    ["members"] = frame["members"]!.DeepClone(),
+                },
+            });
+        }
 
         CanvasStore.SavePatch(path, patch);
+
+        // 高度得钉住：板子那套「随文字」会把没有手动标记的格子重新按正文量一遍，
+        // 一量，同一摞就又高低不齐（10-27 实测：统一成 119 的那摞，有一格被板子量回 140，
+        // 组框也跟着短了 9px）。所以归档同时把这些格子记进侧车的手动尺寸表。
+        var sidecar = path + ".view.json";
+        var (view, viewProblem) = BoardViewState.TryLoad(sidecar);
+
+        if (viewProblem is null)
+        {
+            foreach (var move in stacked.Moves)
+            {
+                view.MarkManualSize(move.Id);
+            }
+
+            view.Save(sidecar);
+        }
 
         return $"已把 {wanted.Count} 格收成组内最窄最矮的 {width:0}×{height:0}（正文放不下的那几格会被渐隐收尾）并叠进分组「{name}」（组 {groupId}）"
             + (blocked.Count == 0 ? "。" : $"\n没收进去、还在等他的有 {blocked.Count} 格：{string.Join("、", blocked)}");

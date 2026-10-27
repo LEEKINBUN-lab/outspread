@@ -732,11 +732,16 @@ public sealed class BoardTools
     };
 
     /// <summary>JSON Canvas 的预设色：1＝红、2＝橙；待办与结论不涂色（涂满色就等于没有色）。</summary>
+    /// <summary>
+    /// 他 10-27 定的：红（1）要他拍、橙（2）风险——这两档保留原样；**其余回答一律用蓝**，
+    /// 一眼分得出"这是 agent 写的"。JSON Canvas 1.0 的六档预设是 红/橙/黄/绿/青/紫，没有纯蓝，
+    /// 最接近的是 5（青）——所以"蓝"落在 5 上；他真要自定义 hex 再说。
+    /// </summary>
     private static string? ColourOf(string kind) => kind switch
     {
         "decision" => "1",
         "risk" => "2",
-        _ => null,
+        _ => "5",
     };
 
     /// <summary>还在等他的格子：特殊色（红／橙）且没勾掉，或明写了 @b0。归档绝不碰这些。</summary>

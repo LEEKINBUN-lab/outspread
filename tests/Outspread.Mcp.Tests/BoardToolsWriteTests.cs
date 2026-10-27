@@ -304,6 +304,29 @@ public sealed class BoardToolsWriteTests : IDisposable
             $"{node.Id} 探出了组框"));
     }
 
+    [Fact]
+    public void Agent_answers_are_blue_while_red_and_orange_keep_their_meaning()
+    {
+        // 他 10-27：红＝要他拍、橙＝风险保留原样，其余回答统一用蓝，一眼分得出谁写的。
+        var board = SeededBoard(ordinal: 0);
+
+        BoardTools.BoardPost(
+            "配色",
+            [Card("decision", "拍板"), Card("risk", "风险"), Card("task", "待办"), Card("note", "结论")],
+            round: "配色",
+            board: board);
+
+        var body = CanvasStore.Load(board).Nodes
+            .Where(node => node.Kind != CanvasNodeKind.Group && node.Id != "u1")
+            .Where(node => !(node.Text ?? string.Empty).StartsWith("### ", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Contains(body, node => node.Color == "1");
+        Assert.Contains(body, node => node.Color == "2");
+        Assert.Equal(2, body.Count(node => node.Color == "5"));
+        Assert.DoesNotContain(body, node => node.Color is null);
+    }
+
     private static JsonObject Note(string id, int x, int y, int width, int height, string text)
         => new()
         {

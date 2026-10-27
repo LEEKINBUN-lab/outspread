@@ -932,16 +932,47 @@ public sealed partial class MainWindow : Window
         return visual;
     }
 
+    /// <summary>--perf 逐格账那段临时秒表：这个探针默认关着，正常运行的每一拍只多一次布尔判断。</summary>
+    private bool _perfLoopTiming;
+
+    /// <summary>小地图上一次真的对账时看到的格子数与主题：这两样没变、又没有哪一格的输入脏了，
+    /// 就不用再进 <see cref="MiniMap.Sync"/>（它自己那本账要逐格读六个数）。</summary>
+    private int _miniMapNodeCount = -1;
+
+    private bool _miniMapDark;
+
+    private static double Ticks(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
+
     private void ArrangeAll()
     {
+        var frameAt = Stopwatch.GetTimestamp();
+
         ChromeStyling.Ensure(NoteStyling.IsDark);
         RefreshZoomLabel();
         StyleBadge();
+
+        var chromeAt = Stopwatch.GetTimestamp();
+
         PaintLinks();
+
+        var linksAt = Stopwatch.GetTimestamp();
+
         UpdateAtmosphere();
+
+        var gridAt = Stopwatch.GetTimestamp();
 
         var width = BoardArea.ActualWidth;
         var height = BoardArea.ActualHeight;
+
+        if (App.SelfTest)
+        {
+            Diagnostics.Write($"selftest arrange 入口: 视口 {width:0}x{height:0} · 文档 {_document.Nodes.Count} 格");
+
+            if (width <= 0 || height <= 0)
+            {
+                Diagnostics.Write("selftest arrange 入口: 视口为 0，早退——这一拍一格都没排");
+            }
+        }
 
         if (width <= 0 || height <= 0)
         {
@@ -958,48 +989,77 @@ public sealed partial class MainWindow : Window
             viewport.Width + (2 * margin),
             viewport.Height + (2 * margin));
 
-        // 小地图跟着这一拍走：小块只在文档几何真变了时才拆建（Sync 里自己对账），
-        // 视口矩形按这一拍落定的真相机摆正。增删格、移动、改大小、归档/收紧的提交都过这里。
-        var miniStarted = Stopwatch.GetTimestamp();
-        _miniMap.Sync(_document.Nodes.Where(IsPlaceable).ToList());
-        var miniMs = Stopwatch.GetElapsedTime(miniStarted).TotalMilliseconds;
-
-        var syncStarted = Stopwatch.GetTimestamp();
-        SyncMiniMapViewport();
-        var syncMs = Stopwatch.GetElapsedTime(syncStarted).TotalMilliseconds;
-
         var visible = 0;
         var started = Stopwatch.GetTimestamp();
         var guardBefore = NodeVisual.ContentGuardHits;
+        var fullBefore = NodeVisual.ContentFullRuns;
 
         // 筛选折起来的那几格：它们画在锚点上，所以剔除要按"画在哪儿"判，不按文档里的真位置判——
         // 否则锚点在屏内、真位置在屏外的那一格会在摊开时是空的。
         var displays = BuildDisplays();
         var emptyGroups = EmptyGroupIds();
+
+        // 这一拍的节点表只取一次：每取一次都会把整份 JSON 重新包成 330 个视图对象。
+        var nodes = _document.Nodes;
         var loopStarted = Stopwatch.GetTimestamp();
 
-        foreach (var node in _document.Nodes)
+        // 逐格分账（--perf 探针把那几发打开）：先有账再动刀。四段对应循环里四件不同的事。
+        var timing = _perfLoopTiming;
+        long introTicks = 0;
+        long placeTicks = 0;
+        long updateTicks = 0;
+        long hideTicks = 0;
+
+        // 这一拍有没有任何一格的输入真变了（小地图要不要重走那本账就看它）。
+        var anyChanged = false;
+
+        if (timing)
         {
-            if (!_realized.TryGetValue(node.Id, out var visual))
+            NodeVisual.Timing = true;
+            NodeVisual.ResetTiming();
+        }
+
+        foreach (var node in nodes)
+        {
+            var introAt = timing ? Stopwatch.GetTimestamp() : 0;
+
+            // Id 只读一次：字典、空组、摆位表三处都要它，而每一次读都是一次 JsonObject 取值。
+            var id = node.Id;
+
+            if (!_realized.TryGetValue(id, out var visual))
             {
                 continue;
             }
 
             // 空组没有成员可框：不画、不接鼠标，别拿一个旧的大虚线框压着旁边的便签。
             // 一旦有便签挪进它的矩形，EmptyGroupIds 不再含它，这里会把它恢复可见。
-            if (node.Kind == CanvasNodeKind.Group && emptyGroups.Contains(node.Id))
+            if (visual.Kind == CanvasNodeKind.Group && emptyGroups.Contains(id))
             {
-                visual.Visibility = Visibility.Collapsed;
-                visual.IsHitTestVisible = false;
+                visual.Collapse();
+
+                if (timing)
+                {
+                    introTicks += Stopwatch.GetTimestamp() - introAt;
+                }
 
                 continue;
             }
 
-            visual.Visibility = Visibility.Visible;
+            if (timing)
+            {
+                var placeAt = Stopwatch.GetTimestamp();
+                introTicks += placeAt - introAt;
+                introAt = placeAt;
+            }
 
-            var display = displays.TryGetValue(node.Id, out var planned) ? planned : NodeVisual.Display.None;
+            var display = displays.Count > 0 && displays.TryGetValue(id, out var planned)
+                ? planned
+                : NodeVisual.Display.None;
 
-            var box = display.ShownFrame ?? RectOf(node);
+            // 几何没变就不读文档里那四个数（WorldBox 里只是比一下值节点的身份）。
+            var box = visual.WorldBox(node, display);
+
+            anyChanged |= visual.InputsChanged;
             var drawnX = box.X + ((display.FoldDX ?? 0) / _view.Zoom);
             var drawnY = box.Y + ((display.FoldDY ?? 0) / _view.Zoom);
 
@@ -1008,13 +1068,23 @@ public sealed partial class MainWindow : Window
                 && drawnY + box.Height >= window.Y
                 && drawnY <= window.Y + window.Height;
 
+            if (timing)
+            {
+                var branchAt = Stopwatch.GetTimestamp();
+                placeTicks += branchAt - introAt;
+                introAt = branchAt;
+            }
+
             if (intersects)
             {
-                // 折进去的那一格不能点：它不在那儿，只是滑过去的那一下让人看见了。
-                visual.IsHitTestVisible = !display.FoldedAway;
-
+                // 位置、尺寸、缩放、命中、内容都由 Update 按"上一拍写过什么"对账，只写真变的那几笔。
                 visual.Update(node, _view, scale, display);
                 visible++;
+
+                if (timing)
+                {
+                    updateTicks += Stopwatch.GetTimestamp() - introAt;
+                }
             }
             else
             {
@@ -1023,16 +1093,68 @@ public sealed partial class MainWindow : Window
                 // Visibility is the part that was missing: the card's three shadow bands are
                 // separate rectangles outside its zero-sized box, so Width=0 alone left them
                 // painted at the old place — the "拖完还留着一排阴影" he sent on 10-22.
-                visual.Visibility = Visibility.Collapsed;
-                visual.IsHitTestVisible = false;
-                visual.Width = 0;
-                visual.Height = 0;
+                visual.Collapse();
+
+                if (timing)
+                {
+                    hideTicks += Stopwatch.GetTimestamp() - introAt;
+                }
             }
         }
 
         var elapsed = Stopwatch.GetElapsedTime(started);
         var loopMs = Stopwatch.GetElapsedTime(loopStarted).TotalMilliseconds;
         var guardHits = NodeVisual.ContentGuardHits - guardBefore;
+
+        if (App.SelfTest)
+        {
+            Diagnostics.Write($"selftest arrange: {nodes.Count} 格 · 可见 {visible} · 内容账命中 {guardHits} · 整跑 {NodeVisual.ContentFullRuns - fullBefore} · 循环 {loopMs:0.0}ms");
+        }
+
+        // 小地图跟着这一拍走：小块只在文档几何真变了时才拆建（Sync 里自己对账），
+        // 视口矩形按这一拍落定的真相机摆正。增删格、移动、改大小、归档/收紧的提交都过这里。
+        //
+        // 逐格循环已经替它判过"这一格变了没有"（任何一格的输入签名脏了、格子数变了、
+        // 主题翻了），这三样都没动的那一拍就不必再进 Sync——它自己那本账要逐格读六个数，
+        // 330 格约 4ms，是现在 ArrangeAll 里最贵的一笔。屏上没动的时候它本来也只是
+        // "比一遍再原样返回"。
+        var miniAt = Stopwatch.GetTimestamp();
+
+        var miniRan = anyChanged || nodes.Count != _miniMapNodeCount || NoteStyling.IsDark != _miniMapDark;
+
+        if (miniRan)
+        {
+            _miniMap.Sync(nodes.Where(IsPlaceable).ToList());
+            _miniMapNodeCount = nodes.Count;
+            _miniMapDark = NoteStyling.IsDark;
+        }
+
+        SyncMiniMapViewport();
+
+        var miniDoneAt = Stopwatch.GetTimestamp();
+
+        if (timing)
+        {
+            NodeVisual.Timing = false;
+            var placeAt = Stopwatch.GetTimestamp();
+
+            PlaceEditor();
+
+            var doneAt = Stopwatch.GetTimestamp();
+
+            Diagnostics.Write(
+                $"perf 逐格账: 取视觉 {Ticks(introTicks)}ms · 算位置/剔除 {Ticks(placeTicks)}ms · Update {Ticks(updateTicks)}ms" +
+                $"（相机 {NodeVisual.TimingCameraMs:0.00} · 内容账 {NodeVisual.TimingStampMs:0.00} · 整跑 {NodeVisual.TimingFullMs:0.00}）" +
+                $" · 隐藏 {Ticks(hideTicks)}ms ｜ 可见 {visible}/{nodes.Count}");
+            Diagnostics.Write(
+                $"perf ArrangeAll 全账: 共 {Ticks(doneAt - frameAt)}ms ＝ 衣服 {Ticks(chromeAt - frameAt)}" +
+                $" · 连线 {Ticks(linksAt - chromeAt)} · 点阵 {Ticks(gridAt - linksAt)}" +
+                $" · 摆位/空组 {Ticks(loopStarted - gridAt)} · 逐格 {Ticks(miniAt - loopStarted)}" +
+                $" · 小地图 {Ticks(miniDoneAt - miniAt)}（走过 {miniRan}）" +
+                $" · 编辑器 {Ticks(doneAt - miniDoneAt)}");
+
+            return;
+        }
 
         // The editor is screen-space furniture: panning or zooming while typing has to
         // move it with the note, or the caret ends up somewhere else on the board.
@@ -1041,7 +1163,7 @@ public sealed partial class MainWindow : Window
         if (elapsed.TotalMilliseconds > 16)
         {
             Diagnostics.Write(
-                $"arrange took {elapsed.TotalMilliseconds:0.0} ms for {_document.Nodes.Count} nodes ({visible} visible)" +
+                $"arrange took {elapsed.TotalMilliseconds:0.0} ms for {nodes.Count} nodes ({visible} visible)" +
                 $"（内容账命中 {guardHits}/{visible}，逐格循环 {loopMs:0.0}ms）");
         }
     }
@@ -8275,11 +8397,107 @@ public sealed partial class MainWindow : Window
         Diagnostics.Write($"perf 开始: 板上 {notes} 格，视口 {BoardArea.ActualWidth:0}x{BoardArea.ActualHeight:0}");
 
         Bench("ArrangeAll 重排", 12, () => ArrangeAll());
+
+        // 逐格账：同一发、只多两枚秒表（12 发逐行打，取每段的中位/均值）。
+        Bench("ArrangeAll 重排（逐格分账）", 6, () => { _perfLoopTiming = true; ArrangeAll(); _perfLoopTiming = false; });
+
+        // 微账：把"遍历"与"写一个依赖属性"的单价量出来，才知道 330 格那几毫秒该算在谁头上。
+        Bench("  └ 微账 Nodes 列表（不读属性）", 12, () =>
+        {
+            var count = 0;
+
+            foreach (var node in _document.Nodes)
+            {
+                count++;
+            }
+
+            if (count < 0)
+            {
+                Diagnostics.Write("no");
+            }
+        });
+        Bench("  └ 微账 读 4 个几何数", 12, () =>
+        {
+            var sum = 0d;
+
+            foreach (var node in _document.Nodes)
+            {
+                sum += node.X + node.Y + node.Width + node.Height;
+            }
+
+            if (sum < 0)
+            {
+                Diagnostics.Write("no");
+            }
+        });
+        Bench("  └ 微账 读 Id+Kind", 12, () =>
+        {
+            var count = 0;
+
+            foreach (var node in _document.Nodes)
+            {
+                if (node.Id.Length > 0 && node.Kind != CanvasNodeKind.Group)
+                {
+                    count++;
+                }
+            }
+
+            if (count < 0)
+            {
+                Diagnostics.Write("no");
+            }
+        });
+        Bench("  └ 微账 遍历+字典", 12, () =>
+        {
+            var found = 0;
+
+            foreach (var node in _document.Nodes)
+            {
+                if (_realized.TryGetValue(node.Id, out _))
+                {
+                    found++;
+                }
+            }
+
+            if (found < 0)
+            {
+                Diagnostics.Write("no");
+            }
+        });
+        Bench("  └ 微账 读 Visibility", 12, () =>
+        {
+            var shown = 0;
+
+            foreach (var node in _document.Nodes)
+            {
+                if (_realized.TryGetValue(node.Id, out var visual) && visual.Visibility == Visibility.Visible)
+                {
+                    shown++;
+                }
+            }
+
+            if (shown < 0)
+            {
+                Diagnostics.Write("no");
+            }
+        });
+        Bench("  └ 微账 写 Visibility=Visible", 12, () =>
+        {
+            foreach (var node in _document.Nodes)
+            {
+                if (_realized.TryGetValue(node.Id, out var visual))
+                {
+                    visual.Visibility = Visibility.Visible;
+                }
+            }
+        });
         Bench("  └ UpdateAtmosphere 点阵", 12, () => UpdateAtmosphere());
         Bench("  └ PaintLinks 连线", 12, () => PaintLinks());
         Bench("  └ BuildDisplays 摆位表", 12, () => { var kept = BuildDisplays().Count; if (kept < 0) { Diagnostics.Write("no"); } });
         Bench("  └ EmptyGroupIds 空组", 12, () => { var kept = EmptyGroupIds().Count; if (kept < 0) { Diagnostics.Write("no"); } });
+        var rebuildsBefore = _miniMap.BlocksRebuilds;
         Bench("  └ 小地图 Sync", 12, () => _miniMap.Sync(_document.Nodes.Where(IsPlaceable).ToList()));
+        Diagnostics.Write($"perf   └ 小地图 Sync 期间拆建块集合 {_miniMap.BlocksRebuilds - rebuildsBefore} 次");
 
         Bench("Rebuild 重建", 8, () => Rebuild());
 

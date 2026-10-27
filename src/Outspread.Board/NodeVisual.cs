@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json.Nodes;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -836,18 +837,10 @@ public sealed class NodeVisual : ContentControl
     /// <summary>卡面裁剪矩形随尺寸重建一次就够（剔除/改大小那一拍才变）。</summary>
     private string _clipKey = string.Empty;
 
-    /// <summary>内容账：卡片画什么的全部输入。账不脏，Update 只走相机段（落位＋变换）。
-    /// 注意里面<b>没有裸的 view.Zoom</b>——缩放的两处真实后果（阴影 LOD 与图分辨率档）已折算成
-    /// ShadowLod／DecodeTier 两个阈值位。带裸缩放就是把"每档重量每张卡"请回来（这正是这次要杀的旧账）。</summary>
+    /// <summary>内容账（视图那一侧）：卡片画什么还取决于这几项——换档的两处后果（ShadowLod／
+    /// DecodeTier）已折算成阈值位，<b>没有裸的 view.Zoom</b>；带裸缩放就是把"每档重量每张卡"请回来。
+    /// 文档那一侧不在这本账里，改由下面的输入签名判（每拍读九个数太贵）。</summary>
     private (
-        string Id,
-        string? Text,
-        string? Url,
-        string? Label,
-        string? FilePath,
-        string? Color,
-        double Width,
-        double Height,
         double FontSize,
         bool Dark,
         int Today,
@@ -864,9 +857,63 @@ public sealed class NodeVisual : ContentControl
         bool ShadowLod,
         int DecodeTier,
         bool NoRoot,
-        int FirstLine) _contentStamp;
+        int FirstLine,
 
-    private bool _contentStampValid;
+        // 卡片自己的框与正文：模型可能先改在 C# 属性上、Json 那枚引用还没换，
+        // 只靠输入签名会把"这一拍什么都没变"报错——牌子、渐隐、块渲染就不重画（10-27 的 14 条红）。
+        double CardWidth,
+        double CardHeight,
+        string? Text,
+        string? Color,
+        string? Label) _viewStamp;
+
+    private bool _viewStampValid;
+
+    // ── 这一格的输入签名 ─────────────────────────────────────────────────────
+    // 文档里的值节点（JsonValue）是不可变的：CanvasNode 的 setter 改一个数/一个字，都会往
+    // JsonObject 里**换一个新节点**。所以"值节点还是同一个对象"就等于"值没变"——不必把值读出来。
+    // 每读一个数要走 JsonObject→JsonValue→double 一次转换，330 格板上那就是逐格循环的大头
+    // （--perf 拆出来的：一次数的读约 1.3µs，一次节点身份的比只要零点几微秒）。
+    private JsonObject? _sigJson;
+    private JsonNode? _sigX;
+    private JsonNode? _sigY;
+    private JsonNode? _sigW;
+    private JsonNode? _sigH;
+    private JsonNode? _sigText;
+    private JsonNode? _sigUrl;
+    private JsonNode? _sigLabel;
+    private JsonNode? _sigFile;
+    private JsonNode? _sigColor;
+    private bool _sigValid;
+
+    // 值签名：模型上的几何/正文可能先改在 C# 属性上、Json 里那枚引用还没换（自检就是这么改的）。
+    // 只比引用会把这些改动当成"这一拍什么都没变"，牌子、渐隐、块渲染就都不重画——10-27 那 14 条红就是它。
+    private double _sigValueX, _sigValueY, _sigValueW, _sigValueH;
+    private string? _sigValueText, _sigValueColor, _sigValueLabel;
+    private bool _sigValueValid;
+    private bool _worldBoxValid;
+    private Grouping.Rect _worldBox;
+
+    /// <summary>循环刚替这一格判过输入签名（<see cref="WorldBox"/>），Update 直接接着用，不再比第二遍。</summary>
+    private bool _tickInputsSame;
+
+    private bool _tickInputsChanged;
+
+    // ── 上一拍写下去的那几笔 ────────────────────────────────────────────────
+    // 一个依赖属性写一次要一两微秒（Width/Height 还要让布局失效），而绝大多数拍子里它们
+    // 一个都没变。这里记着上一拍真写下去的值，只写"与上一拍不同"的那几笔。
+    private double _placedX;
+    private double _placedY;
+    private double _placedW;
+    private double _placedH;
+    private double _placedZoom;
+    private bool _placedValid;
+    private double _foldPlacedX;
+    private double _foldPlacedY;
+    private bool _foldPlacedValid;
+    private bool _hitTestPlaced;
+    private bool _hitTestValid;
+    private bool _collapsed;
 
     /// <summary>诊断读数：内容账命中/整跑的次数（--perf 与 arrange 日志用，测完不删——它是下一刀的秒表）。</summary>
     internal static long ContentGuardHits;
@@ -892,46 +939,238 @@ public sealed class NodeVisual : ContentControl
     /// <summary>自检读回：非 markdown 那一支实际画进卡上的字。</summary>
     internal string PaintedBodyText => _label.Text;
 
+    /// <summary>逐格分账（--perf 用）：开着的时候 Update 内部自己记三段。放在静态字段上是为了不让
+    /// 每一格多背几个参数；关着的时候只多一次布尔判断。</summary>
+    internal static bool Timing;
+
+    internal static double TimingCameraMs;
+    internal static double TimingStampMs;
+    internal static double TimingFullMs;
+
+    internal static void ResetTiming()
+    {
+        TimingCameraMs = 0;
+        TimingStampMs = 0;
+        TimingFullMs = 0;
+    }
+
+    /// <summary>
+    /// 这一格画在世界里的框。几何没变就不去读文档里那四个数（每读一个约 1.3µs，330 格每拍就是
+    /// 四毫秒上下），用上一拍缓存的那一份。
+    /// <para>顺手替紧随其后的 <see cref="Update"/> 判一次输入签名（<c>_tickInputsSame</c>），
+    /// 省掉同一拍比两遍——循环里这两句永远是挨着的。</para>
+    /// </summary>
+    internal Grouping.Rect WorldBox(CanvasNode node, Display display)
+    {
+        _tickInputsSame = SignatureSame(node);
+        _tickInputsChanged = !_tickInputsSame;
+
+        if (!_tickInputsSame)
+        {
+            RefreshInputs(node);
+        }
+
+        return display.ShownFrame ?? _worldBox;
+    }
+
+    /// <summary>这一拍这一格的输入（几何＋正文＋配色）有没有变——小地图要不要重对账看它。</summary>
+    internal bool InputsChanged => _tickInputsChanged;
+
+    /// <summary>这一格从画面上收起来（视口外、空组、筛选不画的那几格）。状态没变就一笔都不写。</summary>
+    internal void Collapse()
+    {
+        if (_collapsed)
+        {
+            return;
+        }
+
+        _collapsed = true;
+        Visibility = Visibility.Collapsed;
+        IsHitTestVisible = false;
+        Width = 0;
+        Height = 0;
+
+        // 宽高回到 0：再出现时那两笔必须重新写下去，否则纸上会留着 "0 宽" 的布局盒。
+        _placedW = 0;
+        _placedH = 0;
+        _hitTestPlaced = false;
+        _hitTestValid = true;
+    }
+
+    internal bool Collapsed => _collapsed;
+
+    /// <summary>
+    /// 这一格的九个数节点是不是都还是上一拍那几个。值节点不可变，改一个值必换一个节点，
+    /// 所以"同一个节点"就等于"同一个值"——不用把它读出来比。
+    /// </summary>
+    private bool SignatureSame(CanvasNode node)
+    {
+        if (!_sigValid || !ReferenceEquals(node.Json, _sigJson))
+        {
+            return false;
+        }
+
+        var json = node.Json;
+
+        return _sigValueValid
+            && node.X == _sigValueX
+            && node.Y == _sigValueY
+            && node.Width == _sigValueW
+            && node.Height == _sigValueH
+            && string.Equals(node.Text, _sigValueText, StringComparison.Ordinal)
+            && string.Equals(node.Color, _sigValueColor, StringComparison.Ordinal)
+            && string.Equals(node.Label, _sigValueLabel, StringComparison.Ordinal)
+            && ReferenceEquals(json["x"], _sigX)
+            && ReferenceEquals(json["y"], _sigY)
+            && ReferenceEquals(json["width"], _sigW)
+            && ReferenceEquals(json["height"], _sigH)
+            && ReferenceEquals(json["text"], _sigText)
+            && ReferenceEquals(json["url"], _sigUrl)
+            && ReferenceEquals(json["label"], _sigLabel)
+            && ReferenceEquals(json["file"], _sigFile)
+            && ReferenceEquals(json["color"], _sigColor);
+    }
+
+    /// <summary>把这一格的输入重记一遍；那四个几何数只在它们真变（或还没读过）时才读出来。</summary>
+    private void RefreshInputs(CanvasNode node)
+    {
+        var json = node.Json;
+
+        var geometryChanged = !_sigValid
+            || !ReferenceEquals(json, _sigJson)
+            || !ReferenceEquals(json["x"], _sigX)
+            || !ReferenceEquals(json["y"], _sigY)
+            || !ReferenceEquals(json["width"], _sigW)
+            || !ReferenceEquals(json["height"], _sigH);
+
+        _sigJson = json;
+        _sigX = json["x"];
+        _sigY = json["y"];
+        _sigW = json["width"];
+        _sigH = json["height"];
+        _sigText = json["text"];
+        _sigUrl = json["url"];
+        _sigLabel = json["label"];
+        _sigFile = json["file"];
+        _sigColor = json["color"];
+        _sigValid = true;
+
+        _sigValueX = node.X;
+        _sigValueY = node.Y;
+        _sigValueW = node.Width;
+        _sigValueH = node.Height;
+        _sigValueText = node.Text;
+        _sigValueColor = node.Color;
+        _sigValueLabel = node.Label;
+        _sigValueValid = true;
+
+        if (geometryChanged || !_worldBoxValid)
+        {
+            _worldBox = new Grouping.Rect(node.Id, node.X, node.Y, node.Width, node.Height);
+            _worldBoxValid = true;
+        }
+    }
+
     public void Update(CanvasNode node, BoardViewState view, double rasterizationScale, Display? display = null)
     {
+        var timingStart = Timing ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+
         display ??= Display.None;
 
         _windowNode = node;
         _windowView = view;
         _windowScale = rasterizationScale;
 
-        // ── 相机段：每一拍都走，全是赋数，不量字、不建对象。
-        // 组框在筛选时画在"看得见的那几格"的包围盒上——框跟着便签走，而文档里那份一个字节不动。
-        var shown = display.ShownFrame ?? new Grouping.Rect(node.Id, node.X, node.Y, node.Width, node.Height);
+        // 输入签名：循环刚判过（WorldBox）就接着用；独立调用时自己判一次。
+        var inputsSame = _tickInputsSame || SignatureSame(node);
 
-        Canvas.SetLeft(this, view.ToScreenX(shown.X));
-        Canvas.SetTop(this, view.ToScreenY(shown.Y));
+        _tickInputsSame = false;
+
+        if (!inputsSame)
+        {
+            RefreshInputs(node);
+        }
+
+        // ── 相机段：每一拍都走，全是比数＋只在真变时写。
+        // 组框在筛选时画在"看得见的那几格"的包围盒上——框跟着便签走，而文档里那份一个字节不动。
+        var shown = display.ShownFrame ?? _worldBox;
+
+        var screenX = view.ToScreenX(shown.X);
+        var screenY = view.ToScreenY(shown.Y);
+        var layoutWidth = Math.Max(2, shown.Width);
+        var layoutHeight = Math.Max(2, shown.Height);
+
+        if (_collapsed)
+        {
+            _collapsed = false;
+            Visibility = Visibility.Visible;
+            _hitTestValid = false;
+        }
+
+        if (!_placedValid || _placedX != screenX)
+        {
+            Canvas.SetLeft(this, screenX);
+            _placedX = screenX;
+        }
+
+        if (!_placedValid || _placedY != screenY)
+        {
+            Canvas.SetTop(this, screenY);
+            _placedY = screenY;
+        }
 
         // 布局盒＝世界尺寸；屏幕上的大小由内容层的 _paintZoom 投出来。换档那一拍这里一个数都不变，
         // 变的只有下面那两行——这就是"缩放＝同一张卡做变换，不是重排所有可见卡"。
-        Width = Math.Max(2, shown.Width);
-        Height = Math.Max(2, shown.Height);
-        _paintZoom.ScaleX = _paintZoom.ScaleY = view.Zoom;
+        if (!_placedValid || _placedW != layoutWidth)
+        {
+            Width = layoutWidth;
+            _placedW = layoutWidth;
+        }
 
-        if (display.FoldDX is { } foldXNow && display.FoldDY is { } foldYNow)
+        if (!_placedValid || _placedH != layoutHeight)
+        {
+            Height = layoutHeight;
+            _placedH = layoutHeight;
+        }
+
+        if (!_placedValid || _placedZoom != view.Zoom)
+        {
+            _paintZoom.ScaleX = _paintZoom.ScaleY = view.Zoom;
+            _placedZoom = view.Zoom;
+        }
+
+        _placedValid = true;
+
+        if (display.FoldDX is { } foldXNow && display.FoldDY is { } foldYNow
+            && (!_foldPlacedValid || _foldPlacedX != foldXNow || _foldPlacedY != foldYNow))
         {
             _fold.X = foldXNow;
             _fold.Y = foldYNow;
+            _foldPlacedX = foldXNow;
+            _foldPlacedY = foldYNow;
+            _foldPlacedValid = true;
         }
 
-        // ── 内容账：卡片画什么，只取决于这十来项——没有相机缩放（缩放的两档后果 DecodeTier/
-        // ShadowLod 已折算进去）。账没脏就到此为止：平移的每一帧、缩放的每一拍，逐格走的
-        // 只有上面那五句。旧的每一拍都把标记重析、刷子重建、几串键重拼一遍——300 格板上
-        // 那就是 ArrangeAll 里剩下的二十毫秒（--perf 拆出来的账）。
-        var stamp = (
-            node.Id,
-            node.Text,
-            node.Url,
-            node.Label,
-            node.FilePath,
-            node.Color,
-            node.Width,
-            node.Height,
+        // 折进去的那一格不能点：它不在那儿，只是滑过去的那一下让人看见了。
+        var wantsHit = !display.FoldedAway;
+
+        if (!_hitTestValid || _hitTestPlaced != wantsHit)
+        {
+            IsHitTestVisible = wantsHit;
+            _hitTestPlaced = wantsHit;
+            _hitTestValid = true;
+        }
+
+        var timingBeforeStamp = Timing ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+
+        if (Timing)
+        {
+            TimingCameraMs += System.Diagnostics.Stopwatch.GetElapsedTime(timingStart, timingBeforeStamp).TotalMilliseconds;
+        }
+
+        // ── 内容账：文档那一侧由上面的输入签名判（同一个值节点＝同一个值），视图这一侧比这一串
+        // 现成的小数。两边都没变就到此为止：平移的每一帧、缩放的每一拍，逐格走的只有上面那几笔。
+        var viewStamp = (
             view.FontSizeFor(node.Id),
             NoteStyling.IsDark,
             view.Today.DayNumber,
@@ -946,20 +1185,39 @@ public sealed class NodeVisual : ContentControl
             display.FoldDX,
             display.FoldDY,
             NoteSurface.DrawsShadow(view.Zoom),
-            ShowText ? 0 : TierFor((int)(node.Width * view.Zoom * Math.Max(1, rasterizationScale))),
+            ShowText ? 0 : TierFor((int)(_worldBox.Width * view.Zoom * Math.Max(1, rasterizationScale))),
             XamlRoot is null,
-            _firstLine);
+            _firstLine,
 
-        if (_contentStampValid && stamp.Equals(_contentStamp))
+            // 卡片自己的框与正文也进这一笔账：模型先改在 C# 属性上、Json 那枚引用还没换时，
+            // 光靠 InputsChanged 会把"这一拍什么都没变"报错，牌子、渐隐、块渲染就不重画
+            // （10-27 那 14 条红的成因就是这一格）。
+            shown.Width,
+            shown.Height,
+            node.Text,
+            node.Color,
+            node.Label);
+
+        if (inputsSame && _viewStampValid && viewStamp.Equals(_viewStamp))
         {
             ContentGuardHits++;
+
+            if (Timing)
+            {
+                TimingStampMs += System.Diagnostics.Stopwatch.GetElapsedTime(timingBeforeStamp).TotalMilliseconds;
+            }
 
             return;
         }
 
         ContentFullRuns++;
-        _contentStamp = stamp;
-        _contentStampValid = true;
+        _viewStamp = viewStamp;
+        _viewStampValid = true;
+
+        if (Timing)
+        {
+            TimingStampMs += System.Diagnostics.Stopwatch.GetElapsedTime(timingBeforeStamp).TotalMilliseconds;
+        }
 
         var surface = NoteStyling.SurfaceFor(node.Color);
         var ink = NoteStyling.InkFor(node.Color, surface);
@@ -1360,6 +1618,11 @@ public sealed class NodeVisual : ContentControl
 
         // Update 每拍都把 _frame 的描边按默认虚线铺回去；警示态（组钮拖那一拍）要压过它。
         ApplyGroupAlert();
+
+        if (Timing)
+        {
+            TimingFullMs += System.Diagnostics.Stopwatch.GetElapsedTime(timingBeforeStamp).TotalMilliseconds;
+        }
     }
 
     /// <summary>

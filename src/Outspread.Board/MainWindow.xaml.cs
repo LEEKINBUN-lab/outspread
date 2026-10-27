@@ -8109,6 +8109,12 @@ public sealed partial class MainWindow : Window
         Diagnostics.Write($"perf 开始: 板上 {notes} 格，视口 {BoardArea.ActualWidth:0}x{BoardArea.ActualHeight:0}");
 
         Bench("ArrangeAll 重排", 12, () => ArrangeAll());
+        Bench("  └ UpdateAtmosphere 点阵", 12, () => UpdateAtmosphere());
+        Bench("  └ PaintLinks 连线", 12, () => PaintLinks());
+        Bench("  └ BuildDisplays 摆位表", 12, () => { var kept = BuildDisplays().Count; if (kept < 0) { Diagnostics.Write("no"); } });
+        Bench("  └ EmptyGroupIds 空组", 12, () => { var kept = EmptyGroupIds().Count; if (kept < 0) { Diagnostics.Write("no"); } });
+        Bench("  └ 小地图 Sync", 12, () => _miniMap.Sync(_document.Nodes.Where(IsPlaceable).ToList()));
+
         Bench("Rebuild 重建", 8, () => Rebuild());
 
         // 增量那把尺必须量"真有事的那一拍"：改一格的正文再重建，其余格子原样留着。

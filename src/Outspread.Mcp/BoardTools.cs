@@ -209,6 +209,14 @@ public sealed class BoardTools
         var patch = new DocPatch();
         var placed = new List<Aligning.Placed>();
 
+        // 尺寸先统一、再叠：标题卡常常比卡片宽得多（1128 vs 360），叠放那套要求 80% 重叠，
+        // 宽的那张一脚踩空、留在原地还把组框撑破（10-27 实测：规矩那组的标题就露在摞外面）。
+        foreach (var node in settled)
+        {
+            patch.SetNumber(node.Id, "width", width);
+            patch.SetNumber(node.Id, "height", height);
+        }
+
         if (settled.Count >= 2)
         {
             var stack = Aligning.Stack(settled

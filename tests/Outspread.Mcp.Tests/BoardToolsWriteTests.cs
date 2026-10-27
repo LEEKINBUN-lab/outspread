@@ -270,6 +270,40 @@ public sealed class BoardToolsWriteTests : IDisposable
         Assert.Equal(40, u2.Y - u1.Y, 3);
     }
 
+    [Fact]
+    public void A_wide_title_card_is_pulled_into_the_pile_instead_of_being_left_outside()
+    {
+        // 10-27 实测的漏：标题卡 1128 宽、卡片 360，叠放要求 80% 重叠 ⇒ 宽的那张没进摞，
+        // 还戳在组框外面，"已结"那组看起来就成了一格标题 + 一摞卡。统一尺寸要在叠之前发生。
+        var board = Path.Combine(_root, "宽标题.canvas");
+        var doc = new JsonObject
+        {
+            ["nodes"] = new JsonArray(
+                Note("t1", 0, 0, 1128, 119, "### 这一轮的标题"),
+                Note("u1", 0, 200, 360, 119, "@t那轮 @n1 @b1\n一格"),
+                Note("u2", 0, 340, 360, 140, "@t那轮 @n2 @b1\n另一格")),
+            ["edges"] = new JsonArray(),
+        };
+
+        File.WriteAllText(board, doc.ToJsonString());
+
+        BoardTools.BoardArchive("宽标题那轮（已结）", ["t1", "u1", "u2"], board);
+
+        var after = CanvasStore.Load(board);
+        var group = Assert.Single(after.Nodes.Where(node => node.Kind == CanvasNodeKind.Group));
+        var all = new[] { "t1", "u1", "u2" }.Select(id => after.Find(id)!).ToList();
+
+        Assert.All(all, node => Assert.Equal(360, node.Width, 3));
+        Assert.All(all, node => Assert.True(
+            Math.Abs(node.X - all[0].X) < 60 && Math.Abs(node.Y - all[0].Y) < 60,
+            $"{node.Id} 没进摞"));
+        Assert.All(all, node => Assert.True(
+            group.X <= node.X && group.Y <= node.Y
+            && group.X + group.Width >= node.X + node.Width
+            && group.Y + group.Height >= node.Y + node.Height,
+            $"{node.Id} 探出了组框"));
+    }
+
     private static JsonObject Note(string id, int x, int y, int width, int height, string text)
         => new()
         {

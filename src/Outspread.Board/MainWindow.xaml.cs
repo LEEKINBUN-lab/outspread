@@ -2326,6 +2326,17 @@ public sealed partial class MainWindow : Window
                 var reports = PatchApplier.Apply(_document, fromOutside);
                 var rejected = reports.Count(report => report.Outcome is PatchOutcome.MissingNode or PatchOutcome.AlreadyPresent);
 
+                // 外部改过尺寸的格子，就当它被手动定过：不然下面那发随文字会按各自正文重量一遍，
+                // 外面写的"这一摞统一成同一个框"当场作废（他 10-27：打开着的时候怎么都不生效）。
+                // 他自己拖动改大小不受影响——那是本进程改的，拖一次照样标成手动。
+                foreach (var change in fromOutside.Changes)
+                {
+                    if (change.Field is "width" or "height")
+                    {
+                        _view.MarkManualSize(change.Id);
+                    }
+                }
+
                 Diagnostics.Write($"merged {fromOutside.NodeCount} outside change(s), {rejected} reported");
             }
 

@@ -447,10 +447,7 @@ public sealed class NodeVisual : ContentControl
         _paint.RenderTransform = _paintZoom;
         _paint.Children.Add(_bands);
         _paint.Children.Add(_surface);
-        _paint.Children.Add(_fadeAbove);
-        _paint.Children.Add(_fadeBelow);
         _paint.Children.Add(_press);
-        _paint.Children.Add(_groupHalo);
         _paint.Children.Add(_frame);
         _paint.Children.Add(_grab);
         _paint.Children.Add(_namePlate);
@@ -458,7 +455,6 @@ public sealed class NodeVisual : ContentControl
         // membership test: a card updated twice before the tree has loaded — which is what a rebuild
         // inside one synchronous pass does — took IsLoaded as false and added a rectangle that was
         // already a child, and XAML answers that with 0x800F1000. Visibility is what Update changes.
-        _paint.Children.Add(_dueBar);
         Content = _paint;
 
         // 第二行（元信息＋动作）由悬停决定亮不亮。选中不跟着亮：选中那一拍右侧会浮出操作条，
@@ -601,6 +597,8 @@ public sealed class NodeVisual : ContentControl
 
             return;
         }
+
+        AttachChrome(_groupHalo);
 
         var brush = _groupAlert == "in" ? ChromeStyling.Ring : ChromeStyling.Snap;
         var colour = ((Microsoft.UI.Xaml.Media.SolidColorBrush)brush).Color;
@@ -1246,6 +1244,7 @@ public sealed class NodeVisual : ContentControl
         // 高度，于是 2px 条短一截、又被 Grid 居中——上下各缺一块（他 10-24 报的"左缘没盖满"）。
         if (NoteMarks.BarFor(due, NoteStyling.IsDark) is { } tint && !isGroup)
         {
+            AttachChrome(_dueBar);
             _dueBar.Width = NoteMarks.BarWidthPx;
             _dueBar.Height = Height;
             _dueBar.Fill = new SolidColorBrush(NoteStyling.ToColor(tint));
@@ -1704,9 +1703,54 @@ public sealed class NodeVisual : ContentControl
     /// 内容画不下时不再挂"更多 ↓"角标（他嫌突兀），改成在卡片上/下边缘压一道"表面色↔透明"的
     /// 渐隐遮罩：底下还有行就把最后一行淡进卡底；往上翻过则顶部淡一道。无字，靠视觉暗示。
     /// </summary>
+    /// <summary>_paint 里那几件的固定层序：按需挂上去的时候必须插回原位，否则牌子会被纸盖住。</summary>
+    private static readonly UIElement[] ChromeOrder = [];
+
+    private void AttachChrome(UIElement child)
+    {
+        if (_paint.Children.Contains(child))
+        {
+            return;
+        }
+
+        // 目标位置＝"层序排在它前面的那些已有子元素"的个数。用成员判断，不看 IsLoaded——
+        // 同一拍里 Update 跑两遍时 IsLoaded 还是 false，重复 Add 会让 XAML 抛 0x800F1000（10-24 的教训）。
+        var order = ChromeOrderOf(child);
+        var index = 0;
+
+        foreach (var existing in _paint.Children)
+        {
+            if (ChromeOrderOf(existing) < order)
+            {
+                index++;
+            }
+        }
+
+        _paint.Children.Insert(index, child);
+    }
+
+    /// <summary>层序表：_bands 最底，_dueBar 最上。</summary>
+    private int ChromeOrderOf(UIElement child) => child switch
+    {
+        _ when ReferenceEquals(child, _bands) => 0,
+        _ when ReferenceEquals(child, _surface) => 1,
+        _ when ReferenceEquals(child, _fadeAbove) => 2,
+        _ when ReferenceEquals(child, _fadeBelow) => 3,
+        _ when ReferenceEquals(child, _press) => 4,
+        _ when ReferenceEquals(child, _groupHalo) => 5,
+        _ when ReferenceEquals(child, _frame) => 6,
+        _ when ReferenceEquals(child, _grab) => 7,
+        _ when ReferenceEquals(child, _namePlate) => 8,
+        _ when ReferenceEquals(child, _dueBar) => 9,
+        _ => 10,
+    };
+
     private void UpdateOverflowFades(CanvasNode node, BoardViewState view, double headerWorld)
     {
         var textCard = ShowText && Kind != CanvasNodeKind.Group;
+
+        AttachChrome(_fadeAbove);
+        AttachChrome(_fadeBelow);
         // 渐隐只取决于"内容画不画得下"，与 zoom 无关（他 10-27 的工单：缩放时看到的必须是同一张卡）。
         // 以前这里有一道 view.Zoom >= 0.5 的门槛：缩到总览那一档，淡出变成硬切一行，
         // 于是每一档缩放都要重算一遍——既改内容又花计算。

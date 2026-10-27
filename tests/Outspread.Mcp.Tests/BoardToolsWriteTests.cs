@@ -341,7 +341,82 @@ public sealed class BoardToolsWriteTests : IDisposable
             ["text"] = text,
         };
 
-    private static BoardCard Card(string kind, string text) => new() { Kind = kind, Text = text };
+    /* 这三发钉的是 10-27 他打回的那件事：我落了两格"记我自己的待办 / 一条外推曲线"，
+       他读完回「所以要我做什么？」「不用告诉我的就不用写在这里」。
+       判据早就写在 AGENTS.md 与 skill 里了——证明只写文档挡不住，所以装进工具：
+       凡是要挂 @b0（进他"还欠几格"那一栏）的卡，必须写清他下一步做什么。 */
+
+    [Fact]
+    public void A_card_that_sits_in_his_queue_but_names_no_action_is_refused_and_writes_nothing()
+    {
+        var board = SeededBoard(ordinal: 0);
+        var before = CanvasStore.Load(board).Nodes.Count;
+
+        var receipt = BoardTools.BoardPost(
+            "没人要动作的一发",
+            [
+                new BoardCard { Kind = "task", Text = "数墨那 3.4ms 还挂在落定那一帧" },
+                new BoardCard { Kind = "risk", Text = "拖一格随格数线性涨" },
+            ],
+            round: "闸",
+            board: board);
+
+        Assert.Contains("没落板", receipt, StringComparison.Ordinal);
+        Assert.Contains("要你：", receipt, StringComparison.Ordinal);   // 回执要教下一步怎么写，不能只说不行
+        Assert.Equal(before, CanvasStore.Load(board).Nodes.Count);      // 整发没动盘：不许"拒一半、落一半"
+    }
+
+    [Fact]
+    public void The_same_card_lands_with_a_tick_once_it_names_his_next_action()
+    {
+        // 正对照：上一发被拒不是因为"task/risk 一律不让落"，缺的正是那一行。
+        var board = SeededBoard(ordinal: 0);
+
+        BoardTools.BoardPost(
+            "有人要动作的一发",
+            [new BoardCard { Kind = "task", Text = "数墨那 3.4ms 还挂在落定那一帧\n要你：拍要不要收（收＝我再花一发测量）" }],
+            round: "闸",
+            board: board);
+
+        var landed = CanvasStore.Load(board).Nodes
+            .Select(node => node.Text ?? string.Empty)
+            .FirstOrDefault(text => text.Contains("数墨", StringComparison.Ordinal));
+
+        Assert.NotNull(landed);
+        Assert.Contains("@b0", landed!, StringComparison.Ordinal);
+        Assert.Contains("要你：拍要不要收", landed!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_note_needs_no_ask_line_because_it_never_sits_in_his_queue()
+    {
+        // 结论卡不挂 @b0，不占他的"还欠几格"，所以这一闸不管它——否则每条读数都得编一句假动作。
+        var board = SeededBoard(ordinal: 0);
+
+        BoardTools.BoardPost(
+            "只报读数的一发",
+            [new BoardCard { Kind = "note", Text = "600 格拖一格 2.83→1.92ms/帧（提交 ae84f9a）" }],
+            round: "闸",
+            board: board);
+
+        var landed = CanvasStore.Load(board).Nodes
+            .Select(node => node.Text ?? string.Empty)
+            .FirstOrDefault(text => text.Contains("2.83", StringComparison.Ordinal));
+
+        Assert.NotNull(landed);
+        Assert.DoesNotContain("@b0", landed!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 测试用的卡。三档要挂 @b0 的（decision/risk/task）必须带一行「要你：」，否则 <c>board_post</c>
+    /// 那枚闸会把整发拒掉（10-27 加的：我落了两格"记我自己的待办/一条外推曲线"，他读完回的是
+    /// 「所以要我做什么？」）。闸本身另有三发直接测，不走这个助手。
+    /// </summary>
+    private static BoardCard Card(string kind, string text) => new()
+    {
+        Kind = kind,
+        Text = kind == "note" ? text : $"{text}\n要你：看一眼这一格",
+    };
 
     /// <summary>
     /// 种一块只有一格（带 @n&lt;ordinal&gt;）的板，用来验"接号"接的是板上已有的最大号。

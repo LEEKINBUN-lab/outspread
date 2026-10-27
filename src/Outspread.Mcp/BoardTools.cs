@@ -28,6 +28,8 @@ public sealed class BoardTools
         "把**要他动作或要他知道的**东西落成卡片：一条一格，一格只装一件事。"
         + "四种 kind：decision＝等他拍板（红）、risk＝缺陷／没做完／值得特别告知（橙）、task＝待办、note＝结论。"
         + "判据只有一句：这条不需要他做什么、也不需要他知道，就别写进来——叙述留在会话里，抄上板等于占他眼睛。"
+        + "这一条是硬闸：凡要挂 @b0 的三档（decision/risk/task），正文必须有一行以「要你：」开头，写清他读完的下一步动作；"
+        + "没有这一行整发被拒（他 10-27 的原话：「标注未完成，但没说明要我干什么，那就不用写在这里」）。note 不受此限。"
         + "工具会自动接上这块板已有的 @n 序号、给 decision/risk/task 挂 @b0（他点一下牌子＝已阅／已决），并统一打一个 @t轮次标签。")]
     public static string BoardPost(
         [Description("这一组的小标题，会成为横贯一行那枚卡；只写「这组是关于什么的」")] string title,
@@ -65,11 +67,25 @@ public sealed class BoardTools
         // 10-27 之前是按类型各占一整行：四件事就排成一条竖长蛇，他明确否掉了。
         var ordered = cards.Where(card => !string.IsNullOrWhiteSpace(card.Text)).ToList();
         var prepared = new List<(string Id, string Kind, string Text, string Label, double Height)>();
+        var mute = new List<string>();
 
         foreach (var entry in ordered)
         {
             var kind = KindOf(entry.Kind);
             var body = entry.Text.Trim();
+
+            /* 判据只有一句："不需要他做什么、也不需要他知道，就别上板"。这句写在 AGENTS.md 与 skill 里
+               已经证明挡不住——10-27 我还是落了两格"记我自己的待办 / 一条外推曲线"，他读完回的是
+               「所以要我做什么？」「如果不用告诉我，就不用写在这里」。所以把它装进这一发：
+               凡是要挂 @b0（＝落进他"还欠几格"那一栏）的三档，正文必须有一行以「要你：」开头，
+               写清他读完之后的下一步动作。答不出这一行，就说明这格不该上板——说在会话里。
+               结论（note）不挂 @b0、不占他的待办，所以不受这一条管。 */
+            if (kind != "note" && !body.Split('\n').Any(line => line.TrimStart().StartsWith("要你：", StringComparison.Ordinal)))
+            {
+                mute.Add($"{kind}「{FirstLine(body)}」");
+
+                continue;
+            }
 
             // 标记行放最前面：他板子上那套约定是"@n8 @b0 换行 正文"，牌子才会落到卡片左下角。
             // 每一格都要有自己的号——结论也要，因为他想引用"你写的那条结论"时只能靠 @n。
@@ -95,6 +111,12 @@ public sealed class BoardTools
                 marks.Length == 0 ? body : $"{marks}\n{body}",
                 ordinal is { } number ? $"@n{number}" : "@n—（沿用你写的标记行）",
                 Math.Max(CardHeight, 44 + (22 * (wrapped + 2)))));
+        }
+
+        if (mute.Count > 0)
+        {
+            return $"这一发没落板：{mute.Count} 格要挂 @b0（进他的\"还欠几格\"）却没写「要你：…」——{string.Join("、", mute)}。\n"
+                + "判据只有一句：不需要他做什么、也不需要他知道，就别上板。要么补一行「要你：他下一步做什么」，要么把它说在会话里。";
         }
 
         var additions = new List<AddedNode>

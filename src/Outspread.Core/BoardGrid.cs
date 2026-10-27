@@ -189,4 +189,123 @@ public static class BoardGrid
             }
         }
     }
+
+    /// <summary>
+    /// 把一整张点阵（一个 spacing 的那一层）盖进缓冲——<see cref="StampDot"/> 逐点调的那条路。
+    /// </summary>
+    /// <remarks>
+    /// 为什么单独有一枚批量入口：一张 1408×896 的点阵在 100% 那一档要落约 8 万枚点，
+    /// 每枚 25 个像素、每像素一枚 <c>Math.Sqrt</c> 加四枚 <c>Math.Round</c>——现读 8.5ms，
+    /// 而缩放途中每一帧的相机都换了档，所以每一帧都要重跑这一发。这就是"缩放还是卡"里
+    /// 唯一还在 CPU 侧的那一半。
+    ///
+    /// 这里做的事只有一件：**把只跟半径和 alpha 有关的数挪出逐像素循环**。
+    /// 核（每个偏移落多少墨）按层算一次；目的地是空像素（绝大多数）时四个字节直接查表写，
+    /// 不再乘不再舍入；只有两层点重合的那一小撮像素走 <see cref="StampDot"/> 那条原式。
+    /// 落点、累加方式（<c>x += spacing</c> 的浮点累加）、写入次序、<c>Math.Round</c> 的
+    /// 银行家舍入全部照旧——所以同一张位图必须逐字节相同，这一点由差分测试钉住，不靠"看着一样"。
+    /// </remarks>
+    public static void StampLattice(
+        byte[] bgra,
+        int width,
+        int height,
+        double spacing,
+        double radius,
+        double alpha,
+        Rgb ink)
+    {
+        var reach = (int)Math.Ceiling(radius) + 1;
+        var side = (2 * reach) + 1;
+
+        var dxs = new List<int>(side * side);
+        var dys = new List<int>(side * side);
+        var blues = new List<byte>(side * side);
+        var greens = new List<byte>(side * side);
+        var reds = new List<byte>(side * side);
+        var alphas = new List<byte>(side * side);
+        var sources = new List<double>(side * side);
+
+        for (var dy = -reach; dy <= reach; dy++)
+        {
+            for (var dx = -reach; dx <= reach; dx++)
+            {
+                var distance = Math.Sqrt((dx * dx) + (dy * dy));
+                var coverage = Math.Clamp(0.5 + (radius - distance), 0, 1);
+
+                if (coverage <= 0)
+                {
+                    continue;
+                }
+
+                var source = alpha * coverage;
+
+                dxs.Add(dx);
+                dys.Add(dy);
+                blues.Add((byte)Math.Round(ink.B * source));
+                greens.Add((byte)Math.Round(ink.G * source));
+                reds.Add((byte)Math.Round(ink.R * source));
+                alphas.Add((byte)Math.Round(source * 255));
+                sources.Add(source);
+            }
+        }
+
+        var count = dxs.Count;
+        var offsets = new int[count];
+
+        for (var slot = 0; slot < count; slot++)
+        {
+            offsets[slot] = (dxs[slot] + (dys[slot] * width)) * 4;
+        }
+
+        // 落点顺序必须和原来那一圈一模一样（x 在外、y 在内）：spacing 4 像素、核 5×5，
+        // 相邻两枚点的边环会压到同一个像素上，谁后写谁定色——换了顺序就不是同一张位图了。
+        for (var fx = 0.0; fx < width; fx += spacing)
+        {
+            var cx = (int)Math.Round(fx);
+
+            for (var fy = 0.0; fy < height; fy += spacing)
+            {
+                var cy = (int)Math.Round(fy);
+                var inside = (cx - reach) >= 0 && (cx + reach) < width && (cy - reach) >= 0 && (cy + reach) < height;
+                var baseIndex = (cx + (cy * width)) * 4;
+
+                for (var slot = 0; slot < count; slot++)
+                {
+                    var index = baseIndex + offsets[slot];
+
+                    if (!inside)
+                    {
+                        var x = cx + dxs[slot];
+                        var y = cy + dys[slot];
+
+                        if (x < 0 || y < 0 || x >= width || y >= height)
+                        {
+                            continue;
+                        }
+
+                        index = (x + (y * width)) * 4;
+                    }
+
+                    // 空像素：查表写。非空（两层点重合的那一小撮）：原式，一字节都不许多。
+                    if (bgra[index + 3] == 0)
+                    {
+                        bgra[index] = blues[slot];
+                        bgra[index + 1] = greens[slot];
+                        bgra[index + 2] = reds[slot];
+                        bgra[index + 3] = alphas[slot];
+
+                        continue;
+                    }
+
+                    var source = sources[slot];
+                    var oneMinusSource = 1 - source;
+
+                    bgra[index] = (byte)Math.Round((ink.B * source) + (bgra[index] * oneMinusSource));
+                    bgra[index + 1] = (byte)Math.Round((ink.G * source) + (bgra[index + 1] * oneMinusSource));
+                    bgra[index + 2] = (byte)Math.Round((ink.R * source) + (bgra[index + 2] * oneMinusSource));
+                    bgra[index + 3] = (byte)Math.Round((source * 255) + (bgra[index + 3] * oneMinusSource));
+                }
+            }
+        }
+    }
 }

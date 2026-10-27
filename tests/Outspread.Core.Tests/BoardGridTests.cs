@@ -119,6 +119,89 @@ public class BoardGridTests
         Assert.Equal(228, AlphaAt(bgra, 8, 8));
     }
 
+    [Theory]
+    [InlineData(37, 23, 4.0, 1.0)]      // 密档：核 5×5 会压到邻点的边环，落点顺序参与成色
+    [InlineData(64, 64, 16.0, 1.0)]     // 整档
+    [InlineData(41, 17, 6.5, 2.0)]      // 非整数 spacing ＋ 大核：四舍五入的落点最容易被改动碰坏
+    public void The_batched_lattice_paints_the_exact_same_bitmap_as_dot_by_dot(int width, int height, double spacing, double radius)
+    {
+        /* 这一发改的是点阵的**画法**，不是长相（缩放卡顿那 8.5ms 全在这一圈点上）。
+           所以断言必须是逐字节相同，而不是"看着一样"——"看着一样"这一类里能装下好几种画错：
+           落点顺序换了、边上一列没画、重合点用了查表那条快路。 */
+        var ink = BoardGrid.Ink(dark: false);
+
+        var reference = new byte[width * height * 4];
+        var batched = new byte[width * height * 4];
+
+        for (var x = 0.0; x < width; x += spacing)
+        {
+            for (var y = 0.0; y < height; y += spacing)
+            {
+                BoardGrid.StampDot(reference, width, height, x, y, radius, 0.31, ink);
+            }
+        }
+
+        BoardGrid.StampLattice(batched, width, height, spacing, radius, 0.31, ink);
+
+        Assert.True(
+            reference.AsSpan().SequenceEqual(batched),
+            $"{width}×{height} @ spacing {spacing}：批量入口画出了和逐点入口不同的位图 —— 第一处差异在像素 " +
+            DescribeFirstDiff(reference, batched, width));
+
+        // 正对照：两枚全 0 的缓冲也"逐字节相同"，所以必须证明这一发确实落了墨。
+        Assert.Contains(batched, b => b != 0);
+    }
+
+    [Fact]
+    public void Two_batched_levels_overlap_the_same_way_two_dot_by_dot_levels_do()
+    {
+        // 100% 那一档真的有两层点（16 与 4 重合），重合的像素走的是"目的地非空"那条原式。
+        // 只测单层等于没测快路的分支条件——那正是第一版把亮档压暗的那一格。
+        var ink = BoardGrid.Ink(dark: false);
+        const int width = 72;
+        const int height = 40;
+
+        var reference = new byte[width * height * 4];
+        var batched = new byte[width * height * 4];
+
+        foreach (var (spacing, alpha) in new[] { (16.0, 0.85), (4.0, 0.283) })
+        {
+            for (var x = 0.0; x < width; x += spacing)
+            {
+                for (var y = 0.0; y < height; y += spacing)
+                {
+                    BoardGrid.StampDot(reference, width, height, x, y, 1, alpha, ink);
+                }
+            }
+
+            BoardGrid.StampLattice(batched, width, height, spacing, 1, alpha, ink);
+        }
+
+        Assert.True(reference.AsSpan().SequenceEqual(batched), "两层点阵重合处画出了不一样的位图");
+
+        // 正对照：重合点（0,0）必须还是亮档那颗的亮度，不能被淡档压回去。
+        Assert.Equal(AlphaAt(reference, 0, 0), AlphaAt(batched, 0, 0));
+        Assert.True(AlphaAt(batched, 0, 0) > 150, $"重合点亮度读回 {AlphaAt(batched, 0, 0)}，两档都没画坏也不该这么暗");
+    }
+
+    /// <summary>第一处不同的像素直接写进红灯——"两张位图不同"要再下一发调试才知道差在哪一格。</summary>
+    private static string DescribeFirstDiff(byte[] expected, byte[] actual, int width)
+    {
+        for (var i = 0; i < expected.Length; i++)
+        {
+            if (expected[i] == actual[i])
+            {
+                continue;
+            }
+
+            var pixel = i / 4;
+
+            return $"({pixel % width},{pixel / width}) 通道 {i % 4}：逐点 {expected[i]}，批量 {actual[i]}";
+        }
+
+        return "（找不到差异）";
+    }
+
     [Fact]
     public void The_stamped_ink_mass_is_the_disc_area_times_the_alpha()
     {
@@ -185,4 +268,5 @@ public class BoardGridTests
     }
 
     private static int AlphaAt(byte[] bgra, int x, int y) => bgra[(((y * 16) + x) * 4) + 3];
+
 }

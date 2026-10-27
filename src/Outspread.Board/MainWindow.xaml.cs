@@ -8341,7 +8341,66 @@ public sealed partial class MainWindow : Window
     /// （实测 14:30:16.088，起来 148ms 就"等满 240 拍"，视口仍是 0×0）。计时器每一跳之间真过帧，
     /// <c>ActualWidth</c> 才会从 0 变成有数——这把尺不修好，"增量重建"省下的那一半根本量不到。
     /// </remarks>
-    public void BeginPerfProbe()
+    public void BeginPerfProbe() => WaitUntilLaidOut("perf", RunPerfProbe);
+
+    /// <summary>
+    /// 持续平移那几秒：把"滚动时那 10% GPU"从一句感觉变成采得到的读数。
+    /// 走的是真路径（<see cref="ApplyPanPreview"/>＝指针拖动每一帧调的那一句），来回各 6 像素所以
+    /// 相机不会跑掉；跑完自己收窗，绝不留一枚实例在后台吃 CPU。
+    /// </summary>
+    public void BeginPanProbe(int milliseconds) => WaitUntilLaidOut("pan", () =>
+    {
+        var timer = DispatcherQueue.CreateTimer();
+        var frames = 0;
+        var total = 0d;
+        var slowest = 0d;
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var watch = new System.Diagnostics.Stopwatch();
+
+        timer.Interval = TimeSpan.FromMilliseconds(16);
+        timer.IsRepeating = true;
+
+        timer.Tick += (_, _) =>
+        {
+            watch.Restart();
+            ApplyPanPreview(frames % 2 == 0 ? 6 : -6, 3);
+            watch.Stop();
+
+            frames++;
+            total += watch.Elapsed.TotalMilliseconds;
+            slowest = Math.Max(slowest, watch.Elapsed.TotalMilliseconds);
+
+            if (started.Elapsed.TotalMilliseconds < milliseconds)
+            {
+                return;
+            }
+
+            timer.Stop();
+
+            Diagnostics.Write(
+                $"pan {milliseconds}ms: {frames} 帧 · 每帧均 {total / Math.Max(1, frames):0.###}ms 最慢 {slowest:0.###}ms · " +
+                $"缩放 {Percent()} · 实格 {_realized.Count} 枚 · 板面元素 {CountDescendants(PanLayer)} 个");
+            Diagnostics.Write("PAN DONE");
+
+            // 探针必须自己收场：WinUI 3 关掉最后一扇窗口并不会结束进程，留着它就是一个
+            // 在后台每 16ms 挪一次相机的东西——他叫停过这类事。
+            Environment.Exit(0);
+        };
+
+        timer.Start();
+    });
+
+    /// <summary>
+    /// 等板子真载入、也等窗口真排过版再开探针：同一拍量会得到假读数。
+    /// 10-27 那一版的 "ArrangeAll 重排 0.36ms" 就是假读数——那时视口还是 0×0，
+    /// ArrangeAll 走到 <c>width &lt;= 0</c> 那一句就 return 了，剔除与逐格 Update 一次都没跑。
+    /// </summary>
+    /// <remarks>
+    /// 等的方式是计时器，不是 <c>TryEnqueue</c> 串起来的那 240 拍：投递会在第一次布局之前一口气排空
+    /// （实测 14:30:16.088，起来 148ms 就"等满 240 拍"，视口仍是 0×0）。计时器每一跳之间真过帧，
+    /// <c>ActualWidth</c> 才会从 0 变成有数——这把尺不修好，"增量重建"省下的那一半根本量不到。
+    /// </remarks>
+    private void WaitUntilLaidOut(string label, Action onReady)
     {
         var waiter = DispatcherQueue.CreateTimer();
         var ticks = 0;
@@ -8363,11 +8422,11 @@ public sealed partial class MainWindow : Window
                 if (!laidOut)
                 {
                     Diagnostics.Write(
-                        $"perf 注意: 等了 {ticks} 跳（约 {ticks * 30}ms）视口仍是 {BoardArea.ActualWidth:0}x{BoardArea.ActualHeight:0}——" +
-                        "ArrangeAll 与 Rebuild 里那一圈逐格 Update 没活干，那几发读数无效");
+                        $"perf 注意: {label} 探针等了 {ticks} 跳（约 {ticks * 30}ms）视口仍是 " +
+                        $"{BoardArea.ActualWidth:0}x{BoardArea.ActualHeight:0}——逐格那一圈 Update 没活干，那几发读数无效");
                 }
 
-                RunPerfProbe();
+                onReady();
             }
         };
 
@@ -8540,18 +8599,7 @@ public sealed partial class MainWindow : Window
         });
 
         // 内存账：他现在 200MB 上下，先量清楚是谁占的——每格视觉里到底挂了几个元素。
-        static int Count(DependencyObject root)
-        {
-            var total = 1;
-
-            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
-            {
-                total += Count(VisualTreeHelper.GetChild(root, i));
-            }
-
-            return total;
-        }
-
+        // 计数那一句在 CountDescendants（平移探针要报同一个数，两边必须同尺）。
         // 一格到底挂了哪些元素：按类型数一遍，才知道该削谁。
         static void Histogram(DependencyObject root, Dictionary<string, int> into)
         {
@@ -8578,7 +8626,7 @@ public sealed partial class MainWindow : Window
             .Select(module => $"{module.ModuleName} {module.ModuleMemorySize / 1048576}MB");
         Diagnostics.Write("perf 大模块: " + string.Join("、", heavy));
         Diagnostics.Write($"perf 模块: {System.Diagnostics.Process.GetCurrentProcess().Modules.Count} 个模块");
-        Diagnostics.Write($"perf 内存: 常驻 {process.WorkingSet64 / 1048576}MB · 托管堆 {GC.GetTotalMemory(false) / 1048576}MB · 板面元素 {Count(PanLayer)} 个 · 每格均 {Count(PanLayer) * 1.0 / Math.Max(1, _realized.Count):0.#} 个");
+        Diagnostics.Write($"perf 内存: 常驻 {process.WorkingSet64 / 1048576}MB · 托管堆 {GC.GetTotalMemory(false) / 1048576}MB · 板面元素 {CountDescendants(PanLayer)} 个 · 每格均 {CountDescendants(PanLayer) * 1.0 / Math.Max(1, _realized.Count):0.#} 个");
 
         Diagnostics.Write("PERF DONE");
     }
@@ -8706,6 +8754,19 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>整棵视觉树里有多少个元素——perf 与平移探针报的是同一个数，两边必须同尺。</summary>
+    private static int CountDescendants(DependencyObject root)
+    {
+        var total = 1;
+
+        for (var i = 0; i < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            total += CountDescendants(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, i));
+        }
+
+        return total;
+    }
+
     private static int CountScrollViewers(DependencyObject root)
     {
         var found = root is ScrollViewer or ScrollView ? 1 : 0;
@@ -8739,9 +8800,31 @@ public sealed partial class MainWindow : Window
             // own, so blocking it on the dispatcher is safe and keeps the UI thread free.
             var completion = new TaskCompletionSource<ShotReply>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            DispatcherQueue.TryEnqueue(async () => completion.TrySetResult(await CaptureAsync(request)));
+            DispatcherQueue.TryEnqueue(async () =>
+            {
+                try
+                {
+                    completion.TrySetResult(await CaptureAsync(request));
+                }
+                catch (Exception ex)
+                {
+                    completion.TrySetException(ex);
+                }
+            });
 
-            return completion.Task.GetAwaiter().GetResult();
+            /* 等死不得。这一发卡住（UI 线程正忙在别处、渲染没回来），管道只许一个实例，
+               占着名额的那次会让之后每一发都连不上——报出来是"这块板没开着"，一句假话。
+               25 秒先答一枚明确的失败、把名额交回去，比让调用方无限等更诚实。 */
+            try
+            {
+                return completion.Task.Wait(TimeSpan.FromSeconds(25))
+                    ? completion.Task.Result
+                    : new ShotReply(false, null, Error: "25 秒内 UI 线程没接这一发（板面正忙），这次没拍");
+            }
+            catch (AggregateException ex)
+            {
+                return new ShotReply(false, null, Error: $"拍摄抛了：{ex.GetBaseException().Message}");
+            }
         });
 
         Diagnostics.Write($"shot pipe at {_shotServer.PipeName}");
@@ -8793,9 +8876,12 @@ public sealed partial class MainWindow : Window
                         : $"板上没有 id \"{request.NodeId}\"");
                 }
 
-                // The capture region is what the layer actually renders, which is the bounds
-                // of everything visible in it. So a single-node shot has to hide the rest, or
-                // the neighbours come along in the frame.
+                // 先定相机，再藏邻居。反了会白藏：`Frame` 里那发 `ArrangeAll` 按新视野重新
+                // 实格化，新进来的那些带着默认 Visible——10-27 那张"单格取证图里叠着别的卡"
+                // 就是这么来的（藏的那批确实藏了，框一挪又把没藏过的拉进视野）。
+                Frame(toFrame.Value);
+                reframed = true;
+
                 if (mode == "node")
                 {
                     foreach (var (id, visual) in _realized)
@@ -8807,9 +8893,6 @@ public sealed partial class MainWindow : Window
 
                     hiddenForShot = true;
                 }
-
-                Frame(toFrame.Value);
-                reframed = true;
             }
             else if (mode != "view" && mode != "chrome")
             {
@@ -9031,12 +9114,22 @@ public sealed partial class MainWindow : Window
             // 浮层是刚刚才变可见的：`UpdateLayout` 只排好版，合成器还没提交这一帧，
             // 这时 RenderAsync 会拍出一张"没有浮层"的图（同一份代码时灵时不灵就是这么来的）。
             // 取证那一发先让出一帧再拍；产品自己的路径没有这个等待。
-            if (request.Panel is { Length: > 0 })
+            // 挪相机、藏邻居是同一类"这一拍刚改的"，所以共用这一让。
+            if (reframed || hiddenForShot || request.Panel is { Length: > 0 })
             {
                 await Task.Delay(90);
             }
 
             surface.UpdateLayout();
+
+            /* RenderAsync(元素) 画的是**视觉树的外接框**，不是视口：缩到 348% 时卡片伸出板面外，
+               它把那一坨全画进位图（现读 view 档 3441×2804 ÷ 板面 1320×802 = 横 2.61、纵 3.50，
+               两轴还不一样）。而 CropToFramed 拿"位图宽 ÷ 布局宽"当设备比去反解坐标，
+               于是 fit / node 两档只要缩放不是 100% 就裁在错位的一块上——取证图看着像渲染坏了，
+               其实坏的是裁图那把尺。给它显式目标尺寸（视口的设备像素），两轴才回到同一把尺。 */
+            var deviceScale = BoardArea.XamlRoot?.RasterizationScale ?? 1.0;
+            var targetWidth = Math.Max(1, (int)Math.Round(surface.ActualWidth * deviceScale));
+            var targetHeight = Math.Max(1, (int)Math.Round(surface.ActualHeight * deviceScale));
 
             var bitmap = new RenderTargetBitmap();
 
@@ -9046,7 +9139,7 @@ public sealed partial class MainWindow : Window
             // layers *under* the notes (dot grid, vignette) and the surface's own fill, and
             // ItemLayer's bounds leave all of that out — that is the defect that made "板底
             // 读回 rgba(0,0,0,0)" and hid S2 from the instrument that was supposed to check it.
-            await bitmap.RenderAsync(surface);
+            await bitmap.RenderAsync(surface, targetWidth, targetHeight);
 
             if (bitmap.PixelWidth == 0 || bitmap.PixelHeight == 0)
             {

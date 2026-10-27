@@ -10,6 +10,29 @@ public partial class App : Application
 
     internal static bool PerfMode => Environment.GetCommandLineArgs().Any(arg => arg.Equals("--perf", StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// <c>--pan-probe &lt;毫秒&gt;</c>：持续平移那么多毫秒，给外面的 GPU 采样器一个**有界**的窗口。
+    /// 上限 30 秒是故意的——探针不许变成一枚在后台吃 CPU 的东西。
+    /// </summary>
+    private static int PanProbeMs
+    {
+        get
+        {
+            var args = Environment.GetCommandLineArgs();
+
+            for (var index = 0; index < args.Length - 1; index++)
+            {
+                if (args[index].Equals("--pan-probe", StringComparison.OrdinalIgnoreCase)
+                    && int.TryParse(args[index + 1], out var milliseconds))
+                {
+                    return Math.Clamp(milliseconds, 500, 30_000);
+                }
+            }
+
+            return 0;
+        }
+    }
+
     /// <summary>这一发是不是自检那一发。决定"出了意外该以什么退出码收场"。</summary>
     private static bool SelfTestMode
         => Environment.GetCommandLineArgs().Contains("--selftest", StringComparer.OrdinalIgnoreCase);
@@ -101,6 +124,11 @@ public partial class App : Application
         if (PerfMode)
         {
             window.BeginPerfProbe();
+        }
+
+        if (PanProbeMs > 0)
+        {
+            window.BeginPanProbe(PanProbeMs);
         }
     }
 

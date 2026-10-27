@@ -25,7 +25,13 @@ dotnet test tests\Outspread.Core.Tests\Outspread.Core.Tests.csproj -c Debug
 if not "%ERRORLEVEL%"=="0" goto :fail
 
 echo [2/6] MCP 写分支
-dotnet test tests\Outspread.Mcp.Tests\Outspread.Mcp.Tests.csproj -c Debug
+rem Build and run this one OUTSIDE the repo. The agent's own MCP connector is a long-lived
+rem process holding src\Outspread.Mcp\bin\Debug\net10.0\Outspread.Core.dll, so an in-tree build
+rem of that project dies with MSB3027 the moment Core changes - and the gate would then be red
+rem for a reason that has nothing to do with whether the board works (it went red exactly that
+rem way on 2026-10-27, with the connector attached). A shadow output dir compiles the same
+rem sources and cannot be locked by anything.
+dotnet test tests\Outspread.Mcp.Tests\Outspread.Mcp.Tests.csproj -c Debug -p:ArtifactsPath=%TEMP%\outspread-gate-mcp
 if not "%ERRORLEVEL%"=="0" goto :fail
 
 echo [3/6] 界面构建 —— 先看有没有实例锁着 dll

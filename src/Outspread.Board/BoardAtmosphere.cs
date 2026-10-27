@@ -178,18 +178,18 @@ partial class MainWindow
 
         var ink = BoardGrid.Ink(NoteStyling.IsDark);
 
+        // 一层一次批量盖点：核按层算一次，别把 sqrt/舍入留在每一枚点的每个像素上。
+        // 逐点那一圈（StampDot）留在 Core 里给差分测试当参照，产品路径不再走它。
         foreach (var (step, levelAlpha) in BoardGrid.LevelsFor(zoom))
         {
-            var spacing = step * zoom * scale;
-            var alpha = levelAlpha * BoardGrid.PeakAlpha;
-
-            for (var x = 0.0; x < pixelsW; x += spacing)
-            {
-                for (var y = 0.0; y < pixelsH; y += spacing)
-                {
-                    BoardGrid.StampDot(buffer, pixelsW, pixelsH, x, y, BoardGrid.DotRadiusPx * scale, alpha, ink);
-                }
-            }
+            BoardGrid.StampLattice(
+                buffer,
+                pixelsW,
+                pixelsH,
+                step * zoom * scale,
+                BoardGrid.DotRadiusPx * scale,
+                levelAlpha * BoardGrid.PeakAlpha,
+                ink);
         }
 
         using (var stream = bitmap.PixelBuffer.AsStream())

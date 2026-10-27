@@ -703,13 +703,21 @@ public sealed class BoardTools
         {
             await using (pipe)
             {
-                await JsonSerializer.SerializeAsync(pipe, request);
-                await pipe.FlushAsync();
+                /* 板面那头是按**一行**读请求的（`ReadLineAsync`），所以行末符是协议的一部分。
+                   原来这里直接 `SerializeAsync(pipe, ...)` 把 JSON 写进管道就完事：没有换行，
+                   板面永远等不到"这一行结束了"，这一发就双向挂住——而管道只许一个实例，
+                   挂住的那次把名额占死，之后每一发都报"这块板没开着"。10-27 取证图拿不到，
+                   根子是这一行少的那个 `\n`。 */
+                var writer = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = false };
 
-                var reply = await JsonSerializer.DeserializeAsync<ShotReply>(pipe);
+                writer.WriteLine(ShotProtocol.Serialize(request));
+                await writer.FlushAsync();
+
+                var line = await ReadLineBoundedAsync(pipe);
+                var reply = line is null ? null : ShotProtocol.ReadReply(line);
 
                 return reply is null
-                    ? "界面答了个空的。"
+                    ? (line is null ? "没等到界面的回答（30 秒内板面没吐这一行）。" : "界面答了个空的。")
                     : reply.Ok
                         ? $"{reply.Path} · {reply.Width}×{reply.Height} · 缩放 {reply.Zoom:P0} · {reply.Nodes} 个节点"
                         : $"没拍成：{reply.Error}";
@@ -719,6 +727,16 @@ public sealed class BoardTools
         {
             return $"没拍成：{ex.Message}";
         }
+    }
+
+    /// <summary>读板面那一行，但 bounded：挂死不能把连接的名额占着，让后面每一发都假报"板没开"。</summary>
+    private static async Task<string?> ReadLineBoundedAsync(Stream pipe)
+    {
+        var reading = new StreamReader(pipe, Encoding.UTF8).ReadLineAsync();
+
+        return await Task.WhenAny(reading, Task.Delay(TimeSpan.FromSeconds(30))) == reading
+            ? await reading
+            : null;
     }
 
     private static AddedNode Card(string id, double x, double y, string text, double width, double height, string? colour = null)

@@ -8572,6 +8572,12 @@ public sealed partial class MainWindow : Window
         }
 
         var process = System.Diagnostics.Process.GetCurrentProcess();
+        Diagnostics.Write($"perf 内存细分: 私有 {process.PrivateMemorySize64 / 1048576}MB · 提交 {process.VirtualMemorySize64 / 1048576}MB · 托管 {GC.GetTotalMemory(false) / 1048576}MB");
+        var heavy = System.Diagnostics.Process.GetCurrentProcess().Modules.Cast<System.Diagnostics.ProcessModule>()
+            .OrderByDescending(module => module.ModuleMemorySize).Take(8)
+            .Select(module => $"{module.ModuleName} {module.ModuleMemorySize / 1048576}MB");
+        Diagnostics.Write("perf 大模块: " + string.Join("、", heavy));
+        Diagnostics.Write($"perf 模块: {System.Diagnostics.Process.GetCurrentProcess().Modules.Count} 个模块");
         Diagnostics.Write($"perf 内存: 常驻 {process.WorkingSet64 / 1048576}MB · 托管堆 {GC.GetTotalMemory(false) / 1048576}MB · 板面元素 {Count(PanLayer)} 个 · 每格均 {Count(PanLayer) * 1.0 / Math.Max(1, _realized.Count):0.#} 个");
 
         Diagnostics.Write("PERF DONE");

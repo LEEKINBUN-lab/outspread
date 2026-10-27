@@ -62,6 +62,7 @@ public sealed partial class MainWindow
     private void OpenRestorePanel()
     {
         SetSearchPanel(false);
+        CloseChordPage();
         SetRestorePanel(true);
     }
 

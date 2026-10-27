@@ -31,6 +31,15 @@ public sealed partial class MainWindow
 
     private void OnCheatPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
+        // 改键页在等新键位时，这一发键归它：先于下面每一条（包括 Tab 与编辑中那一发回车），
+        // 否则"按 Esc 取消"会先把选中清掉，按 Tab 会先弹清单。
+        if (TryTakeChordCapture(e))
+        {
+            e.Handled = true;
+
+            return;
+        }
+
         // 编辑中的一发回车只能在这一层接。10-24 查"Ctrl+Enter 不收笔"量的：同一发键在 preview
         // 记到了、在编辑框自己的 KeyDown 上一次都没到（换行照样插进去了）——所以把提交挂在控件上
         // 是死的，中文输入法在场时他按多少次都不收笔。"回车收下标记行"那条也是同一条路。
@@ -91,21 +100,9 @@ public sealed partial class MainWindow
         var shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift)
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
 
-        var chord = $"{(control ? "Ctrl+" : string.Empty)}{(shift ? "Shift+" : string.Empty)}{(alt ? "Alt+" : string.Empty)}{e.Key}";
+        var chord = ChordFrom(e.Key, control, shift, alt);
 
-        foreach (var command in Commands())
-        {
-            if (!command.Dispatched || !string.Equals(command.Chord, chord, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            command.Run();
-
-            return true;
-        }
-
-        return false;
+        return TryRunCommandForChord(chord);
     }
 
     /// <summary>
@@ -114,7 +111,7 @@ public sealed partial class MainWindow
     /// </summary>
     private bool BoardCanTakeBoardKeys()
     {
-        if (_editingId is not null || _filterPanelOpen || _searchOpen || _restoreOpen || _cheatsheetOpen
+        if (_editingId is not null || _filterPanelOpen || _searchOpen || _restoreOpen || _cheatsheetOpen || _chordPageOpen
             || _renamingPath is not null)
         {
             return false;
@@ -167,7 +164,7 @@ public sealed partial class MainWindow
         // 他 10-24 点名为噪音（见 Command.Sheet）。菜单与键盘仍走同一张表。
         var rows = Sections().SelectMany(section => section)
             .Where(command => command.Sheet)
-            .Select(command => PanelKit.Row(command.Label, command.ChordDisplay, keys: true))
+            .Select(command => PanelKit.Row(command.Label, ChordsText(command), keys: true))
             .ToList();
 
         // 两栏、栏内尽量均分：760 是一张页面而不是一条横幅，单栏 ≈336 让"名字｜键帽"各自有地方。

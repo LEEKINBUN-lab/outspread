@@ -51,16 +51,23 @@ public sealed partial class MainWindow
         /// 键帽上那一串：方向键写成箭头（Alt+Left → Alt+←）。表里的字符串仍用 e.Key 的名字，
         /// 因为派发是拿它和 <c>e.Key.ToString()</c> 比的；这里只换显示。
         /// </summary>
-        public string ChordDisplay => Chord is { Length: > 0 } chord
-            ? string.Join('+', chord.Split('+').Select(part => part switch
-            {
-                "Left" => "←",
-                "Right" => "→",
-                "Up" => "↑",
-                "Down" => "↓",
-                _ => part,
-            }))
-            : string.Empty;
+        public string ChordDisplay => Caps(Chord);
+
+        /// <summary>
+        /// 任意一串键位的显示形。改键之后显示的**不是**表里那一串，所以这一条必须是静态的：
+        /// 键位页、Tab 清单、右键菜单三处都拿"现在这一串"过它，而不是各自去拆 <see cref="Chord"/>。
+        /// </summary>
+        public static string Caps(string chord)
+            => chord is { Length: > 0 }
+                ? string.Join('+', chord.Split('+').Select(part => part switch
+                {
+                    "Left" => "←",
+                    "Right" => "→",
+                    "Up" => "↑",
+                    "Down" => "↓",
+                    _ => part,
+                }))
+                : string.Empty;
     }
 
     private Command[] Commands() =>

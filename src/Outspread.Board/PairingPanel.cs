@@ -74,6 +74,7 @@ public sealed partial class MainWindow
         SetSearchPanel(false);
         SetRestorePanel(false);
         SetFilterPanel(false);
+        CloseChordPage();
         SetPairingPanel(true);
     }
 

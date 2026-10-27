@@ -1520,6 +1520,7 @@ public sealed partial class MainWindow
         CloseFilterPanel();
         CloseSearchPanel();
         CloseRestorePanel();
+        CloseChordPage();
     }
 
     /// <summary>自检里关板子不弹确认（它要的是"删得掉"，不是"弹得出"）。</summary>

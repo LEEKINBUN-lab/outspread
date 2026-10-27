@@ -264,6 +264,22 @@
                 <ScrollViewer x:Name="RestoreScroll" />
             </Border>
 
+            <!-- 键盘快捷键（⋮ 菜单里那一行）。一行一条命令，右端是它现在的键位；点一行就进"等按键"。
+                 行仍是 PanelKit 那一枚 SheetRow：这一页只是把"清单"换成了"能改的清单"，
+                 不是第五种组件。 -->
+            <Border
+                x:Name="ChordPanel"
+                Visibility="Collapsed"
+                MinWidth="340"
+                MaxWidth="460"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Margin="0,44,0,0"
+                MaxHeight="460"
+                PointerPressed="OnChordPanelPressed">
+                <ScrollViewer x:Name="ChordScroll" />
+            </Border>
+
             <!-- 配对手机…（右键菜单里那一行）。码画在屏幕上是因为用这块板的人开的是这个窗口，
                  不是终端；按它不关（里面有两枚动作），关掉只走"关掉"那一枚。 -->
             <Border

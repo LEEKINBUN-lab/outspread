@@ -24,3 +24,6 @@ boards/备忘录.canvas
 # agent 写在板上的出口是运行产物，跟相机 sidecar 同一类：不进版本库。
 boards/Agent 出口.canvas
 boards/Agent 出口.canvas.view.json
+
+# agent 的读板账本（每台机器各自一份，别进仓）
+*.canvas.inbox.json

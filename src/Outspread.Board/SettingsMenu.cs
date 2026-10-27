@@ -41,8 +41,18 @@ public sealed partial class MainWindow
         menu.Items.Add(restore);
 
         var filter = new MenuFlyoutItem { Text = "筛选：日期与标签…", Icon = SettingsMenuIcon(FluentIcons.Filter) };
-        filter.Click += (_, _) => SetFilterPanel(true);
+        filter.Click += (_, _) =>
+        {
+            CloseChordPage();
+            SetFilterPanel(true);
+        };
         menu.Items.Add(filter);
+
+        // 改键进设置，而不是进右键菜单：它改的是"这台机器上这套键位"，不是板面上的某个东西。
+        // 他 10-27 因为 Alt+L 被系统抢走而要改一个键——那次得改代码重编，这条入口就是那么来的。
+        var chords = new MenuFlyoutItem { Text = "键盘快捷键…", Icon = SettingsMenuIcon(FluentIcons.Keyboard) };
+        chords.Click += (_, _) => OpenChordPage();
+        menu.Items.Add(chords);
 
         menu.Items.Add(new MenuFlyoutSeparator());
 

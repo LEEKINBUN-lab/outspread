@@ -271,6 +271,7 @@ public sealed partial class MainWindow : Window
                 CloseFilterPanel();
                 CloseSearchPanel();
                 CloseRestorePanel();
+                CloseChordPage();
                 CollapseExpandedGroup();
 
                 // 下拉表与色板也算"手一离开就该收起"的那一类：只靠窗口里的按下事件，
@@ -864,6 +865,7 @@ public sealed partial class MainWindow : Window
         CloseCheatsheet();
         CloseSearchPanel();
         CloseRestorePanel();
+        CloseChordPage();
         ClearGroupHint();
         CloseColorPopover();
 
@@ -1666,6 +1668,7 @@ public sealed partial class MainWindow : Window
 
         CloseSearchPanel();
         CloseRestorePanel();
+        CloseChordPage();
         ClearGroupHint();
 
         var pointOnSurface = e.GetCurrentPoint(BoardArea).Position;
@@ -4304,7 +4307,8 @@ public sealed partial class MainWindow : Window
             foreach (var command in rows)
             {
                 var action = command.Run;
-                var item = new MenuFlyoutItem { Text = command.Label, KeyboardAcceleratorTextOverride = command.ChordDisplay };
+                // 加速键文字读的是"现在这一串"（改键优先），和 Tab 清单、改键页同一个来源。
+                var item = new MenuFlyoutItem { Text = command.Label, KeyboardAcceleratorTextOverride = ChordsText(command) };
                 item.Click += (_, _) => action();
                 submenu.Items.Add(item);
             }
@@ -4588,6 +4592,9 @@ public sealed partial class MainWindow : Window
         SelfTestUniformSize(problems);
         SelfTestCulledVisuals(problems);
         SelfTestFreshNoteIsFree(problems);
+
+        // 改键：四条面（派发 / Tab 清单 / 右键菜单 / 键位页）读的是同一份，改键要能落盘、能挡住冲突。
+        SelfTestChords(problems);
 
         var driftX = Math.Abs(_view.ToScreenX(worldUnderAnchor.Item1) - anchor.X);
         var driftY = Math.Abs(_view.ToScreenY(worldUnderAnchor.Item2) - anchor.Y);
@@ -6373,6 +6380,7 @@ public sealed partial class MainWindow : Window
         {
             var before = problems.Count;
 
+            OpenChordPage();
             ShowCheatsheet();
             SetFilterPanel(true);
 
@@ -6431,6 +6439,7 @@ public sealed partial class MainWindow : Window
                 ("筛选面板", "列表", FilterPanel),
                 ("查找面板", "列表", SearchPanel),
                 ("恢复面板", "列表", RestorePanel),
+                ("键盘快捷键", "列表", ChordPanel),
                 ("筛选横幅", "一句话", FilterBanner),
                 ("回执那一句话", "一句话", SayHost),
             };
@@ -6496,6 +6505,7 @@ public sealed partial class MainWindow : Window
 
             CloseCheatsheet();
             SetFilterPanel(false);
+            CloseChordPage();
 
             // 查找那一发问的不是"这层好不好看"，是"这层有用吗"：拿板上真的有的那半句话去搜，
             // 命中为 0 就说明 matcher、面板、或者两者之间的接线断了。
@@ -6670,44 +6680,6 @@ public sealed partial class MainWindow : Window
             row.Measure(new Size(400, double.PositiveInfinity));
 
             return row.DesiredSize.Height;
-        }
-
-        static List<PanelKit.SheetRow> MenuRows(DependencyObject root)
-        {
-            var rows = new List<PanelKit.SheetRow>();
-
-            Collect(root);
-
-            return rows;
-
-            void Collect(DependencyObject node)
-            {
-                if (node is PanelKit.SheetRow row)
-                {
-                    rows.Add(row);
-                }
-
-                switch (node)
-                {
-                    case Panel container:
-                        foreach (var child in container.Children)
-                        {
-                            Collect(child);
-                        }
-
-                        break;
-
-                    case Border sheet when sheet.Child is DependencyObject inner:
-                        Collect(inner);
-
-                        break;
-
-                    case ContentControl content when content.Content is DependencyObject payload:
-                        Collect(payload);
-
-                        break;
-                }
-            }
         }
 
         // 一份片段贴两遍＝两套名字，组与线头各自跟着换；撤销两发交回原样。
@@ -7284,6 +7256,48 @@ public sealed partial class MainWindow : Window
     private int CountBoardScrollers()
         => CountScrollViewers(PanLayer);
 
+    /// <summary>
+    /// 一块浮层里所有的行。按内容递归而不是按可视化树走：面板里的行是建出来的，不是模板生成的，
+    /// 而"这块面是不是同一枚控件搭的"这一问要在 `Content` 这一层就答完。
+    /// </summary>
+    private static List<PanelKit.SheetRow> MenuRows(DependencyObject root)
+    {
+        var rows = new List<PanelKit.SheetRow>();
+
+        Collect(root);
+
+        return rows;
+
+        void Collect(DependencyObject node)
+        {
+            if (node is PanelKit.SheetRow row)
+            {
+                rows.Add(row);
+            }
+
+            switch (node)
+            {
+                case Panel container:
+                    foreach (var child in container.Children)
+                    {
+                        Collect(child);
+                    }
+
+                    break;
+
+                case Border sheet when sheet.Child is DependencyObject inner:
+                    Collect(inner);
+
+                    break;
+
+                case ContentControl content when content.Content is DependencyObject payload:
+                    Collect(payload);
+
+                    break;
+            }
+        }
+    }
+
     private static int CountScrollViewers(DependencyObject root)
     {
         var found = root is ScrollViewer or ScrollView ? 1 : 0;
@@ -7458,6 +7472,29 @@ public sealed partial class MainWindow : Window
 
                     case "restore":
                         SetRestorePanel(true);
+                        break;
+
+                    case "chords":
+                        // 改键页也要能取证：一列命令、右端键帽、正在等按键的那一行——这三样
+                        // 都是"只能看图"的东西，而它正好是这一页要交的货。
+                        OpenChordPage();
+                        break;
+
+                    case "chords-capture":
+                        {
+                            // "等按键"是一帧状态，不是一页：点第一行以后那一行要看得见地在等人按。
+                            OpenChordPage();
+
+                            var first = RebindableCommands().FirstOrDefault();
+
+                            if (first.Label is not { Length: > 0 })
+                            {
+                                return new ShotReply(false, null, Error: "这一版没有可改键的命令，拍不出等按键那一帧");
+                            }
+
+                            BeginChordCapture(first.Label);
+                        }
+
                         break;
 
                     case "rename":
@@ -7926,17 +7963,12 @@ public sealed partial class MainWindow : Window
 
         // One dispatch for the whole table: the chord is rebuilt in the same order the table writes
         // them ("Ctrl+G"), so a command cannot be reachable from the menu but not the keyboard.
-        var chord = $"{(control ? "Ctrl+" : string.Empty)}{(shift ? "Shift+" : string.Empty)}{(alt ? "Alt+" : string.Empty)}{e.Key}";
-
-        foreach (var command in Commands())
+        // 改键之后要比的是"现在这一串"（ChordBook 里改过的优先），所以走同一个入口——
+        // 这一条与 Preview 那一层、自检那一发读的是同一份。
+        if (TryRunCommandForChord(ChordFrom(e.Key, control, shift, alt)))
         {
-            if (!command.Dispatched || !string.Equals(command.Chord, chord, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            command.Run();
             e.Handled = true;
+
             return;
         }
 

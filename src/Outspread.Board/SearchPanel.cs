@@ -53,6 +53,7 @@ public sealed partial class MainWindow
     private void OpenSearch()
     {
         SetRestorePanel(false);
+        CloseChordPage();
         SetSearchPanel(true);
 
         // 焦点必须真的落进那一格：这层的意义是"开始打字就在找"，

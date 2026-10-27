@@ -131,7 +131,8 @@ public sealed class BoardTools
             {
                 ["id"] = groupId,
                 ["type"] = "group",
-                ["label"] = title.Trim(),
+                // 组名带日期和时间：只写标题，以后要按轮次排序就是灾难（他 10-27）。
+                ["label"] = $"{DateTime.Now:MM-dd HH:mm} · {title.Trim()}",
                 ["x"] = (long)Math.Floor(left - 12),
                 ["y"] = (long)Math.Floor(top - 12),
                 ["width"] = (long)Math.Ceiling((double)(rowWidth + 24)),
@@ -382,17 +383,36 @@ public sealed class BoardTools
             return $"{path}：板上没有可收的东西。";
         }
 
-        // 按"上边、再左边"排：他看板的顺序就是这块板的阅读顺序，收紧之后不许打乱。
-        var ordered = blocks.OrderBy(block => block.Y).ThenBy(block => block.X).ToList();
+        // 他 10-27：横着排、满一行换行，不要一路竖下去；顺序按每块里那枚标题卡的时间戳，
+        // 没时间戳的排在后面（老内容）。同一时刻再按位置定先后。
+        var ordered = blocks
+            .Select(block => (Block: block, Time: BlockTime(byId, block.Ids)))
+            .OrderBy(item => item.Time ?? DateTime.MaxValue)
+            .ThenBy(item => item.Block.Y)
+            .ThenBy(item => item.Block.X)
+            .Select(item => item.Block)
+            .ToList();
         var patch = new DocPatch();
         // 左边对齐到 0：负数坐标虽然能画，但他的板从 0 开始看最顺。
         const double left = 0;
         var top = ordered.Min(block => block.Y);
 
+        var rowWidth = 0.0;
+        var rowTop = top;
+        var rowTallest = 0.0;
+
         foreach (var block in ordered)
         {
-            var dx = left - block.X;
-            var dy = top - block.Y;
+            // 横排：这一行放不下就换行（他 10-27 的 1-2-3 / 4-5-6 / 7…）。
+            if (rowWidth > 0 && rowWidth + block.Width > TileRowWidth)
+            {
+                rowTop += rowTallest + Math.Max(8, gap);
+                rowWidth = 0;
+                rowTallest = 0;
+            }
+
+            var dx = left + rowWidth - block.X;
+            var dy = rowTop - block.Y;
 
             foreach (var id in block.Ids)
             {
@@ -400,8 +420,11 @@ public sealed class BoardTools
                 patch.SetNumber(id, "y", byId[id].Y + dy);
             }
 
-            top += block.Height + Math.Max(8, gap);
+            rowWidth += block.Width + Math.Max(8, gap);
+            rowTallest = Math.Max(rowTallest, block.Height);
         }
+
+        top = rowTop + rowTallest;
 
         CanvasStore.SavePatch(path, patch);
 
@@ -815,6 +838,29 @@ public sealed class BoardTools
             : Path.GetDirectoryName(BoardLocator.FallbackPath())!;
 
         return Path.Combine(directory, "Agent 出口.canvas");
+    }
+
+    /// <summary>横排一行最多多宽；超过就换行。</summary>
+    private const double TileRowWidth = 1680;
+
+    /// <summary>一块里那枚标题卡写着落板时间（yyyy-MM-dd HH:mm）；没写就是老内容，返回 null。</summary>
+    private static DateTime? BlockTime(Dictionary<string, CanvasNode> byId, List<string> ids)
+    {
+        foreach (var id in ids)
+        {
+            var text = byId[id].Text ?? string.Empty;
+
+            foreach (var line in text.Split('\n'))
+            {
+                if (DateTime.TryParseExact(line.Trim(), "yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out var stamp))
+                {
+                    return stamp;
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>新内容一律落在"最低那格下面"：他往上看就是历史，往下走就是最新。</summary>

@@ -132,7 +132,9 @@ public sealed class BoardToolsWriteTests : IDisposable
         var group = Assert.Single(document.Nodes.Where(node => node.Kind == CanvasNodeKind.Group));
 
         // 组名就是这一批的小标题，成员是标题卡 + 四张卡：他以后按名字找，不用靠位置。
-        Assert.Equal("一批四件", group.Label);
+        // 组名带日期和时间（他要按轮次排序，光一个标题排不了）。
+        Assert.EndsWith("· 一批四件", group.Label);
+        Assert.StartsWith(DateTime.Now.ToString("MM-dd"), group.Label);
         Assert.Equal(5, group.GroupMemberIds?.Count);
 
         var cards = document.Nodes.Where(node => node.Kind != CanvasNodeKind.Group).ToList();
@@ -261,9 +263,9 @@ public sealed class BoardToolsWriteTests : IDisposable
         var u1 = after.Find("u1")!;
         var u2 = after.Find("u2")!;
 
-        // 块与块之间只留一条缝：第二块的顶边 = 第一块底边 + 48。
-        Assert.Equal(g1.Y + g1.Height + 48, g2.Y, 3);
-        Assert.Equal(g1.X, g2.X, 3);
+        // 他 10-27 定的是横排：两块并排在同一行，缝 48，不再一路竖下去。
+        Assert.Equal(g1.Y, g2.Y, 3);
+        Assert.Equal(g1.X + g1.Width + 48, g2.X, 3);
 
         // 组内错位保留：两格的相对偏移还是 40,40。
         Assert.Equal(40, u2.X - u1.X, 3);

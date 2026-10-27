@@ -8346,9 +8346,86 @@ public sealed partial class MainWindow : Window
     /// <summary>
     /// 持续平移那几秒：把"滚动时那 10% GPU"从一句感觉变成采得到的读数。
     /// 走的是真路径（<see cref="ApplyPanPreview"/>＝指针拖动每一帧调的那一句），来回各 6 像素所以
-    /// 相机不会跑掉；跑完自己收窗，绝不留一枚实例在后台吃 CPU。
+    /// 相机不会跑掉；跑完自己收场，绝不留一枚实例在后台吃 CPU。
     /// </summary>
     public void BeginPanProbe(int milliseconds) => WaitUntilLaidOut("pan", () =>
+        RunGestureProbe(milliseconds, "pan", frame => ApplyPanPreview(frame % 2 == 0 ? 6 : -6, 3)));
+
+    /// <summary>持续滚轮那几秒：缩放才是他报"卡"的那一拍，之前只量过平移，那一半根本没有数。</summary>
+    public void BeginZoomProbe(int milliseconds) => WaitUntilLaidOut("zoom", () =>
+        RunGestureProbe(milliseconds, "zoom", _ =>
+        {
+            ApplyWheel(new Point(BoardArea.ActualWidth / 2, BoardArea.ActualHeight / 2), 120);
+            CommitWheelPreview();
+        }));
+
+    /// <summary>
+    /// 持续按住一格走那几秒。他工单的原话是"便签一多，<b>拖动</b>都变得卡顿了"——
+    /// 那说的不是平移视野，是拖一格。前两发探针量的都是相机，那一半一直没有数。
+    /// </summary>
+    /// <remarks>
+    /// 正对照写在收场那一行里：这一发必须报出"格子真的从 X 走到了 Y"。
+    /// 10-27 第一版没有这一句，于是"拖一格 GPU 只有 0.10%"被当成结论读了一轮——
+    /// 拿静置那一帧和拖动中的一帧各拍一张，两张逐字节相同，那个 0.10% 其实量的是"画面根本没变"。
+    /// </remarks>
+    public void BeginDragProbe(int milliseconds) => WaitUntilLaidOut("drag", () =>
+    {
+        // 必须挑**此刻在屏幕上的**那一格：10-27 第一发拿的是"文档里第一个文字格"，
+        // 而相机是脚本摆的（当时停在 250% 的密区中心），那一格早在视野外——
+        // 于是"拖一格 GPU 只 0.10%"其实是"拖了一格没人看得见的东西"。
+        bool OnScreen(CanvasNode candidate)
+        {
+            if (candidate.Kind != CanvasNodeKind.Text || !_realized.TryGetValue(candidate.Id, out var visual))
+            {
+                return false;
+            }
+
+            var left = Canvas.GetLeft(visual);
+            var top = Canvas.GetTop(visual);
+
+            return left is > -120 and < 1300 && top is > -120 and < 780;
+        }
+
+        if (_document.Nodes.FirstOrDefault(OnScreen) is not { } node)
+        {
+            Diagnostics.Write("drag 探针: 屏幕上没有可拖的文字格（这一发的相机对着一片空地），量不到拖动的价钱");
+            Environment.Exit(1);
+
+            return;
+        }
+
+        var startX = node.X;
+        var startY = node.Y;
+        var centre = new Point(
+            _view.ToScreenX(node.X + (node.Width / 2)),
+            _view.ToScreenY(node.Y + (node.Height / 2)));
+
+        _nodeGesture = new NodeGesture(
+            _view.ToWorldX(centre.X),
+            _view.ToWorldY(centre.Y),
+            new Dictionary<string, (double X, double Y)>(StringComparer.Ordinal) { [node.Id] = (startX, startY) },
+            node.Id);
+
+        _nodeDragStarted = false;
+
+        var frames = 0;
+
+        RunGestureProbe(milliseconds, "drag", frame =>
+        {
+            frames = frame;
+
+            ApplyNodeDrag(new Point(
+                centre.X + (Math.Sin(frame / 8.0) * 60),
+                centre.Y + (Math.Cos(frame / 8.0) * 40)));
+        }, () => Diagnostics.Write(
+            $"drag 正对照: 第 {frames} 帧，格子从 ({startX:0}，{startY:0}) 走到了 ({node.X:0}，{node.Y:0})" +
+            $"· 拖动已起 {_nodeDragStarted} · 视觉 {(_realized.TryGetValue(node.Id, out var visual) ? $"Canvas.Left {Canvas.GetLeft(visual):0} Top {Canvas.GetTop(visual):0}" : "未实格化")}"));
+    });
+
+    /// <summary>每一帧调一次 <paramref name="step"/>，跑满 <paramref name="milliseconds"/> 就自报读数并结束进程。</summary>
+    /// <param name="onReport">收场前补一句自己的对照（例如"格子到底走了几像素"）——没有它，
+    /// 一枚"什么都不做"的探针和一枚真在动的探针会吐出一模一样的读数。</param>
+    private void RunGestureProbe(int milliseconds, string label, Action<int> step, Action? onReport = null)
     {
         var timer = DispatcherQueue.CreateTimer();
         var frames = 0;
@@ -8363,7 +8440,7 @@ public sealed partial class MainWindow : Window
         timer.Tick += (_, _) =>
         {
             watch.Restart();
-            ApplyPanPreview(frames % 2 == 0 ? 6 : -6, 3);
+            step(frames);
             watch.Stop();
 
             frames++;
@@ -8377,18 +8454,20 @@ public sealed partial class MainWindow : Window
 
             timer.Stop();
 
+            onReport?.Invoke();
+
             Diagnostics.Write(
-                $"pan {milliseconds}ms: {frames} 帧 · 每帧均 {total / Math.Max(1, frames):0.###}ms 最慢 {slowest:0.###}ms · " +
+                $"{label} {milliseconds}ms: {frames} 帧 · 每帧均 {total / Math.Max(1, frames):0.###}ms 最慢 {slowest:0.###}ms · " +
                 $"缩放 {Percent()} · 实格 {_realized.Count} 枚 · 板面元素 {CountDescendants(PanLayer)} 个");
             Diagnostics.Write("PAN DONE");
 
             // 探针必须自己收场：WinUI 3 关掉最后一扇窗口并不会结束进程，留着它就是一个
-            // 在后台每 16ms 挪一次相机的东西——他叫停过这类事。
+            // 在后台每 16ms 挪一次相机（或每帧重建一次点阵）的东西——他叫停过这类事。
             Environment.Exit(0);
         };
 
         timer.Start();
-    });
+    }
 
     /// <summary>
     /// 等板子真载入、也等窗口真排过版再开探针：同一拍量会得到假读数。

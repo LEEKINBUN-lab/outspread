@@ -11,26 +11,23 @@ public partial class App : Application
     internal static bool PerfMode => Environment.GetCommandLineArgs().Any(arg => arg.Equals("--perf", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// <c>--pan-probe &lt;毫秒&gt;</c>：持续平移那么多毫秒，给外面的 GPU 采样器一个**有界**的窗口。
-    /// 上限 30 秒是故意的——探针不许变成一枚在后台吃 CPU 的东西。
+    /// <c>--pan-probe &lt;毫秒&gt;</c> / <c>--zoom-probe &lt;毫秒&gt;</c>：持续平移或持续滚轮那么多毫秒，
+    /// 给外面的 GPU/CPU 采样器一个**有界**的窗口。上限 30 秒是故意的——探针不许变成一枚在后台吃 CPU 的东西。
     /// </summary>
-    private static int PanProbeMs
+    private static int ProbeMilliseconds(string flag)
     {
-        get
+        var args = Environment.GetCommandLineArgs();
+
+        for (var index = 0; index < args.Length - 1; index++)
         {
-            var args = Environment.GetCommandLineArgs();
-
-            for (var index = 0; index < args.Length - 1; index++)
+            if (args[index].Equals(flag, StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(args[index + 1], out var milliseconds))
             {
-                if (args[index].Equals("--pan-probe", StringComparison.OrdinalIgnoreCase)
-                    && int.TryParse(args[index + 1], out var milliseconds))
-                {
-                    return Math.Clamp(milliseconds, 500, 30_000);
-                }
+                return Math.Clamp(milliseconds, 500, 30_000);
             }
-
-            return 0;
         }
+
+        return 0;
     }
 
     /// <summary>这一发是不是自检那一发。决定"出了意外该以什么退出码收场"。</summary>
@@ -126,9 +123,25 @@ public partial class App : Application
             window.BeginPerfProbe();
         }
 
-        if (PanProbeMs > 0)
+        var panProbe = ProbeMilliseconds("--pan-probe");
+
+        if (panProbe > 0)
         {
-            window.BeginPanProbe(PanProbeMs);
+            window.BeginPanProbe(panProbe);
+        }
+
+        var zoomProbe = ProbeMilliseconds("--zoom-probe");
+
+        if (zoomProbe > 0)
+        {
+            window.BeginZoomProbe(zoomProbe);
+        }
+
+        var dragProbe = ProbeMilliseconds("--drag-probe");
+
+        if (dragProbe > 0)
+        {
+            window.BeginDragProbe(dragProbe);
         }
     }
 

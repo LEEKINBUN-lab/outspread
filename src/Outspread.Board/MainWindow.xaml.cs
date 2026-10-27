@@ -3022,7 +3022,43 @@ public sealed partial class MainWindow : Window
     /// a note grow for a line that is not drawn, and measuring only the body would cut the readout
     /// that the same card promises to show.
     /// </remarks>
+    /// <summary>
+    /// 量正文高度是这块板最贵的一件小事：每次都改一个 TextBlock 再 Measure，而
+    /// 平移/缩放/重排一帧里会被问上几十上百次，问的往往是同一批（正文, 宽, 字号）。
+    /// 他 10-27 的工单：「便签一多，拖动都变得卡顿了」。这里按这四个量记忆化，
+    /// 命中就不碰 WinUI——量出来的数值一模一样，只是不再重复算。
+    /// </summary>
+    private readonly Dictionary<(string Text, int Width, int Font, bool Chips, int Day), double> _measureCache = [];
+
+    internal int MeasureCacheHits { get; private set; }
+
+    internal int MeasureCacheSize => _measureCache.Count;
+
     private double MeasureTextHeight(string text, double widthWorld, double fontSizeWorld, bool paintsChips = true)
+    {
+        var key = (text, (int)Math.Round(widthWorld * 10), (int)Math.Round(fontSizeWorld * 10), paintsChips, _view.Today.DayNumber);
+
+        if (_measureCache.TryGetValue(key, out var cached))
+        {
+            MeasureCacheHits++;
+
+            return cached;
+        }
+
+        var value = MeasureTextHeightUncached(text, widthWorld, fontSizeWorld, paintsChips);
+
+        // 上限只是防泄漏：真到了就整批丢掉，下一次照样重算，不会算出错的数。
+        if (_measureCache.Count > 8192)
+        {
+            _measureCache.Clear();
+        }
+
+        _measureCache[key] = value;
+
+        return value;
+    }
+
+    private double MeasureTextHeightUncached(string text, double widthWorld, double fontSizeWorld, bool paintsChips = true)
     {
         var type = NoteTypography.For(fontSizeWorld);
         var marks = Tags.Read(text);

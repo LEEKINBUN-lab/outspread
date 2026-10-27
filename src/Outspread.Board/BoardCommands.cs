@@ -74,7 +74,8 @@ public sealed partial class MainWindow
         new("垂直居中", "Alt+V", "排布", () => Arrange("垂直居中", items => Aligning.Align(items, Aligning.Side.VCenter))),
         new("横向均分", "Alt+J", "排布", () => Arrange("横向均分", items => Aligning.Distribute(items, horizontal: true))),
         new("纵向均分", "Alt+K", "排布", () => Arrange("纵向均分", items => Aligning.Distribute(items, horizontal: false))),
-        new("堆叠", "Alt+L", "排布", () => Arrange("堆叠", Aligning.Stack)),
+        // Alt+L 在这台机器上会和系统抢（他 10-27：一按就响系统提示音），换成 Alt+B（"叠"的首字母位）。
+        new("堆叠", "Alt+B", "排布", () => Arrange("堆叠", Aligning.Stack)),
         new("按颜色排列", "Alt+Y", "排列", () => ArrangeByKey("按颜色排列", node => node.Color ?? "无颜色"), Menu: false),
         new("按标签排列", "Alt+T", "排列", () => ArrangeByKey("按标签排列", node => Tags.Of(node.Text).FirstOrDefault() ?? "#无标签", "#无标签"), Menu: false),
         new("按序号排列", "Alt+N", "排列", () => ArrangeBySequence("按序号排列"), Menu: false),
@@ -157,6 +158,24 @@ public sealed partial class MainWindow
 
             return;
         }
+
+        // 记忆化（他 10-27 的卡顿工单）：同一个（正文, 宽, 字号）问第二次必须命中缓存，且数值分毫不差。
+        var probe = notes[0].Text ?? string.Empty;
+        var hitsBefore = MeasureCacheHits;
+        var firstRead = MeasureTextHeight(probe, 300, NoteTypography.DefaultSize);
+        var secondRead = MeasureTextHeight(probe, 300, NoteTypography.DefaultSize);
+
+        if (Math.Abs(firstRead - secondRead) > 0.001)
+        {
+            problems.Add($"自检量高缓存: 同一句量两次得到 {firstRead:0.##} 和 {secondRead:0.##}，记忆化改坏了数值");
+        }
+
+        if (MeasureCacheHits <= hitsBefore)
+        {
+            problems.Add("自检量高缓存: 第二问没命中缓存——记忆化没生效，拖动还是会重复算");
+        }
+
+        Diagnostics.Write($"selftest 量高缓存: 命中 {MeasureCacheHits} 次，缓存 {MeasureCacheSize} 条，两次读数 {firstRead:0.##}／{secondRead:0.##}");
 
         // 原框只记一次：每一发跑完都把两发撤销回去，下一发的起点还是这里。
         var before = notes.ToDictionary(node => node.Id, node => (node.Width, node.Height), StringComparer.Ordinal);

@@ -388,9 +388,50 @@ public sealed class BoardToolsWriteTests : IDisposable
     }
 
     [Fact]
-    public void A_note_needs_no_ask_line_because_it_never_sits_in_his_queue()
+    public void A_card_over_the_one_line_budget_is_refused_and_writes_nothing()
     {
-        // 结论卡不挂 @b0，不占他的"还欠几格"，所以这一闸不管它——否则每条读数都得编一句假动作。
+        // 简洁也是闸（他 10-28 第二次说"板子上长篇大论"）。一格折完最多 4 行：
+        // 24 字一行 × 4＝装得下一句事实＋一句「要你：…」；这一发故意写成一整段叙述。
+        var board = SeededBoard(ordinal: 0);
+        var before = CanvasStore.Load(board).Nodes.Count;
+
+        var rambling = string.Join("", Enumerable.Repeat("拖动中每帧把整张节点表重读物化一遍所以越拖越贵，", 8));
+
+        var receipt = BoardTools.BoardPost(
+            "长篇那一发",
+            [new BoardCard { Kind = "task", Text = $"{rambling}\n要你：拍要不要收" }],
+            round: "简",
+            board: board);
+
+        Assert.Contains("没落板", receipt, StringComparison.Ordinal);
+        Assert.Contains("折行", receipt, StringComparison.Ordinal);
+        Assert.Equal(before, CanvasStore.Load(board).Nodes.Count);
+    }
+
+    [Fact]
+    public void The_same_saying_split_into_two_cards_lands()
+    {
+        // 正对照：被拒的不是这件事，是"挤在一格里"。拆成一句事实＋一句要动作，就落得下去。
+        var board = SeededBoard(ordinal: 0);
+
+        BoardTools.BoardPost(
+            "拆开那一发",
+            [
+                new BoardCard { Kind = "note", Text = "拖一格每帧重读物化整张节点表，越拖越贵" },
+                new BoardCard { Kind = "task", Text = "这条改法是逐槽身份校验的惰性缓存\n要你：勾掉即认可" },
+            ],
+            round: "简",
+            board: board);
+
+        var texts = CanvasStore.Load(board).Nodes.Select(node => node.Text ?? string.Empty).ToList();
+
+        Assert.Contains(texts, text => text.Contains("重读物化整张节点表", StringComparison.Ordinal));
+        Assert.Contains(texts, text => text.Contains("要你：勾掉即认可", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_note_needs_no_ask_line_because_it_never_sits_in_his_queue()
+    {        // 结论卡不挂 @b0，不占他的"还欠几格"，所以这一闸不管它——否则每条读数都得编一句假动作。
         var board = SeededBoard(ordinal: 0);
 
         BoardTools.BoardPost(

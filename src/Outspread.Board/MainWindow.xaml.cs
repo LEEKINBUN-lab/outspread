@@ -2435,15 +2435,12 @@ public sealed partial class MainWindow : Window
         SelectionOutline.Opacity = 1;
         SelectionInner.Opacity = 1;
 
-        foreach (var handle in _handles)
-        {
-            HandleLayer.Children.Remove(handle);
-        }
-
-        _handles.Clear();
-
-        // 这一拍在拖动中也会被叫到（OnSurfaceMoved 结算选中框时）：操作条与提议胶囊若在场就跟着
-        // 那一格走——不然它们停在拖中途经的旧位置，画面上的它就指错了格。
+        // 把手**常驻复用**：原来这一发先把 8 枚摘掉、再逐个 MakeHandle 重建一遍——
+        // 而它在拖动中每一帧都会被叫到（OnSurfaceMoved 结算选中框），于是每帧 8 套
+        // Border＋两个形状＋Thickness 全白造。把手形状是常量，只该动位置（10-28 阶段 3）。
+        //
+        // 这一拍在拖动中也会被叫到：操作条与提议胶囊若在场就跟着那一格走——不然它们停在
+        // 拖中途经的旧位置，画面上的它就指错了格。
         EnsureRail();
         PlaceGroupHint();
 
@@ -2456,6 +2453,12 @@ public sealed partial class MainWindow : Window
             SelectionInner.Stroke = null;
             SelectionInner.Width = 0;
             SelectionInner.Height = 0;
+
+            foreach (var handle in _handles)
+            {
+                handle.Visibility = Visibility.Collapsed;
+            }
+
             return;
         }
 
@@ -2493,15 +2496,21 @@ public sealed partial class MainWindow : Window
             (screenLeft, screenTop + (screenHeight / 2), "w"),
         };
 
-        foreach (var (x, y, direction) in anchors)
+        for (var index = 0; index < anchors.Length; index++)
         {
-            var handle = MakeHandle(direction);
+            if (_handles.Count <= index)
+            {
+                var made = MakeHandle(anchors[index].Direction);
 
-            Canvas.SetLeft(handle, x - (SelectionChrome.HandleHitPx / 2));
-            Canvas.SetTop(handle, y - (SelectionChrome.HandleHitPx / 2));
+                HandleLayer.Children.Add(made);
+                _handles.Add(made);
+            }
 
-            HandleLayer.Children.Add(handle);
-            _handles.Add(handle);
+            var handle = _handles[index];
+
+            Canvas.SetLeft(handle, anchors[index].X - (SelectionChrome.HandleHitPx / 2));
+            Canvas.SetTop(handle, anchors[index].Y - (SelectionChrome.HandleHitPx / 2));
+            handle.Visibility = Visibility.Visible;
         }
     }
 

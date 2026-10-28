@@ -335,4 +335,53 @@ public class CanvasDocumentTests
         Assert.Equal(77, document.Nodes[0].X);
         Assert.Equal(77, document.Find("u111111111111")!.X);
     }
+
+    [Fact]
+    public void The_node_list_is_handed_back_until_the_shape_actually_changes()
+    {
+        /* 10-28：`Nodes` 从"每读一次就为全部节点各 new 一枚包装"改成惰性缓存＋逐槽身份校验。
+           一边是 ArrangeAll、SaveNow、Rebuild、EmptyGroupIds（每次 arrange 两遍）这些热读点，
+           另一边是拖一格每帧几发——省的是每帧成百上千枚短命对象的分配与随之而来的 GC。 */
+        var document = CanvasDocument.Parse(SampleJson);
+        var first = document.Nodes;
+
+        Assert.Same(first, document.Nodes);          // 缓存成立：交回同一份
+
+        document.Find("u111111111111")!.X = 55;      // 只改值、不换槽 → 缓存不该作废
+        Assert.Same(first, document.Nodes);
+        Assert.Equal(55, document.Nodes[0].X);       // 包装是活的，缓存不是快照
+    }
+
+    [Fact]
+    public void A_replacement_that_keeps_the_count_is_still_noticed()
+    {
+        /* 这一发专钉"校验不能只比数量"。删一格再加一格：数量一模一样，槽里的 JSON 对象换了。
+           只比 Count 的校验会把旧包装交回去，界面上那格就永远停在旧内容上——
+           而这种错在 105 个读取点上会以"某块界面不刷新"的形状冒出来，极难归因。 */
+        var document = CanvasDocument.Parse(SampleJson);
+        var before = document.Nodes.ToList();
+
+        document.Remove("u111111111111");
+        document.Add(CanvasNodeKind.Text, 1, 2, 30, 40, id: "n999999999999");
+
+        Assert.Equal(
+            ["a222222222222", "n999999999999"],
+            document.Nodes.Select(node => node.Id).ToArray());
+
+        Assert.NotSame(before[0], document.Nodes[0]);
+    }
+
+    [Fact]
+    public void A_reorder_is_visible_through_the_list_at_once()
+    {
+        var document = CanvasDocument.Parse(SampleJson);
+
+        Assert.Equal("u111111111111", document.Nodes[0].Id);
+
+        document.BringToFront("u111111111111");
+
+        Assert.Equal(
+            ["a222222222222", "u111111111111"],
+            document.Nodes.Select(node => node.Id).ToArray());
+    }
 }

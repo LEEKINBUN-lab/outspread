@@ -27,22 +27,75 @@ public sealed class CanvasDocument
 
     public JsonObject Root => _root;
 
+    /// <summary>缓存的那一份包装列表，与逐槽的 JSON 引用（用来验缓存有没有作废）。</summary>
+    private List<CanvasNode>? _nodesCache;
+
+    private JsonNode?[]? _nodesCacheSlots;
+
+    /// <summary>
+    /// 节点表。**惰性缓存 + 逐槽身份校验**：读的时候先比"数量＋每一槽是不是同一个 JSON 对象"，
+    /// 全都对得上就直接把上一份交回去，不再为每一格 new 一枚包装。
+    /// </summary>
+    /// <remarks>
+    /// 为什么认引用而不是打脏标记：能改这张表的路子有三类，靠人记得通知一定会漏——
+    /// ① 自己的 <c>Add</c>/<c>AppendNode</c>/<c>Remove</c>/<c>Move</c>；
+    /// ② <c>NodeArray</c> 这个口子（<c>PatchApplier</c> 会把它作用在**活动文档**上，增删与整表重排都可能）；
+    /// ③ 整份文档换掉（载入、撤销、恢复、跨板并集）。
+    /// 认引用三类全覆盖：谁把某一槽换成了别的 JSON 对象，这里立刻看出来。
+    /// 只改值（patch 写某个字段）不换引用，包装本来就是活的，天然正确。
+    /// </remarks>
     public IReadOnlyList<CanvasNode> Nodes
     {
         get
         {
-            var list = new List<CanvasNode>(_nodes.Count);
-
-            foreach (var item in _nodes)
+            if (_nodesCache is { } cache && SlotsStillMatch())
             {
+                return cache;
+            }
+
+            var list = new List<CanvasNode>(_nodes.Count);
+            var slots = new JsonNode?[_nodes.Count];
+
+            for (var index = 0; index < _nodes.Count; index++)
+            {
+                var item = _nodes[index];
+
+                slots[index] = item;
+
                 if (item is JsonObject obj)
                 {
                     list.Add(new CanvasNode(obj));
                 }
             }
 
+            _nodesCache = list;
+            _nodesCacheSlots = slots;
+
             return list;
         }
+    }
+
+    /// <summary>
+    /// 缓存还成不成立：数量一致，且每一槽还是当初那个 JSON 对象（引用比较，不读属性、不分配）。
+    /// 这是"不靠谁通知我"的全部依仗——漏判一条就会把旧包装交回去，所以下面那发测试专钉这一点。
+    /// </summary>
+    private bool SlotsStillMatch()
+    {
+        if (_nodesCacheSlots is not { } slots || slots.Length != _nodes.Count || _nodesCache is not { } cache
+            || cache.Count != slots.Length)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < slots.Length; index++)
+        {
+            if (!ReferenceEquals(slots[index], _nodes[index]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

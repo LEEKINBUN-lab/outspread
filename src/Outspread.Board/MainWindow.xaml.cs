@@ -6179,13 +6179,13 @@ public sealed partial class MainWindow : Window
                         problems.Add($"自动高度以后还差 {fit.Total - fit.Visible} 行没地方放（可见 {fit.Visible} / 共 {fit.Total}）");
                     }
 
-                    if (moreAbove is null || moreBelow is null)
+                    // 10-28 起契约变了：渐隐遮罩**只在真要淡的那一面才进树**（构造函数不再预挂两枚空壳，
+                    // 那两枚在多数卡上永远 Collapsed，只占元素）。所以"放得下"的正确形状是**树里没有遮罩**；
+                    // 老断言要求"一直在树上、放得下就 Collapsed"——那正是被这一刀去掉的实现细节。
+                    // 这个断言比老的更紧：现在还挂着就是多挂了。
+                    if (moreAbove is not null || moreBelow is not null)
                     {
-                        problems.Add("便签上没有溢出渐隐遮罩（OverflowFadeAbove/Below）");
-                    }
-                    else if (moreBelow.Visibility != Visibility.Collapsed)
-                    {
-                        problems.Add("放得下的便签仍压着底部渐隐遮罩");
+                        problems.Add("放得下的便签仍挂着溢出渐隐遮罩（放得下就该一个都没有）");
                     }
 
                     if (card.ScrollByLines(1))
@@ -8747,24 +8747,44 @@ public sealed partial class MainWindow : Window
 
         // 内存账：他现在 200MB 上下，先量清楚是谁占的——每格视觉里到底挂了几个元素。
         // 计数那一句在 CountDescendants（平移探针要报同一个数，两边必须同尺）。
-        // 一格到底挂了哪些元素：按类型数一遍，才知道该削谁。
-        static void Histogram(DependencyObject root, Dictionary<string, int> into)
+        //
+        // 直方图按"这一发有没有参与合成"分成两套。以前只报一个"31"，把**挂在树上的空壳**
+        // （非组卡的名牌、描边、抓手、渐隐…）和**真在屏幕上的东西**混成一个数，
+        // 于是"该削谁"是照着错的数判断的（10-28 阶段 0）。
+        static void Histogram(DependencyObject root, bool shows, Dictionary<string, int> on, Dictionary<string, int> off)
         {
+            var into = shows ? on : off;
             var name = root.GetType().Name;
+
             into[name] = into.TryGetValue(name, out var seen) ? seen + 1 : 1;
 
             for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
             {
-                Histogram(VisualTreeHelper.GetChild(root, i), into);
+                var child = VisualTreeHelper.GetChild(root, i);
+
+                // 一层 Collapsed 把它整棵子树都挡掉，所以标志要往下传。
+                Histogram(child, shows && child is not UIElement { Visibility: not Visibility.Visible }, on, off);
             }
         }
 
         if (_realized.Values.FirstOrDefault() is { } sample)
         {
-            var histogram = new Dictionary<string, int>(StringComparer.Ordinal);
-            Histogram(sample, histogram);
-            Diagnostics.Write("perf 单格元素: " + string.Join("、", histogram.OrderByDescending(pair => pair.Value).Select(pair => $"{pair.Key}×{pair.Value}")));
+            var onTree = new Dictionary<string, int>(StringComparer.Ordinal);
+            var offTree = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            Histogram(sample, sample.Visibility == Visibility.Visible, onTree, offTree);
+
+            string Format(Dictionary<string, int> into) => string.Join("、",
+                into.OrderByDescending(pair => pair.Value).Select(pair => $"{pair.Key}×{pair.Value}"));
+
+            Diagnostics.Write($"perf 单格元素（参与合成 {onTree.Values.Sum()} 个）: {Format(onTree)}");
+            Diagnostics.Write($"perf 单格元素（挂在树上但被挡掉 {offTree.Values.Sum()} 个）: {Format(offTree)}");
         }
+
+        // 整板：离屏卡占了多少元素——这一数是"摘子树能省多少"的上限，也是"懒挂能省多少"的分母。
+        var offCards = _realized.Where(pair => pair.Value.Visibility != Visibility.Visible).ToList();
+        var offElements = offCards.Sum(pair => CountDescendants(pair.Value));
+        var allElements = CountDescendants(PanLayer);
 
         var process = System.Diagnostics.Process.GetCurrentProcess();
         Diagnostics.Write($"perf 内存细分: 私有 {process.PrivateMemorySize64 / 1048576}MB · 提交 {process.VirtualMemorySize64 / 1048576}MB · 托管 {GC.GetTotalMemory(false) / 1048576}MB");
@@ -8773,7 +8793,9 @@ public sealed partial class MainWindow : Window
             .Select(module => $"{module.ModuleName} {module.ModuleMemorySize / 1048576}MB");
         Diagnostics.Write("perf 大模块: " + string.Join("、", heavy));
         Diagnostics.Write($"perf 模块: {System.Diagnostics.Process.GetCurrentProcess().Modules.Count} 个模块");
-        Diagnostics.Write($"perf 内存: 常驻 {process.WorkingSet64 / 1048576}MB · 托管堆 {GC.GetTotalMemory(false) / 1048576}MB · 板面元素 {CountDescendants(PanLayer)} 个 · 每格均 {CountDescendants(PanLayer) * 1.0 / Math.Max(1, _realized.Count):0.#} 个");
+        Diagnostics.Write($"perf 内存: 常驻 {process.WorkingSet64 / 1048576}MB · 托管堆 {GC.GetTotalMemory(false) / 1048576}MB · " +
+            $"板面元素 {allElements} 个（参与合成 {allElements - offElements} 个／离屏挂着 {offElements} 个、离屏卡 {offCards.Count} 枚）" +
+            $"· 每格均 {allElements * 1.0 / Math.Max(1, _realized.Count):0.#} 个");
 
         Diagnostics.Write("PERF DONE");
     }

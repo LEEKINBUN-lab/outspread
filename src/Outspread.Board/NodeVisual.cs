@@ -450,9 +450,11 @@ public sealed class NodeVisual : ContentControl
         _paint.Children.Add(_bands);
         _paint.Children.Add(_surface);
         _paint.Children.Add(_press);
-        _paint.Children.Add(_frame);
-        _paint.Children.Add(_grab);
-        _paint.Children.Add(_namePlate);
+
+        // `_frame` / `_grab` / `_namePlate` 不再在这里挂：普通卡上它们是**空壳**（名牌的 Child
+        // 恒为 null、另两枚恒 Collapsed），挂在树里只让每一帧多走、多合成几个元素。
+        // 它们改由 AttachChrome 在第一次真要用时按 ChromeOrderOf 的层序插进去（只有组卡会用）；
+        // 层序不变，所以画面不动一个像素。10-28 阶段 1（见 plans/inland-jungle-gull.md）。
         // Once, here. It used to hang off Update behind a `!_dueBar.IsLoaded` guard, which is not a
         // membership test: a card updated twice before the tree has loaded — which is what a rebuild
         // inside one synchronous pass does — took IsLoaded as false and added a rectangle that was
@@ -1241,8 +1243,17 @@ public sealed class NodeVisual : ContentControl
         var isGroup = Kind == CanvasNodeKind.Group;
 
         // A group is a container: no fill, no paper, only a dashed frame and its name.
-        _frame.Visibility = isGroup ? Visibility.Visible : Visibility.Collapsed;
-        _frame.Stroke = new SolidColorBrush(NoteStyling.FallbackLine());
+        // 组才画虚线框、也才造那枚刷；普通卡上这枚矩形根本不进树（见构造函数那段）。
+        if (isGroup)
+        {
+            AttachChrome(_frame);
+            _frame.Visibility = Visibility.Visible;
+            _frame.Stroke = new SolidColorBrush(NoteStyling.FallbackLine());
+        }
+        else
+        {
+            _frame.Visibility = Visibility.Collapsed;
+        }
         _surface.Background = isGroup ? new SolidColorBrush(Colors.Transparent) : PaperFor(surface);
         _surface.BorderBrush = new SolidColorBrush(NoteStyling.FallbackLine());
 
@@ -1659,6 +1670,10 @@ public sealed class NodeVisual : ContentControl
     /// </summary>
     private void PaintGroupPlate(CanvasNode node, BoardViewState view, NoteType type, Display display)
     {
+        // 名牌与环带只有组要；进树这一步放在这里（构造函数不再预挂那两枚空壳）。
+        AttachChrome(_namePlate);
+        AttachChrome(_grab);
+
         // 组名和正文走同一把世界尺：换档不动字号，屏幕上的大小归内容层那枚变换。
         _label.FontSize = type.Size;
         _label.LineHeight = type.Leading;
@@ -1778,13 +1793,33 @@ public sealed class NodeVisual : ContentControl
     {
         var textCard = ShowText && Kind != CanvasNodeKind.Group;
 
-        AttachChrome(_fadeAbove);
-        AttachChrome(_fadeBelow);
         // 渐隐只取决于"内容画不画得下"，与 zoom 无关（他 10-27 的工单：缩放时看到的必须是同一张卡）。
         // 以前这里有一道 view.Zoom >= 0.5 的门槛：缩到总览那一档，淡出变成硬切一行，
         // 于是每一档缩放都要重算一遍——既改内容又花计算。
         var above = textCard && _firstLine > 0;
         var below = textCard && _hasMore;
+
+        // 只有真要淡的那一面才进树（两条带各带一枚渐变刷）。以前是无条件挂两条、再按需 Collapsed——
+        // 绝大多数卡不溢出，挂上去的两枚纯属占元素。10-28 阶段 1。
+        if (above)
+        {
+            AttachChrome(_fadeAbove);
+        }
+        else if (_paint.Children.Contains(_fadeAbove))
+        {
+            // AttachChrome 是单向的（挂上就不摘），所以"曾经溢出过、后来放得下"的卡会一直留着它。
+            // 这一步把"不再需要"也真的还回去——否则这一刀只把首帧的空壳推迟了，没省到。
+            _paint.Children.Remove(_fadeAbove);
+        }
+
+        if (below)
+        {
+            AttachChrome(_fadeBelow);
+        }
+        else if (_paint.Children.Contains(_fadeBelow))
+        {
+            _paint.Children.Remove(_fadeBelow);
+        }
 
         _fadeAbove.Visibility = above ? Visibility.Visible : Visibility.Collapsed;
         _fadeBelow.Visibility = below ? Visibility.Visible : Visibility.Collapsed;

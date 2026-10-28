@@ -216,8 +216,11 @@ def write_sidecar(board, zoom, world):
     sidecar.write_text(json.dumps(existing, ensure_ascii=False), encoding="utf-8")
 
 
-def one_run(exe, board, log, zoom, world, gesture, seconds, flags=(), settle=2.2):
-    """跑一档：摆好相机 → 起界面 → 并发采 GPU 与进程 CPU → 读回探针那一行。"""
+def one_run(exe, board, log, zoom, world, gesture, seconds, flags=(), settle=2.2, ablate=""):
+    """跑一档：摆好相机 → 起界面 → 并发采 GPU 与进程 CPU → 读回探针那一行。
+
+    `ablate` 只给阶段 0 的归因消融用：经环境变量把某一层临时关掉（产品默认路径上什么都不关）。
+    """
     write_sidecar(board, zoom, world)
 
     before = log.stat().st_size if log.exists() else 0
@@ -229,7 +232,9 @@ def one_run(exe, board, log, zoom, world, gesture, seconds, flags=(), settle=2.2
 
     # 静置那一档要等得更久：起来头几秒里还有自愈（往稳定目录拷 42MB）、快捷方式对齐、
     # JIT 与首帧重建。拿 2.2 秒就去采，量到的是"开机"不是"静置"——21% 就是这么冒出来的。
-    proc = subprocess.Popen([exe, "--board", str(board), *extra])
+    proc = subprocess.Popen(
+        [exe, "--board", str(board), *extra],
+        env={**os.environ, "OUTSPREAD_ABLATE": ablate})
     time.sleep(14.0 if gesture == "idle" else settle)
 
     cpu = {}
@@ -372,6 +377,11 @@ def main():
             print(f"{'':<18}└ {runs[len(runs) // 2]['band']}")
 
         return 0
+
+    # 归因消融的读数（10-28，4 发中位；装置已随产品钩子一起删掉，这里只留结论）：
+    #   平移 100%、28 格可见：基线 CPU 41.17% → 关掉文字 20.47%（−20.7 点）、关阴影 +1.5 点。
+    #   ⇒ 平移那 41% 里**一半是文字那一层**，阴影不是。点阵/暗角/纸面的单发差异在 ±5 点噪声之内，
+    #     不够下结论（第一版 2 发跑出过反号）。要重跑就把产品里的 OUTSPREAD_ABLATE 钩子加回来。
 
     if args.shapes:
         shapes = [

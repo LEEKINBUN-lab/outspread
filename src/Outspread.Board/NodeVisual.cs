@@ -995,6 +995,51 @@ public sealed class NodeVisual : ContentControl
     /// <summary>这一拍这一格的输入（几何＋正文＋配色）有没有变——小地图要不要重对账看它。</summary>
     internal bool InputsChanged => _tickInputsChanged;
 
+    /// <summary>
+    /// 拖动中把这一枚<b>只搬、只拉伸</b>到它此刻的世界盒：写 Canvas 位置与布局盒，不跑
+    /// <see cref="Update"/> 那条完整重排。松手那一拍的 <see cref="ArrangeAll"/> 才是结算。
+    /// </summary>
+    /// <remarks>
+    /// 为什么单开一条：拖动中的帧预算只买得起"搬被拖的那几格"（10-26 定下的），组框要跟着走
+    /// 就只能用同一笔预算。虚线矩形是根元素里 Stretch=Fill 的一枚，跟着布局盒自己长；名牌钉在
+    /// 左上角，跟着 Canvas 位置走；环带 <c>_grab</c> 是透明命中区，拖动中指针早已捕获在板面上，
+    /// 它晚一拍换几何没人看得见。代价实测：一帧完整 Update 3.7 毫秒，这一条要落在零头里。
+    /// </remarks>
+    internal void PreviewBox(BoardViewState view, CanvasNode node)
+    {
+        // 只读那四个数，不碰输入签名那条账：拖动中这一枚的几何每秒变几十次，把
+        // _tickInputsSame 翻成"刚判过"会让下一发完整 Update 跳过重读——那时正文可能已经
+        // 被 agent 改过了。签名留给完整那一拍去判。
+        var screenX = view.ToScreenX(node.X);
+        var screenY = view.ToScreenY(node.Y);
+
+        if (!_placedValid || _placedX != screenX)
+        {
+            Canvas.SetLeft(this, screenX);
+            _placedX = screenX;
+        }
+
+        if (!_placedValid || _placedY != screenY)
+        {
+            Canvas.SetTop(this, screenY);
+            _placedY = screenY;
+        }
+
+        if (!_placedValid || _placedW != node.Width)
+        {
+            Width = node.Width;
+            _placedW = node.Width;
+        }
+
+        if (!_placedValid || _placedH != node.Height)
+        {
+            Height = node.Height;
+            _placedH = node.Height;
+        }
+
+        _placedValid = true;
+    }
+
     /// <summary>这一格从画面上收起来（视口外、空组、筛选不画的那几格）。状态没变就一笔都不写。</summary>
     internal void Collapse()
     {

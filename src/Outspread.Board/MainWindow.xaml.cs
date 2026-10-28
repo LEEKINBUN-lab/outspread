@@ -1352,6 +1352,9 @@ public sealed partial class MainWindow : Window
         e.Handled = true;
     }
 
+    /// <summary>拖动中"这一帧重贴过组框"的帧数——探针要报出它量的那一发到底有没有牵到框。</summary>
+    private int _hugFrames;
+
     private void OnSurfaceMoved(object sender, PointerRoutedEventArgs e)
     {
         var screen = e.GetCurrentPoint(BoardArea).Position;
@@ -1492,9 +1495,88 @@ public sealed partial class MainWindow : Window
             }
         }
 
+        // 框跟着走（他 10-28 报的"拖动的时候分组边框会留在原地"）：被拖的格子每动一帧，
+        // 这一步牵到的那几枚框就按成员包围盒重贴一次。画面那一头走 PreviewBox——只搬、只拉伸，
+        // 不跑完整重排（那一版实测每帧多付 3.7ms，这一版 2.2ms；松手那一拍照旧结算一次）。
+        if (gesture.HugFrames is { Count: > 0 } hugs)
+        {
+            _hugFrames++;
+
+            foreach (var hug in hugs)
+            {
+                if (NodeOf(hug.FrameId) is not { } frame)
+                {
+                    continue;
+                }
+
+                var members = new List<Grouping.Rect>(hug.MemberIds.Count);
+
+                foreach (var memberId in hug.MemberIds)
+                {
+                    if (NodeOf(memberId) is { } member)
+                    {
+                        members.Add(RectOf(member));
+                    }
+                }
+
+                if (members.Count == 0)
+                {
+                    continue;
+                }
+
+                var box = Grouping.Enclose(frame.Id, members);
+
+                frame.X = box.X;
+                frame.Y = box.Y;
+                frame.Width = box.Width;
+                frame.Height = box.Height;
+
+                if (_realized.TryGetValue(frame.Id, out var frameVisual))
+                {
+                    frameVisual.PreviewBox(_view, frame);
+                }
+            }
+        }
+
         DrawGuides(guides);
         PaintLinks();
         ProjectSelection();
+    }
+
+    /// <summary>
+    /// 这一步拖动会牵动哪几枚组框、按下那一刻各框的成员是谁。成员按<b>按下那一拍</b>抄一份：
+    /// 拖中途经别人的框不当场收人，那还是松手 <see cref="RefitFrames"/> 的事，所以结算结果与
+    /// 加这一段之前逐字节相同——变的只是拖动过程中看得见的那一拍。
+    /// </summary>
+    private IReadOnlyList<NodeHug> HugFramesFor(GroupMap map, IEnumerable<string> draggedIds, CanvasNode pressed)
+    {
+        var frames = new List<NodeHug>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        void Adopt(string? frameId)
+        {
+            if (frameId is null || !seen.Add(frameId) || NodeOf(frameId) is null)
+            {
+                return;
+            }
+
+            frames.Add(new NodeHug(frameId, [.. map.MemberIds(frameId)]));
+        }
+
+        if (pressed.Kind == CanvasNodeKind.Group)
+        {
+            Adopt(pressed.Id);
+        }
+
+        foreach (var draggedId in draggedIds)
+        {
+            if (NodeOf(draggedId) is { Kind: not CanvasNodeKind.Group } note)
+            {
+                Adopt(map.GroupOf(RectOf(note))?.Id);
+            }
+        }
+
+        return frames;
     }
 
     private void OnSurfaceReleased(object sender, PointerRoutedEventArgs e)
@@ -2218,14 +2300,15 @@ public sealed partial class MainWindow : Window
         // 普通拖动要记住"这一格此刻在谁的框里、那框此刻都有谁"：松手时如果它被甩出了框，
         // 框跟着长（sticky）而不是把它踢出去——拆组只归组钮那一条路（NoteActionRail.cs）。
         var startRect = RectOf(pressedNode);
+        var groupMap = Groups();
         var startGroup = pressedNode.Kind == CanvasNodeKind.Group
             ? null
-            : Groups().GroupOf(startRect);
+            : groupMap.GroupOf(startRect);
         IReadOnlyList<string>? startMembers = null;
 
         if (startGroup is { } sg)
         {
-            startMembers = [.. Groups().Members(sg.Id).Select(member => member.Id)];
+            startMembers = [.. groupMap.MemberIds(sg.Id)];
         }
 
         _nodeDragStarted = false;
@@ -2237,7 +2320,8 @@ public sealed partial class MainWindow : Window
             id,
             GroupMode: false,
             StartGroupId: startGroup?.Id,
-            StartMembers: startMembers);
+            StartMembers: startMembers,
+            HugFrames: HugFramesFor(groupMap, startGeometry.Keys, pressedNode));
 
         ProjectSelection();
 
@@ -7267,6 +7351,9 @@ public sealed partial class MainWindow : Window
         // 单击选中不许把格子挪走：没过 4 像素的那一发是手抖（10-24 他报的第三格）。
         SelfTestClickDoesNotNudge(problems);
 
+        // 拖的时候组框要跟着走，不许那条虚线停在按下时的位置（10-28 他报的第一格）。
+        SelfTestFrameFollowsDuringDrag(problems);
+
         // 删除那一发连选中框一起淡，投影要把框抬回来（10-24 他报的第四格）。
         SelfTestChromeComesBackAfterFade(problems);
 
@@ -8184,6 +8271,141 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 拖动的时候组框要跟着走：被拖那一格每动一帧，框就贴回成员此刻的包围盒。
+    /// 他 10-28 报"拖动的时候分组边框会留在原地"——原来只有松手那一拍才 <see cref="RefitFrames"/>，
+    /// 整段拖动里那条虚线一直停在按下时的位置。
+    /// </summary>
+    /// <remarks>
+    /// 两头都判：<b>文档里</b>那枚框 == Enclose(成员现在的矩形)，且<b>画面上</b>那枚矩形同尺寸
+    /// （只改文档不改画面等于没改，他看的是画面）。挑最右那一枚往右拖 60 屏幕像素——这一发必然
+    /// 让框变宽，所以"框没动"当场红，不会因为吸附或方向巧合成一发假绿。
+    /// </remarks>
+    private void SelfTestFrameFollowsDuringDrag(List<string> problems)
+    {
+        // 这一发自己造框、自己拆：自检跑到这里之前，板上原有的组已经被前面那几格挪空了
+        // （10-28 第一发就栽在这儿——GroupRects() 是空的，"不适用"被当成通过）。
+        var pair = BoardNotes()
+            .Where(note => note.Kind == CanvasNodeKind.Text)
+            .OrderBy(note => note.X)
+            .Take(2)
+            .ToList();
+
+        if (pair.Count < 2)
+        {
+            problems.Add("selftest 框随拖动: 这块板上凑不出两格文字，这一发不适用（不是通过）");
+
+            return;
+        }
+
+        var enclosing = Grouping.Enclose(string.Empty, [.. pair.Select(RectOf)]);
+        var frameNode = _document.Add(CanvasNodeKind.Group, enclosing.X, enclosing.Y, enclosing.Width, enclosing.Height);
+        frameNode.Label = "自检框随拖动";
+        frameNode.SetGroupMembers([.. pair.Select(note => note.Id)]);
+
+        // 造完先排一拍：那枚框得有画面上的矩形，下面判"跟着走"才判的是他看见的东西。
+        Rebuild();
+
+        var box = RectOf(frameNode);
+        var roster = pair;
+        var dragged = roster.OrderByDescending(note => note.X + note.Width).First();
+        var savedMembers = roster.ToDictionary(note => note.Id, note => (note.X, note.Y));
+        var savedFrame = (frameNode.X, frameNode.Y, frameNode.Width, frameNode.Height);
+
+        var screen = new Point(
+            _view.ToScreenX(dragged.X + (dragged.Width / 2)),
+            _view.ToScreenY(dragged.Y + (dragged.Height / 2)));
+
+        var startGeometry = new Dictionary<string, (double X, double Y)>(StringComparer.Ordinal)
+        {
+            [dragged.Id] = (dragged.X, dragged.Y),
+        };
+
+        var hugs = HugFramesFor(Groups(), startGeometry.Keys, dragged);
+
+        _nodeGesture = new NodeGesture(
+            _view.ToWorldX(screen.X),
+            _view.ToWorldY(screen.Y),
+            startGeometry,
+            dragged.Id,
+            HugFrames: hugs);
+
+        _nodeDragStarted = false;
+
+        try
+        {
+            if (!hugs.Any(hug => string.Equals(hug.FrameId, box.Id, StringComparison.Ordinal)))
+            {
+                problems.Add(
+                    $"selftest 框随拖动: 按下 {dragged.Id} 那一拍没认出它在刚造的 {box.Id} 名单框里——拖动中自然没人贴那条边");
+            }
+            else
+            {
+                ApplyNodeDrag(new Point(screen.X + 60, screen.Y));
+
+                var expected = Grouping.Enclose(box.Id, [.. roster.Select(RectOf)]);
+
+                if (Math.Abs(frameNode.X - expected.X) > 0.01
+                    || Math.Abs(frameNode.Y - expected.Y) > 0.01
+                    || Math.Abs(frameNode.Width - expected.Width) > 0.01
+                    || Math.Abs(frameNode.Height - expected.Height) > 0.01)
+                {
+                    problems.Add(
+                        $"selftest 框随拖动: 拖到一半，框是 ({frameNode.X:0.##},{frameNode.Y:0.##}) " +
+                        $"{frameNode.Width:0.##}×{frameNode.Height:0.##}，成员包围盒要的是 " +
+                        $"({expected.X:0.##},{expected.Y:0.##}) {expected.Width:0.##}×{expected.Height:0.##}");
+                }
+
+                if (frameNode.Width <= savedFrame.Item3 + 0.01)
+                {
+                    problems.Add(
+                        $"selftest 框随拖动: 把最右那一枚往右拖 60 屏幕像素之后框还是 {frameNode.Width:0.##} 宽" +
+                        $"（按下时 {savedFrame.Item3:0.##}）——那条边留在原地了");
+                }
+
+                var drawnWidth = _realized.TryGetValue(frameNode.Id, out var frameVisual)
+                    ? frameVisual.Width
+                    : 0;
+
+                if (frameVisual is null)
+                {
+                    problems.Add("selftest 框随拖动: 那枚框没实格化，画面上没有可跟的矩形（这一发测不了画面）");
+                }
+                else if (Math.Abs(frameVisual.Width - frameNode.Width) > 0.05
+                    || Math.Abs(Canvas.GetLeft(frameVisual) - _view.ToScreenX(frameNode.X)) > 0.05)
+                {
+                    problems.Add(
+                        $"selftest 框随拖动: 文档里框走了，画面上那枚矩形还是 {frameVisual.Width:0.##} 宽、" +
+                        $"左边在 {Canvas.GetLeft(frameVisual):0.##}，而文档要的是 {frameNode.Width:0.##} 宽、" +
+                        $"左边 {(_view.ToScreenX(frameNode.X)):0.##}（布局盒是世界单位，屏幕上的大小归 _paintZoom）");
+                }
+
+                Diagnostics.Write(
+                    $"selftest 框随拖动: 名单框 {box.Id} 里拖 {dragged.Id} 往右 60 屏幕像素，框从 {savedFrame.Item3:0.##} 宽走到 " +
+                    $"{frameNode.Width:0.##} 宽，画面那枚 {drawnWidth:0.##}；一帧只重贴这一枚框，不重排整板");
+            }
+        }
+        finally
+        {
+            foreach (var (id, at) in savedMembers)
+            {
+                if (NodeOf(id) is { } node)
+                {
+                    node.X = at.X;
+                    node.Y = at.Y;
+                }
+            }
+
+            _document.Remove(frameNode.Id);
+
+            _nodeGesture = null;
+            _nodeDragStarted = false;
+
+            Rebuild();
+            ProjectSelection();
+        }
+    }
+
+    /// <summary>
     /// 删除那一发现在连描边与内对比线一起淡（10-24 他点的第四格："便签渐渐没了、套子还在，最后忽然消失"）。
     /// 这两枚是常驻元素、不是每次新建的，所以每一次投影都要把它们抬回满不透明——这一发钉的就是那一句。
     /// </summary>
@@ -8445,9 +8667,13 @@ public sealed partial class MainWindow : Window
             _view.ToWorldX(centre.X),
             _view.ToWorldY(centre.Y),
             new Dictionary<string, (double X, double Y)>(StringComparer.Ordinal) { [node.Id] = (startX, startY) },
-            node.Id);
+            node.Id,
+            // 探针要按生产身份跑：按下那一拍真实路径还会抄一份"这一步牵动哪几枚框"，
+            // 拖动中每帧贴回去。不带上这条，量到的拖动比手上的少一笔。
+            HugFrames: HugFramesFor(Groups(), [node.Id], node));
 
         _nodeDragStarted = false;
+        _hugFrames = 0;
 
         var frames = 0;
 
@@ -8460,7 +8686,8 @@ public sealed partial class MainWindow : Window
                 centre.Y + (Math.Cos(frame / 8.0) * 40)));
         }, () => Diagnostics.Write(
             $"drag 正对照: 第 {frames} 帧，格子从 ({startX:0}，{startY:0}) 走到了 ({node.X:0}，{node.Y:0})" +
-            $"· 拖动已起 {_nodeDragStarted} · 视觉 {(_realized.TryGetValue(node.Id, out var visual) ? $"Canvas.Left {Canvas.GetLeft(visual):0} Top {Canvas.GetTop(visual):0}" : "未实格化")}"));
+            $"· 拖动已起 {_nodeDragStarted} · 其中贴过组框 {_hugFrames} 帧" +
+            $"· 视觉 {(_realized.TryGetValue(node.Id, out var visual) ? $"Canvas.Left {Canvas.GetLeft(visual):0} Top {Canvas.GetTop(visual):0}" : "未实格化")}"));
     });
 
     /// <summary>
@@ -9761,7 +9988,11 @@ internal sealed record NodeGesture(
     string PrimaryId,
     bool GroupMode = false,
     string? StartGroupId = null,
-    IReadOnlyList<string>? StartMembers = null);
+    IReadOnlyList<string>? StartMembers = null,
+    IReadOnlyList<NodeHug>? HugFrames = null);
+
+/// <summary>拖动中要贴回成员的那枚框，与它按下那一刻的成员名单。</summary>
+internal sealed record NodeHug(string FrameId, IReadOnlyList<string> MemberIds);
 
 internal sealed record ResizeGesture(
     string Direction,

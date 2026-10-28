@@ -695,6 +695,8 @@ public sealed partial class MainWindow : Window
     /// </remarks>
     private void Rebuild()
     {
+        _rebuildCalls++;
+
         var started = Stopwatch.GetTimestamp();
 
         // ---- 对账：这一拍的文档 vs 还立着的那些卡片 ----
@@ -945,6 +947,22 @@ public sealed partial class MainWindow : Window
 
     private void ArrangeAll()
     {
+        _arrangeCalls++;
+
+        // 探针期间若有一发整板重排落在"正拖着东西"的那一拍，它就是那帧的贵东西：把来路记一次。
+        // 只在探针跑着的时候抓栈——StackTrace 自己就要花毫秒级，不能挂在他手上那一发上。
+        if (_probeActive && _nodeGesture is not null && !_midDragArrangeLogged)
+        {
+            _midDragArrangeLogged = true;
+
+            Diagnostics.Write(
+                "拖动中途的整板重排，来路：" + string.Join(" ← ", Environment.StackTrace
+                    .Split('\n')
+                    .Where(line => line.Contains("Outspread", StringComparison.Ordinal))
+                    .Take(8)
+                    .Select(line => line.Trim().Split('(')[0].Split('.').Last())));
+        }
+
         var frameAt = Stopwatch.GetTimestamp();
 
         ChromeStyling.Ensure(NoteStyling.IsDark);
@@ -1354,6 +1372,17 @@ public sealed partial class MainWindow : Window
 
     /// <summary>拖动中"这一帧重贴过组框"的帧数——探针要报出它量的那一发到底有没有牵到框。</summary>
     private int _hugFrames;
+
+    /// <summary>整板重排与整板重铸各被叫了几次。探针拿它的逐帧增量回答"那一帧里到底跑了什么"：
+    /// 拖动中途本不该出现 ArrangeAll/Rebuild，出现了就是那一发贵的原因（10-28 查最慢那一帧时装的）。</summary>
+    private int _arrangeCalls;
+
+    private int _rebuildCalls;
+
+    /// <summary>探针在跑（只有这一档才允许抓栈这类贵动作）。</summary>
+    private bool _probeActive;
+
+    private bool _midDragArrangeLogged;
 
     private void OnSurfaceMoved(object sender, PointerRoutedEventArgs e)
     {
@@ -8738,18 +8767,68 @@ public sealed partial class MainWindow : Window
         var started = System.Diagnostics.Stopwatch.StartNew();
         var watch = new System.Diagnostics.Stopwatch();
 
+        _probeActive = true;
+        _midDragArrangeLogged = false;
+
+        // 最慢那一帧要能自己交代：每一拍记下"我们花掉多少毫秒"、"两拍之间实际隔了多少毫秒"，
+        // 以及这一拍里跑了什么（重排／重铸／点阵重画与换尺寸）、分配了多少、GC 收了几次。
+        // 分得开三种贵：我们自己没跑完、布局与合成跑在我们外面、垃圾回收插了一刀。
+        var alloc = GC.GetTotalAllocatedBytes(true);
+        var gen0 = GC.CollectionCount(0);
+        var gen1 = GC.CollectionCount(1);
+        var gen2 = GC.CollectionCount(2);
+        var arrange = _arrangeCalls;
+        var rebuild = _rebuildCalls;
+        var repaints = _gridRepaints;
+        var resized = _gridResized;
+        var lastTickAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        var ticks = new List<(int Frame, double Ms, double Gap, double AllocKb, int G0, int G1, int G2, int Arrange, int Rebuild, int Repaint, int Resize)>();
+
         timer.Interval = TimeSpan.FromMilliseconds(16);
         timer.IsRepeating = true;
 
         timer.Tick += (_, _) =>
         {
+            var nowTick = System.Diagnostics.Stopwatch.GetTimestamp();
+            var gap = Ticks(nowTick - lastTickAt);
+            lastTickAt = nowTick;
+
             watch.Restart();
             step(frames);
             watch.Stop();
 
+            var ms = watch.Elapsed.TotalMilliseconds;
+
+            // 分配量**不按每拍取**：GC.GetTotalAllocatedBytes(true) 自己就要毫秒级，挂在每一拍上
+            // 就把要量的东西量贵了（10-28 中过一次：仪器加进去之后帧间隔从 17.6ms 变 30.4ms）。
+            // 这里只在每 32 拍取一次，摊到那一段上；总数在收场那一发再取一次。
+            var nowAlloc = frames % 32 == 0 ? GC.GetTotalAllocatedBytes(true) : alloc;
+
+            ticks.Add((
+                frames,
+                ms,
+                gap,
+                (nowAlloc - alloc) / 1024.0,
+                GC.CollectionCount(0) - gen0,
+                GC.CollectionCount(1) - gen1,
+                GC.CollectionCount(2) - gen2,
+                _arrangeCalls - arrange,
+                _rebuildCalls - rebuild,
+                _gridRepaints - repaints,
+                _gridResized - resized));
+
+            alloc = nowAlloc;
+            gen0 = GC.CollectionCount(0);
+            gen1 = GC.CollectionCount(1);
+            gen2 = GC.CollectionCount(2);
+            arrange = _arrangeCalls;
+            rebuild = _rebuildCalls;
+            repaints = _gridRepaints;
+            resized = _gridResized;
+
             frames++;
-            total += watch.Elapsed.TotalMilliseconds;
-            slowest = Math.Max(slowest, watch.Elapsed.TotalMilliseconds);
+            total += ms;
+            slowest = Math.Max(slowest, ms);
 
             if (started.Elapsed.TotalMilliseconds < milliseconds)
             {
@@ -8763,6 +8842,27 @@ public sealed partial class MainWindow : Window
             Diagnostics.Write(
                 $"{label} {milliseconds}ms: {frames} 帧 · 每帧均 {total / Math.Max(1, frames):0.###}ms 最慢 {slowest:0.###}ms · " +
                 $"缩放 {Percent()} · 实格 {_realized.Count} 枚 · 可见 {VisibleNotes()} 枚 · 板面元素 {CountDescendants(PanLayer)} 个");
+
+            // 前 100 帧是暖机（入场渐隐、首次光栅化、JIT），把它和稳态分开：
+            // 他要的是"我平时拖/滚的时候掉不掉帧"，暖机的洞不算那一账。
+            var steady = ticks.Where(item => item.Frame >= 100).ToList();
+            var slowestFrames = steady.OrderByDescending(item => item.Gap).Take(5).ToList();
+            var overBudget = ticks.Count(item => item.Gap > 20);
+            var steadyOver = steady.Count(item => item.Gap > 25);
+
+            Diagnostics.Write(
+                $"{label} 帧间隔: 全发中位 {Median(ticks.Select(item => item.Gap).ToList()):0.##}ms · 超 20ms 的 {overBudget} 帧 · " +
+                $"稳态（第 100 帧之后共 {steady.Count} 帧）中位 {Median(steady.Select(item => item.Gap).ToList()):0.##}ms、超 25ms 的 {steadyOver} 帧、" +
+                $"最坏 {(steady.Count == 0 ? 0 : steady.Max(item => item.Gap)):0.##}ms · " +
+                $"总分配 {ticks.Sum(item => item.AllocKb) / 1024:0.##}MB · GC {ticks.Sum(item => item.G0)}/{ticks.Sum(item => item.G1)}/{ticks.Sum(item => item.G2)}（0/1/2 代）");
+
+            foreach (var item in slowestFrames)
+            {
+                Diagnostics.Write(
+                    $"  {label} 稳态第 {item.Frame} 帧：隔 {item.Gap:0.##}ms，其中我们 {item.Ms:0.##}ms · 分配 {item.AllocKb / 1024:0.##}MB · " +
+                    $"GC {item.G0}/{item.G1}/{item.G2} · 重排 {item.Arrange} 次 · 重铸 {item.Rebuild} 次 · 点阵 {item.Repaint}（换尺寸 {item.Resize}）");
+            }
+
             Diagnostics.Write("PAN DONE");
 
             // 探针必须自己收场：WinUI 3 关掉最后一扇窗口并不会结束进程，留着它就是一个
@@ -8771,6 +8871,20 @@ public sealed partial class MainWindow : Window
         };
 
         timer.Start();
+    }
+
+    /// <summary>一批发里的中位数（帧间隔那种"平均会被一两发尖峰带跑"的量，要看中位）。</summary>
+    private static double Median(List<double> values)
+    {
+        if (values.Count == 0)
+        {
+            return 0;
+        }
+
+        var sorted = values.Order().ToList();
+        var middle = sorted.Count / 2;
+
+        return sorted.Count % 2 == 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
     }
 
     /// <summary>

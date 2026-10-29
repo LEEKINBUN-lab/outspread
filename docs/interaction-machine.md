@@ -21,6 +21,7 @@ App 现在的交互不是没有，是**散在十个字段里**：`_marqueeing`�
 | `Editing(id)` | TextBox | 双击格、F2、新建即编辑 | Ctrl+Enter/点到别处＝提交；Esc＝放弃 |
 | `Finding` | 查找框 | 查找命令 | Enter 跳、Esc 关 |
 | `Menu` | 菜单（模态） | 静止右键松手 | 任一项/点外面/Esc → 回原态 |
+| `Presenting` | 演示键位层（`←/→/空格/翻页键/Home/End` 先于普通键位表与普通 `Esc`——10-30 夜加的演示模式） | `Alt+P`（板上有成员的组才算得出页，Core `Presenting`） | `Esc` 或再按 `Alt+P` → 回原态（相机与被藏的界面按进场记录还原；`←/→` 滑页途中指针/滚轮一动即弃飞交回 interactive） |
 
 `Pointer` 只在 travel 过 4px 阈值后才算**开始**（`BoardGestures.DragThresholdPx`）。没过的按下不是手势，是一次"点"——这一条把现在散在各处的 `if (IsDrag(travel))` 收成一个地方。
 

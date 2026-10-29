@@ -5189,9 +5189,9 @@ public sealed partial class MainWindow : Window
 
     private void EnterPresent()
     {
-        var pages = Presenting.SlidesOf(_document).Count;
+        var pages = Presenting.SlidesOf(_document);
 
-        if (pages == 0)
+        if (pages.Count == 0)
         {
             Say("这块板上一枚有成员的组都没有：演示按组走（一轮一组），先成组再按 Alt+P。");
 
@@ -5226,8 +5226,8 @@ public sealed partial class MainWindow : Window
             Diagnostics.Write($"present: 全屏没成（{ex.GetType().Name}），照常演示");
         }
 
-        PresentShow();
-        Say($"演示中：←/→ 或空格翻页、Esc 退出（共 {pages} 页）");
+        PresentShow(pages);
+        Say($"演示中：←/→ 或空格翻页、Esc 退出（共 {pages.Count} 页）");
     }
 
     private void ExitPresent()
@@ -5273,25 +5273,24 @@ public sealed partial class MainWindow : Window
         }
 
         _presentIndex = Math.Clamp(_presentIndex + delta, 0, pages.Count - 1);
-        PresentShow();
+        PresentShow(pages);
         Say($"第 {_presentIndex + 1}/{pages.Count} 页 · {pages[_presentIndex].Label}");
     }
 
     /// <summary>把当前页取景：成员盒并集装进视口（四周留 48px），居中。与 ResetView 同一套相机账。
-    /// 相机不再瞬移——交给 <see cref="GlideTo"/> 逐帧滑过去（Miro/tldraw 的演示都是滑的，瞬移是 v1 偷的懒）。</summary>
-    private void PresentShow()
+    /// 相机不再瞬移——交给 <see cref="GlideTo"/> 逐帧滑过去（Miro/tldraw 的演示都是滑的，瞬移是 v1 偷的懒）。
+    /// 页表由调用方交进来：翻一页只算一次账，不在这里再算一遍。</summary>
+    private void PresentShow(IReadOnlyList<Presenting.Slide> pages)
     {
-        var slides = Presenting.SlidesOf(_document);
-
-        if (slides.Count == 0)
+        if (pages.Count == 0)
         {
             ExitPresent();
 
             return;
         }
 
-        _presentIndex = Math.Clamp(_presentIndex, 0, slides.Count - 1);
-        var bounds = slides[_presentIndex].Bounds;
+        _presentIndex = Math.Clamp(_presentIndex, 0, pages.Count - 1);
+        var bounds = pages[_presentIndex].Bounds;
 
         var width = Math.Max(1, BoardArea.ActualWidth - 96);
         var height = Math.Max(1, BoardArea.ActualHeight - 96);

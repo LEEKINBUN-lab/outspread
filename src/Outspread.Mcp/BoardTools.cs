@@ -45,6 +45,7 @@ public sealed class BoardTools
         [Description("这一组的小标题，会成为横贯一行那枚卡；只写「这组是关于什么的」")] string title,
         [Description("要落的卡片，每条一个对象：{kind, text}。text 里只装这一件事，最多 4 折行。")] BoardCard[] cards,
         [Description("轮次短标签，几个字即可（会打成 @t标签，他用筛选面板按它只看这一轮）。不填＝agent。")] string? round = null,
+        [Description("署名：哪个 agent 写的（打成 @tby-名字，他和别的 agent 用 board_search \"@by-名字\" 只看这一家的卡）。同一台机器几路 agent 各写各的，不署名就分不清谁写的。不填＝不署。")] string? agent = null,
         [Description("画板文件路径。不填就落到你的「Agent 出口」板（没有会自动建）。")] string? board = null,
         [Description("一行摆几张卡，1 到 4，默认 3。")] int columns = 3)
     {
@@ -60,6 +61,8 @@ public sealed class BoardTools
 
         var path = ResolveBoard(board);
         var tag = "@t" + NormaliseTag(round is { Length: 0 } or null ? "agent" : round!);
+        // 署名是第二枚标签（@tby-名字），与轮次标签并排：他按轮次筛、别的 agent 按署名筛，两把尺互不妨碍。
+        var stamps = string.IsNullOrWhiteSpace(agent) ? tag : $"{tag} @tby-{NormaliseTag(agent!)}";
         var document = CanvasStore.LoadOrCreate(path);
 
         var (left, top) = FreeColumnBelow(document);
@@ -122,7 +125,7 @@ public sealed class BoardTools
             if (stamped)
             {
                 ordinal = ++seq;
-                marks = kind == "note" ? $"{tag} @n{ordinal}" : $"{tag} @n{ordinal} @b0";
+                marks = kind == "note" ? $"{stamps} @n{ordinal}" : $"{stamps} @n{ordinal} @b0";
             }
 
             prepared.Add((
@@ -156,7 +159,7 @@ public sealed class BoardTools
 
         var additions = new List<AddedNode>
         {
-            Card(titleId, left, top, $"### {title}\n\n{tag}\n{DateTime.Now:yyyy-MM-dd HH:mm}", rowWidth, 88),
+            Card(titleId, left, top, $"### {title}\n\n{stamps}\n{DateTime.Now:yyyy-MM-dd HH:mm}", rowWidth, 88),
         };
 
         var rowTop = top + 88 + ColumnGap;
@@ -202,7 +205,7 @@ public sealed class BoardTools
 
         CanvasStore.SavePatch(path, patch);
 
-        return $"已写到 {path}\n标签：{tag}\n分组：「{title.Trim()}」（{members.Count} 格）\n落了 {written.Count} 条 + 1 枚标题卡（一行 {across} 张，满行换行）：\n{string.Join("\n", written)}";
+        return $"已写到 {path}\n标签：{stamps}\n分组：「{title.Trim()}」（{members.Count} 格）\n落了 {written.Count} 条 + 1 枚标题卡（一行 {across} 张，满行换行）：\n{string.Join("\n", written)}";
     }
 
     [McpServerTool(Name = "board_archive"), Description(
@@ -694,6 +697,7 @@ public sealed class BoardTools
         [Description("格子编号")] string id,
         [Description("新正文；不填就不动")] string? text = null,
         [Description("要加的 @标签（不带 @）")] string? add_tag = null,
+        [Description("署名：这一改是谁做的（补一枚 @tby-名字，重复传同一名字是幂等的）。不填不动标签。")] string? agent = null,
         [Description("true＝标已完成，false＝标未完成，不填＝不动")] bool? done = null,
         [Description("画板文件路径。不填就用你的「Agent 出口」板。")] string? board = null)
     {
@@ -717,6 +721,12 @@ public sealed class BoardTools
         if (add_tag is { Length: > 0 })
         {
             body = Tags.AddTag(body, add_tag!.TrimStart('@'));
+        }
+
+        if (agent is { Length: > 0 })
+        {
+            // 署名走同一套标签机制（@tby-名字），幂等：同一格反复更新不会叠出一串署名。
+            body = Tags.AddTag(body, "by-" + NormaliseTag(agent));
         }
 
         if (done is { } finished)

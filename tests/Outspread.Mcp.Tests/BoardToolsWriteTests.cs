@@ -448,6 +448,40 @@ public sealed class BoardToolsWriteTests : IDisposable
         Assert.DoesNotContain("@b0", landed!, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void A_signed_post_stamps_the_title_and_every_card_with_the_by_tag()
+    {
+        var board = SeededBoard(ordinal: 0);
+
+        BoardTools.BoardPost(
+            "署名",
+            [Card("note", "这一格带着署名")],
+            round: "署名",
+            agent: "night-zcode",
+            board: board);
+
+        // 署名是第二枚标签（@tby-名字），与轮次标签并排：他按轮次筛，别的 agent 按署名筛。
+        // 标题卡也得带上——分清"这一组是谁的"从组名那一格开始。
+        Assert.All(
+            CanvasStore.Load(board).Nodes.Select(node => node.Text ?? string.Empty)
+                .Where(text => text.Contains("### 署名") || text.Contains("@n1")),
+            text => Assert.Contains("@tby-night-zcode", text));
+    }
+
+    [Fact]
+    public void A_signed_patch_is_idempotent_about_the_by_tag()
+    {
+        var board = SeededBoard(ordinal: 0);
+
+        BoardTools.BoardPatch("u1", agent: "night-zcode", board: board);
+        BoardTools.BoardPatch("u1", agent: "night-zcode", board: board);
+
+        // 同一格反复更新不该叠出一串署名——AddTag 本身幂等，这条钉的是接线别把它绕开。
+        var text = CanvasStore.Load(board).Nodes.Single(node => node.Id == "u1").Text!;
+
+        Assert.Equal(1, text.Split("@tby-night-zcode").Length - 1);
+    }
+
     /// <summary>
     /// 测试用的卡。三档要挂 @b0 的（decision/risk/task）必须带一行「要你：」，否则 <c>board_post</c>
     /// 那枚闸会把整发拒掉（10-27 加的：我落了两格"记我自己的待办/一条外推曲线"，他读完回的是

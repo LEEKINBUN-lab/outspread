@@ -43,6 +43,10 @@ board_archive(name: 原组名, into_group: 组编号, ids: 该组现有全部成
 ## 3. 落一批新东西
 
 1. `board_post(title, cards, round)` —— 一条一格，满行换行；组名自动带 `MM-dd HH:mm · 标题`。
+   **多 agent 同机必署名**：`board_post(…, agent: 名字)` 打成 `@tby-名字`，改卡用 `board_patch(…, agent: 名字)`
+   补签（幂等）；搜一家的卡：`board_search "@by-名字"`。不署名，几路 agent 的卡在板上分不清谁写的。
+   **先 build 再落**：闸门不刷新仓内的 `outspread-mcp.exe`（第 2 步在影子目录跑测试）——
+   落板前 `dotnet build src/Outspread.Mcp`，别拿旧 exe 发新参数（10-30 夜第一发署名就这么丢的）。
 2. 颜色：`decision` 红（1）＝要他拍、`risk` 橙（2）＝缺陷/没做完/值得告知，其余回答一律蓝（5）。
 3. `board_tidy(gap: 48)` —— 整板横排、满行换行、按落板时间排，块间只留一条缝。**这活是 agent 的，别留给他。**
 4. `board_read()` 回读，把「还欠几格」和格号写进汇报——**这是凭据**。

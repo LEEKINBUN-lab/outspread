@@ -90,27 +90,36 @@ public static class CanvasStore
     /// publishes. Nodes an agent added in the meantime survive; the patch is only
     /// what the human actually did.
     /// </summary>
-    public static (IReadOnlyList<PatchReport> Reports, byte[] WrittenHash) SavePatch(string path, DocPatch patch)
+    /// <returns>
+    /// <paramref name="WrittenJson"/> 是这一发真正落盘的那份 JSON：调用方要"盘上现值"
+    /// （界面拿它当 <c>_baseJson</c>）就用它，不必再回读一遍自己刚写的文件——锁内现成的
+    /// <c>current</c> 已经读过、析过，丢掉重读重析是白花（一次存盘省两读）。
+    /// </returns>
+    public static (IReadOnlyList<PatchReport> Reports, byte[] WrittenHash, string WrittenJson) SavePatch(string path, DocPatch patch)
     {
         var reports = new List<PatchReport>();
 
         if (patch.IsEmpty)
         {
-            return (reports, Array.Empty<byte>());
+            return (reports, Array.Empty<byte>(), string.Empty);
         }
 
-        var writtenHash = Transact(path, _ =>
+        string writtenJson = string.Empty;
+
+        var writtenHash = Transact(path, current =>
         {
-            var onDisk = File.Exists(path)
-                ? CanvasDocument.Parse(ReadAllText(path), path)
+            var onDisk = current.Length > 0
+                ? CanvasDocument.Parse(current, path)
                 : CanvasDocument.CreateNew();
 
             reports.AddRange(PatchApplier.Apply(onDisk, patch));
 
-            return onDisk.ToJson();
+            writtenJson = onDisk.ToJson();
+
+            return writtenJson;
         });
 
-        return (reports, writtenHash);
+        return (reports, writtenHash, writtenJson);
     }
 
     public static string HashHex(byte[] hash) => Convert.ToHexString(hash).ToLowerInvariant();

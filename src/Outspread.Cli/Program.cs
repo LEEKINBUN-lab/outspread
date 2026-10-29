@@ -338,7 +338,7 @@ internal static class Program
 
     private static int Apply(string path, DocPatch patch, string summary)
     {
-        var (reports, _) = CanvasStore.SavePatch(path, patch);
+        var (reports, _, _) = CanvasStore.SavePatch(path, patch);
 
         var failures = reports
             .Where(report => report.Outcome is PatchOutcome.MissingNode or PatchOutcome.AlreadyPresent)

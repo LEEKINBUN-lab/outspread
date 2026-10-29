@@ -76,9 +76,12 @@ public class PatchAndStoreTests
         var patch = DocDiff.Between(baseSnapshot, human);
         Assert.DoesNotContain(patch.Removals, id => id == "a-agent01");
 
-        var (reports, writtenHash) = CanvasStore.SavePatch(scratch.BoardPath, patch);
+        var (reports, writtenHash, writtenJson) = CanvasStore.SavePatch(scratch.BoardPath, patch);
 
         var onDisk = CanvasDocument.Parse(CanvasStore.ReadAllText(scratch.BoardPath));
+
+        // 回传的那份必须就是盘上那一份：界面拿它当 _baseJson，从此不必回读自己刚写的文件。
+        Assert.Equal(CanvasStore.ReadAllText(scratch.BoardPath), writtenJson);
 
         Assert.Equal(77, onDisk.Find(first)!.X);
         Assert.NotNull(onDisk.Find("a-agent01"));

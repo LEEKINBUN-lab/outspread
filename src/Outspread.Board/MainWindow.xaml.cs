@@ -647,10 +647,13 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            var (reports, writtenHash) = CanvasStore.SavePatch(_boardPath, patch);
+            var (reports, writtenHash, writtenJson) = CanvasStore.SavePatch(_boardPath, patch);
 
             _lastWrittenHash = writtenHash;
-            _baseJson = CanvasStore.ReadAllText(_boardPath);
+
+            // 自己刚写的那份就是盘上现值，拿来当基线；再回读一遍是白读（10-29 夜刀二）。
+            // 锁外这一瞬若真有别人抢先写进来，哈希对不上，外来改动那条路会自己走一遍重读。
+            _baseJson = writtenJson;
 
             foreach (var report in reports.Where(report =>
                          report.Outcome is PatchOutcome.MissingNode or PatchOutcome.AlreadyPresent))

@@ -233,7 +233,9 @@ def one_run(exe, board, log, zoom, world, gesture, seconds, flags=(), settle=2.2
     # 静置那一档要等得更久：起来头几秒里还有自愈（往稳定目录拷 42MB）、快捷方式对齐、
     # JIT 与首帧重建。拿 2.2 秒就去采，量到的是"开机"不是"静置"——21% 就是这么冒出来的。
     proc = subprocess.Popen(
-        [exe, "--board", str(board), *extra],
+        # --no-heal：读数的进程不许去对齐"用户点开的那一枚"（10-29 拿临时构建做 A/B 时，
+        # 探针启动顺手把稳定目录换成了那枚临时构建，他再点开就跑到了旧版）。
+        [exe, "--board", str(board), "--no-heal", *extra],
         env={**os.environ, "OUTSPREAD_ABLATE": ablate})
     time.sleep(14.0 if gesture == "idle" else settle)
 

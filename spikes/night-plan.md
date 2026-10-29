@@ -46,14 +46,24 @@
   #降占用 组（a3845849f3c1a）重新归摞（已结 6 格叠起）；五张已勾工单收进「工单 · 你提的五件（已结）」成摞；
   落「夜间第 1 轮 · 刀二刀三落地」@n104–105；tidy 缝 48；inbox 已 ack。
 
-## 待办（按优先级，01:45 更新）
+## 已完成（第 2 轮 · 01:45–02:05）
 
-1. **任务 2 · agent 协作第一轮**：候选见下"agent 协作候选"。最小闭环建议：board_post/patch 支持
-   agent 署名，让多路 agent 的卡一眼分得清是谁写的。
-2. **任务 3 · 商业对标**：tldraw / Miro / FigJam / Heptabase 挑一轮调研＋一项可落地。
-   板上 #成熟件调研 组已有两轮结论（藏字、空间索引、pinch raster）——别重复调研，读那两轮挑**还没做**的。
-3. **#降占用 剩余线索**：aa053c6 提到的"空转同步在 UI 线程做读+析+SHA2"还没动（刀四候选）。
-4. **stash@{0}（WIP on main: f5129df）**：前任会话留的，先 `git stash show -p` 对账再处置。
+- [x] **任务 2 第一轮 · agent 署名（cc39505）**：board_post/board_patch 带可选 `agent` 参数——
+  打成 `@tby-名字` 与轮次标签并排（筛选面板/search 两把尺互不妨碍），patch 侧幂等；
+  两条新测试（盖章＋幂等）在 MCP 写分支过，闸门六步全绿。
+  端到端凭据：新 exe patch 补签两格（@n106 与组标题），`board_search "@by-夜间班"` 搜回两格。
+- [x] 流程坑入 skill：**闸门不刷新仓内 outspread-mcp.exe**（第 2 步影子目录跑测试）——落板前
+  先 `dotnet build src/Outspread.Mcp`；第一发署名就是栽在旧 exe 上丢的。SKILL.md §3 与 AGENTS.md 都补了。
+- [x] 板上：「署名机制自证」组（@n106＋标题）@tby-夜间班 署名；tidy 缝 48；inbox ack。
+  还欠他的 @b0 13 格不变。
+
+## 待办（按优先级，02:05 更新）
+
+1. **任务 3 · 商业对标**：tldraw / Miro / FigJam / Heptabase。**先读板上 #成熟件调研 组的旧结论**
+  （藏字 LOD 已做、空间索引已做、pinch raster 结论已有）——挑还没做的：候选面有 选区批量操作／
+  对齐分布工具／模板库／评论模式（Miro 式 comment pin）／演示模式。挑一晚能落的最小闭环。
+2. **刀四候选**：aa053c6 提到"空转同步在 UI 线程做读+析+SHA2"——读 Sync/空转路径再定性。
+3. **stash@{0}（WIP on main: f5129df）**：先 `git stash show -p` 对账再处置。
 
 ### agent 协作候选（任务 2 素材）
 

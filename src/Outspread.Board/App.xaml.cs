@@ -44,6 +44,38 @@ public partial class App : Application
     /// <summary>自检跑在 %TEMP% 的副本上：它切来切去的那几块板不能写进"上次打开的板"。</summary>
     public static bool SelfTest => SelfTestMode;
 
+    /// <summary>
+    /// 进程码由自定义 <see cref="Program.Main"/> 收尾时读这一笔：heal 那一发不出窗口，
+    /// 活儿的结果只能放在这里带出去（生成的 Main 恒 return 0，会把失败报成全过）。
+    /// </summary>
+    public static int ExitCode { get; private set; }
+
+    /// <summary>
+    /// 诊断那一类启动（探针、<c>--perf</c>、显式 <c>--no-heal</c>）：<b>不许碰稳定目录与开始菜单那枚</b>。
+    /// </summary>
+    /// <remarks>
+    /// 10-29 踩过：拿一份临时构建跑 A/B 截图，它启动时顺手把"日常那份"对齐成了那枚临时构建；
+    /// 他再点开就跑到没有这两刀的那一版，一整轮"为什么完全没感觉"都白问。
+    /// 读数的进程不该有资格改用户点开的那一枚。
+    /// </remarks>
+    private static bool DiagnosticLaunch
+    {
+        get
+        {
+            var args = Environment.GetCommandLineArgs();
+
+            if (PerfMode || args.Contains("--no-heal", StringComparer.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return args.Any(arg => arg.StartsWith("--pan-probe", StringComparison.OrdinalIgnoreCase)
+                || arg.StartsWith("--zoom-probe", StringComparison.OrdinalIgnoreCase)
+                || arg.StartsWith("--drag-probe", StringComparison.OrdinalIgnoreCase)
+                || arg.StartsWith("--zoom-band", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
     /// <summary>进程起来的那一刻，用来把"打开慢"切成几段分别量。</summary>
     private static readonly DateTime Boot = Process.GetCurrentProcess().StartTime;
 
@@ -76,7 +108,7 @@ public partial class App : Application
         // 从开始菜单点开的那一发可能是上一次对齐时的旧构建，而它自己拷不动自己（这份正被系统锁着）。
         // 所以这里先看一眼来源树里有没有更新的：有就让它接手窗口，这一发直接退——
         // 他不用点第二下，看到的也是最新那一版。交接失败（那条路径没了）就照旧跑下去，别把人晾在门外。
-        if (!SelfTestMode && !HealInstallMode
+        if (!SelfTestMode && !HealInstallMode && !DiagnosticLaunch
             && AppInstall.StaleSourceExe(
                 Environment.ProcessPath ?? string.Empty,
                 AppInstall.ReadSourceHint(AppInstall.SourceHintPath()),
@@ -96,7 +128,37 @@ public partial class App : Application
         if (HealInstallMode)
         {
             // 构建完顺手把开始菜单那枚跟上：不出窗口，失败就用非零退出码说话（check.cmd 的那一步会红）。
-            Environment.Exit(HealInstall(out var why) ? 0 : Fail(why));
+            // 这里不能 Environment.Exit：消息循环还没起来就那样退，WinUI 会以 0xC0000142
+            // （STATUS_DLL_INIT_FAILED）收场——活儿全干完了，退出码却报成崩，check.cmd 第 6 步因此红。
+            var healed = HealInstall(out var why);
+
+            if (!healed)
+            {
+                Diagnostics.Write($"HEAL FAIL: --heal-install 没走通：{why}");
+            }
+
+            ExitCode = healed ? 0 : 1;
+
+            // 循环的收场也得自己办：零窗口时 Application.Start 不会自己退（10-29 夜实测，
+            // 直接 return 挂到看门狗也等不来），借一枚 Hide 的空窗、在循环里 Close 它——
+            // 最后一扇窗关闭才是循环的正规结束，Main 那头拿到 ExitCode 走人。
+            var offscreen = new Window();
+
+            offscreen.AppWindow.Hide();
+
+            // 不用方法组直传：TryEnqueue 封送"以投影对象为 target 的委托"会炸（10-29 夜实测
+            // AsValue 失败、stowed 0xC000027B），lambda 走托管 CCW 那条路才是通的。
+            Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().TryEnqueue(() => offscreen.Close());
+
+            // 兜底：万一 Close 这条路没走通，这一发不许挂死 check.cmd。15 秒后从旁边线程
+            // 带着真实退出码硬退——循环已经转了这么久，selftest 那些发证明循环转起来之后
+            // 再 Environment.Exit 不会炸成 0xC0000142。
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(15_000);
+
+                Environment.Exit(ExitCode);
+            });
 
             return;
         }
@@ -108,9 +170,14 @@ public partial class App : Application
 
         // 窗口已经出来了再补稳定目录和开始菜单那枚：它们是给用户找入口用的，不该排在首帧前面；
         // 对齐一次构建是 42MB 的拷贝，更不能挡开板子。自检那一发跑在 %TEMP% 的副本上，两样都不动。
-        if (!SelfTestMode)
+        // 诊断那一发（探针/--perf/--no-heal）同样不动：读数的进程不许换掉用户点开的那一枚（10-29 踩过）。
+        if (!SelfTestMode && !DiagnosticLaunch)
         {
             _ = Task.Run(() => HealInstall(out _));
+        }
+        else if (DiagnosticLaunch)
+        {
+            Diagnostics.Write("install: 诊断那一发不动稳定目录与开始菜单那枚");
         }
 
         if (SelfTestMode)
@@ -188,19 +255,13 @@ public partial class App : Application
         return trouble.Length == 0;
     }
 
-    private static int Fail(string why)
-    {
-        // 与自检同一套说法：check.cmd 的那一步红了，日志里要能一眼看到是哪一句把它判红的。
-        Diagnostics.Write($"HEAL FAIL: --heal-install 没走通：{why}");
-
-        return 1;
-    }
-
     private static string BuildStamp()
     {
         try
         {
-            return File.GetLastWriteTimeUtc(Environment.ProcessPath ?? string.Empty).ToString("yyyy-MM-dd HH:mm");
+            // 本地时刻：这行是给人对着"我刚才几点编的"读的，写 UTC 会差八小时，
+            // 10-29 就因为这条把一份 11:24 的构建读成了"03:24 的旧版"。
+            return File.GetLastWriteTime(Environment.ProcessPath ?? string.Empty).ToString("yyyy-MM-dd HH:mm");
         }
         catch (Exception ex)
         {

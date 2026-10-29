@@ -35,6 +35,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
+
+    <!-- 入口在 Program.cs 自己写：heal 那一发不出窗口，进程码必须是 heal 的真实结果，
+         生成的 Main 恒 return 0 会把失败报成全过（check.cmd 第 6 步靠这个码说话）。 -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

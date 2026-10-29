@@ -57,13 +57,25 @@
 - [x] 板上：「署名机制自证」组（@n106＋标题）@tby-夜间班 署名；tidy 缝 48；inbox ack。
   还欠他的 @b0 13 格不变。
 
-## 待办（按优先级，02:05 更新）
+## 已完成（第 3 轮 · 02:05–01:35 实钟）
 
-1. **任务 3 · 商业对标**：tldraw / Miro / FigJam / Heptabase。**先读板上 #成熟件调研 组的旧结论**
-  （藏字 LOD 已做、空间索引已做、pinch raster 结论已有）——挑还没做的：候选面有 选区批量操作／
-  对齐分布工具／模板库／评论模式（Miro 式 comment pin）／演示模式。挑一晚能落的最小闭环。
-2. **刀四候选**：aa053c6 提到"空转同步在 UI 线程做读+析+SHA2"——读 Sync/空转路径再定性。
-3. **stash@{0}（WIP on main: f5129df）**：先 `git stash show -p` 对账再处置。
+- [x] **任务 3 第一轮 · 演示模式（f85860e）**：Core `Presenting`（页＝组、序＝组名时间戳，4 条测试）＋
+  窗口「演示」命令 Alt+P（进出全屏、相机取景还原）＋演示键盘优先层（←/→/空格/翻页键/Esc）。
+  闸门六步全绿，键位清单 21→22 行自检适配。
+- [x] 调研读数（web）：Miro 帧式最成熟但帧序手动（社区常年排乱）；tldraw 帧当页＋zoomToBounds；
+  **FigJam 无原生演示（长年 feature request）、Heptabase 也没有**——真差距；我们"一轮一组＋组名时间戳"
+  的约定天然给出页序，比 Miro 的手动排帧强。来源：tldraw.dev/examples/slides、help.miro.com、
+  forum.figma.com FigJam presentation thread。
+- [x] 对标初筛更正：对齐/分布/堆叠**不是差距**——Aligning 已有且修过 tldraw/Excalidraw 的分布算法缺陷。
+- [x] 板上：「第 3 轮 · 演示模式」@n107–110 带 @tby-夜间班 署名；tidy；inbox ack。还欠 13 格不变。
+
+## 待办（按优先级，01:40 实钟更新）
+
+1. **演示 v2 候选**（他试用后才有意义）：缓动滑页（把缩放缓动那条路扩成 pan+zoom）、
+   演示中只藏徽章与标签条、页码浮层替代 Say 逐页播报。
+2. **刀四候选**：aa053c6"空转同步在 UI 线程做读+析+SHA2"——读 Sync/空转路径定性再动。
+3. **任务 2 第二轮候选**：board_inbox/ tickets 的回执里带署名过滤（他问"夜间班写了啥"一发就有）。
+4. **stash@{0}（WIP on main: f5129df）**：先 `git stash show -p` 对账再处置。
 
 ### agent 协作候选（任务 2 素材）
 

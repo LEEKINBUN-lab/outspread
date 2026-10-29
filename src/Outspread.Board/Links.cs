@@ -40,6 +40,15 @@ public sealed partial class MainWindow
 
     private (string NodeId, string Side)? _edgeSnap;
 
+    /// <summary>连线那三种颜色的刷子按主题缓存（见 <see cref="PaintLinks"/>），翻主题那一拍才重铸。</summary>
+    private bool _edgeBrushDark;
+
+    private SolidColorBrush _wireBrush = null!;
+
+    private SolidColorBrush _accentBrush = null!;
+
+    private SolidColorBrush _dangerBrush = null!;
+
     /// <summary>松手就会删线：指针离所有格子都超过 <see cref="EdgeDeleteReachPx"/>（屏幕像素）。
     /// 吸附半径是 44，留出这段空白再判删除，才不至于把"只是没吸上"当成拖到空地。</summary>
     private bool _edgeDeleteArmed;
@@ -464,9 +473,20 @@ public sealed partial class MainWindow
         LinkHandleLayer.Children.Clear();
 
         var dark = NoteStyling.IsDark;
-        var wire = new SolidColorBrush(NoteStyling.ToColor(EdgeGeometry.WireColour(dark)));
-        var accent = new SolidColorBrush(NoteStyling.ToColor(EdgeGeometry.SelectedColour(dark)));
-        var danger = new SolidColorBrush(NoteStyling.ToColor(EdgeGeometry.DeleteColour(dark)));
+
+        // 三枚刷子只随主题翻：连线一块板就那几种颜色，每拍 new 三枚是白花（10-29 夜刀三），
+        // 空连线的板子上一发也没少建。缓存在窗上，主题翻那一拍才重铸。
+        if (_wireBrush is null || _edgeBrushDark != dark)
+        {
+            _wireBrush = new SolidColorBrush(NoteStyling.ToColor(EdgeGeometry.WireColour(dark)));
+            _accentBrush = new SolidColorBrush(NoteStyling.ToColor(EdgeGeometry.SelectedColour(dark)));
+            _dangerBrush = new SolidColorBrush(NoteStyling.ToColor(EdgeGeometry.DeleteColour(dark)));
+            _edgeBrushDark = dark;
+        }
+
+        var wire = _wireBrush;
+        var accent = _accentBrush;
+        var danger = _dangerBrush;
 
         foreach (var edge in _document.Edges)
         {

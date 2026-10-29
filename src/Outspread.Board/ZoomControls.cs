@@ -92,6 +92,10 @@ public sealed partial class MainWindow
         }
     }
 
+    /// <summary>徽章那层皮翻到过哪个主题：形状常量只造一次、刷子只在翻主题那一拍重铸（10-29 夜刀三）。
+    /// 原来每一拍把五枚钮的 Padding/字号/底刷全部重赋一遍——空画的板上这一拍也是白花。</summary>
+    private bool? _badgeDark;
+
     /// <summary>
     /// Paints the cluster from the prototype's numbers. Called from the same pass that arranges the
     /// board, so a theme flip cannot leave one member wearing the other theme's ink.
@@ -99,47 +103,67 @@ public sealed partial class MainWindow
     private void StyleBadge()
     {
         var dark = NoteStyling.IsDark;
-        var line = new SolidColorBrush(NoteStyling.WithAlpha(Badge.LineColour(dark), Badge.LineAlpha(dark)));
-        var muted = new SolidColorBrush(NoteStyling.ToColor(Badge.Muted(dark)));
 
-        BadgeHost.Background = new SolidColorBrush(NoteStyling.ToColor(Badge.PanelColour(dark)));
-        BadgeHost.BorderBrush = line;
-        BadgeHost.BorderThickness = new Thickness(1);
-        BadgeHost.CornerRadius = new CornerRadius(Chrome.Radius);
-        BadgeHost.Padding = new Thickness(Badge.ContainerPaddingPx);
-
-        foreach (var button in new[] { UndoButton, RedoButton, ZoomOutButton, ZoomLevelButton, ZoomInButton })
+        if (_badgeDark is null)
         {
-            // 真 Button 留着（键盘按得到、焦点走得进），但控件自己的边框与底色一律剥掉。
-            button.Padding = new Thickness(Badge.MemberPaddingX, Badge.MemberPaddingY, Badge.MemberPaddingX, Badge.MemberPaddingY);
-            button.MinWidth = 0;
-            button.MinHeight = Badge.LineHeight + (2 * Badge.MemberPaddingY);
-            button.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
-            button.BorderThickness = new Thickness(0);
-            button.CornerRadius = new CornerRadius(Badge.MemberRadiusPx);
-            button.FontSize = Badge.FontSize;
-            // 字形走系统的 Segoe UI 那一串，与原型量到的 font-family 同序（正文用的是雅黑，这两组不同源是故意的）。
-            button.Foreground = muted;
-            button.HorizontalContentAlignment = HorizontalAlignment.Center;
-            button.VerticalContentAlignment = VerticalAlignment.Center;
+            // 形状与字号是不变量：与主题无关，造一次就够，每拍重赋是白花。
+            BadgeHost.BorderThickness = new Thickness(1);
+            BadgeHost.CornerRadius = new CornerRadius(Chrome.Radius);
+            BadgeHost.Padding = new Thickness(Badge.ContainerPaddingPx);
+
+            foreach (var button in new[] { UndoButton, RedoButton, ZoomOutButton, ZoomLevelButton, ZoomInButton })
+            {
+                // 真 Button 留着（键盘按得到、焦点走得进），但控件自己的边框与底色一律剥掉。
+                button.Padding = new Thickness(Badge.MemberPaddingX, Badge.MemberPaddingY, Badge.MemberPaddingX, Badge.MemberPaddingY);
+                button.MinWidth = 0;
+                button.MinHeight = Badge.LineHeight + (2 * Badge.MemberPaddingY);
+                button.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+                button.BorderThickness = new Thickness(0);
+                button.CornerRadius = new CornerRadius(Badge.MemberRadiusPx);
+                button.FontSize = Badge.FontSize;
+                button.HorizontalContentAlignment = HorizontalAlignment.Center;
+                button.VerticalContentAlignment = VerticalAlignment.Center;
+            }
+
+            // 比例在原型里是一枚 span（52 宽、没有内距），不是按钮；这边它仍可点（点＝100%），
+            // 所以形状照 span 走、命中区靠 MinHeight 28 保住——宽度 52、高度 28，两样都过 24。
+            ZoomLevelButton.Padding = new Thickness(0);
+
+            ZoomLevelText.FontSize = Badge.FontSize;
+            ZoomLevelText.LineHeight = Badge.LineHeight;
+            ZoomLevelText.MinWidth = Badge.RatioMinWidth;
+
+            foreach (var separator in new[] { BadgeSep2 })
+            {
+                separator.Width = Badge.SeparatorWidthPx;
+                separator.Margin = new Thickness(Badge.SeparatorMarginX, Badge.SeparatorMarginY, Badge.SeparatorMarginX, Badge.SeparatorMarginY);
+                separator.VerticalAlignment = VerticalAlignment.Stretch;
+            }
         }
 
-        // 比例在原型里是一枚 span（52 宽、没有内距），不是按钮；这边它仍可点（点＝100%），
-        // 所以形状照 span 走、命中区靠 MinHeight 28 保住——宽度 52、高度 28，两样都过 24。
-        ZoomLevelButton.Padding = new Thickness(0);
-
-        // 比例是这一组里唯一说话的一句正文：原型给它 --text，其余成员在 --muted 里等着。
-        ZoomLevelText.FontSize = Badge.FontSize;
-        ZoomLevelText.LineHeight = Badge.LineHeight;
-        ZoomLevelText.MinWidth = Badge.RatioMinWidth;
-        ZoomLevelText.Foreground = new SolidColorBrush(NoteStyling.ToColor(Badge.Ink(dark)));
-
-        foreach (var separator in new[] { BadgeSep2 })
+        if (_badgeDark != dark)
         {
-            separator.Fill = line;
-            separator.Width = Badge.SeparatorWidthPx;
-            separator.Margin = new Thickness(Badge.SeparatorMarginX, Badge.SeparatorMarginY, Badge.SeparatorMarginX, Badge.SeparatorMarginY);
-            separator.VerticalAlignment = VerticalAlignment.Stretch;
+            var line = new SolidColorBrush(NoteStyling.WithAlpha(Badge.LineColour(dark), Badge.LineAlpha(dark)));
+            var muted = new SolidColorBrush(NoteStyling.ToColor(Badge.Muted(dark)));
+
+            BadgeHost.Background = new SolidColorBrush(NoteStyling.ToColor(Badge.PanelColour(dark)));
+            BadgeHost.BorderBrush = line;
+
+            foreach (var button in new[] { UndoButton, RedoButton, ZoomOutButton, ZoomLevelButton, ZoomInButton })
+            {
+                // 字形走系统的 Segoe UI 那一串，与原型量到的 font-family 同序（正文用的是雅黑，这两组不同源是故意的）。
+                button.Foreground = muted;
+            }
+
+            // 比例是这一组里唯一说话的一句正文：原型给它 --text，其余成员在 --muted 里等着。
+            ZoomLevelText.Foreground = new SolidColorBrush(NoteStyling.ToColor(Badge.Ink(dark)));
+
+            foreach (var separator in new[] { BadgeSep2 })
+            {
+                separator.Fill = line;
+            }
+
+            _badgeDark = dark;
         }
 
         RefreshHistoryButtons();

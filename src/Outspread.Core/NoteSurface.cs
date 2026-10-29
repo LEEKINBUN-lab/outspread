@@ -112,6 +112,11 @@ public static class NoteSurface
     {
         var (lift, jitter) = DrawsFor(id);
 
+        return LayersAt(lift, jitter, zoom);
+    }
+
+    private static IReadOnlyList<Layer> LayersAt(double lift, double jitter, double zoom)
+    {
         // The letters a/b/c/d are tldraw's own names in getNoteShadow, kept here so the arithmetic
         // can be checked against its source line by line.
         var a = 5 * zoom;
@@ -134,6 +139,88 @@ public static class NoteSurface
 
     /// <summary>Whether this note draws a shadow at all, or the single line that replaces it.</summary>
     public static bool DrawsShadow(double zoom) => zoom >= ShadowMinZoom;
+
+    /// <summary>
+    /// 汉字在屏幕上低到这一像素高度就不再用正文——地图与设计工具都不在看不清的档位画标签
+    /// （ArcGIS 的缩尺基准字号、Mapbox 的 <c>minzoom</c>／<c>text-size</c> stops 是同一件事）。
+    /// 这一档以下纸面、色条、牌子照旧：牌子是 chrome，本来就不随缩放缩（见 <see cref="NoteType"/> 那条注释）。
+    /// </summary>
+    /// <remarks>
+    /// 判据是<b>屏幕字高</b>（<c>zoom × scale × 字号</c>），不是缩放数：同一档 25% 在 1.0 缩放的屏上是
+    /// 3.75 像素（不可辨），在 2.0 缩放的屏上是 7.5 像素（勉强可读）。拿缩放数当尺会在高分屏上提前把字藏掉。
+    /// 7px 这一档不是量到刚好过门：15px 的雅黑字面缩到 7px 时横画已经开始并笔，行业里 CJK 的可用下限也压在 6–8px。
+    /// 要挪这个数就一起挪下面那条带宽，并把"并笔"的截图附在提交里。
+    /// </remarks>
+    public const double TextLegiblePx = 7;
+
+    /// <summary>
+    /// 迟滞带的下沿（屏幕像素）：<b>7 以上一定画、6 以下一定不画、6–7 之间看上一拍</b>。
+    /// 带宽放在阈值<b>下面</b>而不是两边对称，是为了让 50%（15×0.5＝7.5 像素）落在确定的一档：
+    /// 对称带会把 47%–53% 全变成"看你怎么进来的"，而 50% 是标签栏上按得到的那一档。
+    /// </summary>
+    public const double TextHideBelowPx = 6;
+
+    /// <summary>这一档屏幕上还有没有看得清的字。</summary>
+    public static bool DrawsText(double zoom, double scale) => ScreenTextPx(zoom, scale) >= TextLegiblePx;
+
+    /// <summary>
+    /// 文字 LOD 的<b>下一状态</b>——带一像素带宽，所以它要看上一拍是什么，与 <see cref="ShadowLod"/> 同一形状。
+    /// </summary>
+    public static bool TextLod(double zoom, double scale, bool wasOn)
+    {
+        var px = ScreenTextPx(zoom, scale);
+
+        return px < TextHideBelowPx ? false
+            : px >= TextLegiblePx ? true
+            : wasOn;
+    }
+
+    private static double ScreenTextPx(double zoom, double scale)
+        => zoom * scale * NoteTypography.DefaultSize;
+
+    /// <summary>
+    /// 这一格的阴影最远伸到盒底下方多少（世界单位）。遮挡判定拿它当外扩，比盒子本身宽。
+    /// </summary>
+    public static double ShadowReachWorld(string id)
+    {
+        var (lift, _) = DrawsFor(id);
+
+        return ReachAt(lift);
+    }
+
+    /// <summary>lift 走到哪一档都盖得住的那个数（0.5–1.5 的最大端）；逐格算不如用它一次。</summary>
+    public static double MaxShadowReachWorld => ReachAt(1.5);
+
+    /// <summary>
+    /// 非内缩那两层各自"伸出盒底的距离"（<c>edge + 3σ</c>，与 <see cref="BandsFor"/> 同一个式子）取最远的一层。
+    /// </summary>
+    /// <remarks>
+    /// 为什么阴影算不出"被盖住"却能吃掉判定：一层阴影带画在卡盒<b>外面</b>，所以"这一格的纸被压住了"
+    /// 不等于"这一格什么都不剩"。摘早了就是 10-22 那排"拖完还留着一排阴影"的反面版本——少了一排。
+    /// 底线那一档（阴影关掉时画的 2 宽那条）也一并兜住。
+    /// </remarks>
+    private static double ReachAt(double lift)
+    {
+        var reach = FallbackLineWidth;
+
+        foreach (var layer in LayersAt(lift, 0, 1.0))
+        {
+            if (layer.Inset)
+            {
+                continue;
+            }
+
+            var edge = layer.OffsetY + layer.Spread;
+            var candidate = edge + 3 * (layer.Blur / 2);
+
+            if (candidate > reach)
+            {
+                reach = candidate;
+            }
+        }
+
+        return reach;
+    }
 
     /// <summary>A rectangle to paint, in screen pixels, relative to the card's top-left.</summary>
     /// <param name="Alpha">How dark the band is right where it meets the card — NOT the layer's own

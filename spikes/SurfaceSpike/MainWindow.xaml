@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Outspread.Spike.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:canvas="using:Microsoft.Graphics.Canvas.UI.Xaml">
+    <Grid x:Name="Root" Background="#F3F3F3">
+        <!-- 一整块板面 = 一枚表面。产品那一臂是每格一个 XAML 视觉，这一臂只有这一个控件。 -->
+        <canvas:CanvasControl x:Name="Board" Draw="OnDraw" />
+    </Grid>
+</Window>

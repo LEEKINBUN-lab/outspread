@@ -1,0 +1,65 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    这不是产品，是一枚读数用的 spike：同一块板面的 600 格，
+    左边那臂（产品）是"每格一枚 XAML 视觉"，右边这臂是"全部内容画进一枚合成表面"。
+    它不进 check.cmd、不进 run-board.cmd、不装开始菜单——只为回答一个问题：
+    "N 枚 visual 的调度与多层混合"这一项到底值多少 GPU/CPU/帧间隔。
+    赢很多 ⇒ 板面那一层值得自绘；赢不到 ⇒ 换栈的收益当场归零。
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>Outspread.Spike</RootNamespace>
+    <AssemblyName>surface-spike</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <Platforms>x64</Platforms>
+    <Platform>x64</Platform>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+
+    <UseWinUI>true</UseWinUI>
+    <!-- Win2D.uwp 带着 Windows.UI.Xaml.* 的传递依赖，.NET 这边必须开完整 SDK 投影才肯封送
+         （NETSDK1218）。这枚 spike 就是为试这一步能不能成——产品工程不加这一行。 -->
+    <UseUwp>true</UseUwp>
+    <UseUwpTools>true</UseUwpTools>
+    <!-- 工具链明说这两套 XAML 投影不能同时正确工作，只能标 unsafe 硬开。
+         开它就是要看：单表面这条路在现有栈里到底能不能走稳。 -->
+    <EnableUnsafeMixedMicrosoftWindowsUIXamlProjections>true</EnableUnsafeMixedMicrosoftWindowsUIXamlProjections>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <WindowsPackageType>None</WindowsPackageType>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <EnableWinAppRunSupport>false</EnableWinAppRunSupport>
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
+
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 产品那一头的数学：纸色、三条阴影带、节点几何——两臂必须吃同一份，
+         否则比的就不是同一件事。 -->
+    <ProjectReference Include="..\..\src\Outspread.Core\Outspread.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 令牌只有一份：把产品的 NoteStyling 原文件链进来（它只依赖 Core 与 WinUI 的 FontFamily），
+         两臂读到的是同一组色号与字体栈。spike 里不许另刻一份，否则比的不是同一件事。 -->
+    <Compile Include="..\..\src\Outspread.Board\NoteStyling.cs" Link="NoteStyling.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
+    <!-- Win2D 只有 uap 那一档目标框架，桌面这臂能不能吃它，正是本 spike 的第一个问题。 -->
+    <PackageReference Include="Win2D.uwp" Version="1.28.3" />
+  </ItemGroup>
+
+</Project>

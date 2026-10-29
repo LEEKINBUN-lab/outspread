@@ -626,7 +626,8 @@ public sealed class BoardTools
         + "收尾的那一发就靠它当凭据：返回第二行按 @t轮次给出「还欠几格」，把那个数写进汇报。")]
     public static string BoardRead(
         [Description("画板文件路径。不填就用你的「Agent 出口」板。")] string? board = null,
-        [Description("最多列几格，默认 40。")] int limit = 40)
+        [Description("最多列几格，默认 40。")] int limit = 40,
+        [Description("只看某个 agent 署名的卡（@tby-名字，board_post/patch 的 agent 参数写下的那枚）。不填＝全部。")] string? by = null)
     {
         var path = ResolveBoard(board);
 
@@ -635,9 +636,12 @@ public sealed class BoardTools
             return $"{path} 还没有这块板。";
         }
 
+        // 署名过滤认的是规范形 #by-名字：标签写在卡上时是 @tby-名字，读出来是 #by-名字。
+        var byTag = string.IsNullOrWhiteSpace(by) ? null : "#by-" + NormaliseTag(by!);
         var document = CanvasStore.Load(path);
         var lines = document.Nodes
             .Where(node => node.Kind != CanvasNodeKind.Group)
+            .Where(node => byTag is null || Tags.Of(node.Text).Contains(byTag, StringComparer.Ordinal))
             .OrderBy(node => node.Y)
             .ThenBy(node => node.X)
             .Take(Math.Clamp(limit, 1, 200))

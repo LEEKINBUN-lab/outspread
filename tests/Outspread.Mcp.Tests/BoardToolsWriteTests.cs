@@ -482,6 +482,24 @@ public sealed class BoardToolsWriteTests : IDisposable
         Assert.Equal(1, text.Split("@tby-night-zcode").Length - 1);
     }
 
+    [Fact]
+    public void Read_by_signature_only_lists_that_agents_cards()
+    {
+        var board = SeededBoard(ordinal: 0);
+
+        BoardTools.BoardPost("甲的", [Card("note", "甲写的一格")], round: "甲", agent: "甲agent", board: board);
+        BoardTools.BoardPost("乙的", [Card("note", "乙写的一格")], round: "乙", board: board);
+
+        var mine = BoardTools.BoardRead(board: board, by: "甲agent");
+        var all = BoardTools.BoardRead(board: board);
+
+        // 按署名只看一家的卡：几路 agent 同机各写各的，"夜间班写了啥"一发就有。
+        Assert.Contains("甲写的一格", mine);
+        Assert.DoesNotContain("乙写的一格", mine);
+        Assert.Contains("乙写的一格", all);
+        Assert.Contains("甲写的一格", all);
+    }
+
     /// <summary>
     /// 测试用的卡。三档要挂 @b0 的（decision/risk/task）必须带一行「要你：」，否则 <c>board_post</c>
     /// 那枚闸会把整发拒掉（10-27 加的：我落了两格"记我自己的待办/一条外推曲线"，他读完回的是

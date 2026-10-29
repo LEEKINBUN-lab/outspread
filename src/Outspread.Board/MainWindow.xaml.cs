@@ -976,9 +976,12 @@ public sealed partial class MainWindow : Window
     {
         _arrangeCalls++;
 
-        // 探针期间若有一发整板重排落在"正拖着东西"的那一拍，它就是那帧的贵东西：把来路记一次。
-        // 只在探针跑着的时候抓栈——StackTrace 自己就要花毫秒级，不能挂在他手上那一发上。
-        if (_probeActive && _nodeGesture is not null && !_midDragArrangeLogged)
+        // 手势中途的整板重排本不该出现：拖动/缩放走预览那条路，完整重排归到松手那一拍结算
+        // （10-28 查最慢帧时装的计数器，正常拖动帧"重排 0 次"）。出现了就是那一帧 18.7ms 的来路，
+        // 当场抓栈记下。这类事件罕见，抓栈的毫秒级花销只付在它身上——原来挂在 _probeActive 上，
+        // 但探针的合成拖动不置手势、他的真手势又不带探针，这把尺两头够不着，等于从来没张开过。
+        // 一发进程只记一次（异状风暴时不刷屏），再要细看还有逐帧计数器。
+        if ((_nodeGesture is not null || _resizeGesture is not null) && !_midDragArrangeLogged)
         {
             _midDragArrangeLogged = true;
 

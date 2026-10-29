@@ -5141,6 +5141,161 @@ public sealed partial class MainWindow : Window
         SaveSoon();
     }
 
+    // ── 演示模式（10-30 夜，任务 3 对标落地）：一枚组一页，页序＝组名时间戳（Core Presenting，
+    // 与 board_tidy 同一把尺）。Miro 的帧式演示最成熟但帧序靠手动、社区常年排乱；FigJam/Heptabase
+    // 根本没有。我们的组约定天然带序，v1 只做相机编舞＋全屏：方向键/空格翻页，Esc 还原进来的相机；
+    // 界面不藏、内容不锁——Miro 2023 的 interactive 模式同样允许边演边动。
+
+    private bool _presenting;
+
+    private int _presentIndex;
+
+    private (double PanX, double PanY, double Zoom) _cameraBeforePresent;
+
+    private void TogglePresent()
+    {
+        if (_presenting)
+        {
+            ExitPresent();
+        }
+        else
+        {
+            EnterPresent();
+        }
+    }
+
+    private void EnterPresent()
+    {
+        var pages = Presenting.SlidesOf(_document).Count;
+
+        if (pages == 0)
+        {
+            Say("这块板上一枚有成员的组都没有：演示按组走（一轮一组），先成组再按 Alt+P。");
+
+            return;
+        }
+
+        ClearSelection();
+        ProjectSelection();
+
+        _cameraBeforePresent = (_view.PanX, _view.PanY, _view.Zoom);
+        _presenting = true;
+        _presentIndex = 0;
+
+        try
+        {
+            AppWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.FullScreen);
+        }
+        catch (Exception ex)
+        {
+            // 全屏是锦上添花，成不成都不拦着演示本身。
+            Diagnostics.Write($"present: 全屏没成（{ex.GetType().Name}），照常演示");
+        }
+
+        PresentShow();
+        Say($"演示中：←/→ 或空格翻页、Esc 退出（共 {pages} 页）");
+    }
+
+    private void ExitPresent()
+    {
+        _presenting = false;
+
+        (_view.PanX, _view.PanY, _view.Zoom) = _cameraBeforePresent;
+
+        try
+        {
+            AppWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.Overlapped);
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Write($"present: 退全屏没成（{ex.GetType().Name}）");
+        }
+
+        ArrangeAll();
+        ProjectSelection();
+        SaveSoon();
+        Say("演示收场，相机还原");
+    }
+
+    private void PresentStep(int delta)
+    {
+        var pages = Presenting.SlidesOf(_document);
+
+        if (pages.Count == 0)
+        {
+            // 演示中途组被拆光（agent 正在动同一块板是可能的）：这一发就地收场，别停在没页可看的全屏里。
+            ExitPresent();
+
+            return;
+        }
+
+        _presentIndex = Math.Clamp(_presentIndex + delta, 0, pages.Count - 1);
+        PresentShow();
+        Say($"第 {_presentIndex + 1}/{pages.Count} 页 · {pages[_presentIndex].Label}");
+    }
+
+    /// <summary>把当前页取景：成员盒并集装进视口（四周留 48px），居中。与 ResetView 同一套相机账。</summary>
+    private void PresentShow()
+    {
+        var slides = Presenting.SlidesOf(_document);
+
+        if (slides.Count == 0)
+        {
+            ExitPresent();
+
+            return;
+        }
+
+        _presentIndex = Math.Clamp(_presentIndex, 0, slides.Count - 1);
+        var bounds = slides[_presentIndex].Bounds;
+
+        var width = Math.Max(1, BoardArea.ActualWidth - 96);
+        var height = Math.Max(1, BoardArea.ActualHeight - 96);
+
+        _view.Zoom = Math.Clamp(Math.Min(width / bounds.Width, height / bounds.Height), MinZoom, MaxZoom);
+        _view.PanX = (BoardArea.ActualWidth / 2) - ((bounds.X + (bounds.Width / 2)) * _view.Zoom);
+        _view.PanY = (BoardArea.ActualHeight / 2) - ((bounds.Y + (bounds.Height / 2)) * _view.Zoom);
+
+        ArrangeAll();
+    }
+
+    /// <summary>演示那一拍的键盘：翻页、两端、退场。占住这些键，不再落进下面的命令表。</summary>
+    private bool PresentKey(Windows.System.VirtualKey key)
+    {
+        switch (key)
+        {
+            case Windows.System.VirtualKey.Right:
+            case Windows.System.VirtualKey.Down:
+            case Windows.System.VirtualKey.Space:
+            case Windows.System.VirtualKey.PageDown:
+                PresentStep(1);
+
+                return true;
+            case Windows.System.VirtualKey.Left:
+            case Windows.System.VirtualKey.Up:
+            case Windows.System.VirtualKey.PageUp:
+                PresentStep(-1);
+
+                return true;
+            case Windows.System.VirtualKey.Home:
+                _presentIndex = 0;
+                PresentStep(0);
+
+                return true;
+            case Windows.System.VirtualKey.End:
+                _presentIndex = int.MaxValue;
+                PresentStep(0);
+
+                return true;
+            case Windows.System.VirtualKey.Escape:
+                ExitPresent();
+
+                return true;
+            default:
+                return false;
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Self test
     // -------------------------------------------------------------------------
@@ -10387,6 +10542,15 @@ public sealed partial class MainWindow : Window
         // 改键之后要比的是"现在这一串"（ChordBook 里改过的优先），所以走同一个入口——
         // 这一条与 Preview 那一层、自检那一发读的是同一份。
         if (TryRunCommandForChord(ChordFrom(e.Key, control, shift, alt)))
+        {
+            e.Handled = true;
+
+            return;
+        }
+
+        // 演示那一拍键盘优先于一切普通键位：翻页的两套方向键、空格、两端、Esc。
+        // 插在命令表之后、普通 switch 之前——Alt+P 进得来，Esc 就得是"退演示"而不是"清选中"。
+        if (_presenting && PresentKey(e.Key))
         {
             e.Handled = true;
 

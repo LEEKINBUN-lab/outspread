@@ -106,6 +106,8 @@ public sealed partial class MainWindow
         new("撤回", "Ctrl+Z", "板子", Undo, Dispatched: false, Listed: false),
         new("重做", "Ctrl+Y", "板子", Redo, Dispatched: false, Listed: false),
         new("新建便签", "双击空白", "板子", NewNoteAtCentre, Dispatched: false, Sheet: false),
+        // 演示（10-30 夜）：一枚组一页、页序＝组名时间戳；←/→ 或空格翻页、Esc 退出并还原相机。
+        new("演示", "Alt+P", "板子", TogglePresent),
 
         // 实体卡不能只靠"碰巧粘对形状"才建得出来：粘的是别家软件的剪贴板、或在触屏上，
         // 这一条是唯一走得进去的门。识别与建卡那半和粘贴共用同一发，两条入口不可能认得不一样。

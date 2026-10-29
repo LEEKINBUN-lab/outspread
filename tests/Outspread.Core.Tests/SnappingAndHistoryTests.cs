@@ -127,6 +127,49 @@ public class SnappingTests
         Assert.Equal(10, result.X);
         Assert.Empty(result.Guides);
     }
+
+    [Theory]
+    // 摊一次与每帧现摊必须给出同一个答案（10-28 把对齐场缓存起来时，这条就是那笔改动的锁）。
+    // 取样的位置都压在阈值±附近：那正是"顺序或集合稍有不同就会给出不同吸附"的地方。
+    [InlineData(396, 196, 50, 40)]
+    [InlineData(404, 204, 50, 40)]
+    [InlineData(500, 250, 200, 100)]
+    [InlineData(492, 242, 16, 16)]
+    [InlineData(300, 100, 400, 300)]
+    [InlineData(600, 248, 60, 20)]
+    public void The_cached_field_snaps_exactly_like_the_per_frame_build(
+        double x, double y, double width, double height)
+    {
+        var others = new[] { Other, new Box(900, 500, 120, 80), new Box(120, 60, 260, 40) };
+        var viewport = new Box(0, 0, 1600, 900);
+        var moving = new Box(x, y, width, height);
+
+        var perFrame = Snapping.Snap(moving, others, viewport, threshold: 8);
+        var cached = Snapping.Snap(moving, Snapping.Field(others, viewport), threshold: 8);
+
+        Assert.Equal(perFrame.X, cached.X, 9);
+        Assert.Equal(perFrame.Y, cached.Y, 9);
+        Assert.Equal(perFrame.DeltaX, cached.DeltaX, 9);
+        Assert.Equal(perFrame.DeltaY, cached.DeltaY, 9);
+        Assert.Equal(perFrame.Guides.Count, cached.Guides.Count);
+
+        for (var index = 0; index < perFrame.Guides.Count; index++)
+        {
+            Assert.Equal(perFrame.Guides[index], cached.Guides[index]);
+        }
+    }
+
+    [Fact]
+    public void An_empty_cached_field_still_moves_nothing()
+    {
+        // 正对照：缓存那一条不许在"没有基准"时走出另一形（否则上面那条 Theory 全绿也说明不了什么）。
+        var cached = Snapping.Snap(new Box(10, 10, 10, 10), Snapping.Field([], null), threshold: 8);
+
+        Assert.Equal(10, cached.X);
+        Assert.Equal(10, cached.Y);
+        Assert.Equal(0, cached.DeltaX);
+        Assert.Empty(cached.Guides);
+    }
 }
 
 public class HistoryTests

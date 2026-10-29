@@ -95,9 +95,9 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
 
     public async Task<RemoteTree?> ReadTreeAsync(CancellationToken cancel)
     {
-        await EnsureBranchAsync(cancel);
+        await EnsureBranchAsync(cancel).ConfigureAwait(false);
 
-        var response = await GetAsync($"git/trees/{Escape(_branch!)}?recursive=1", cancel, ifNoneMatch: _treeEtag);
+        var response = await GetAsync($"git/trees/{Escape(_branch!)}?recursive=1", cancel, ifNoneMatch: _treeEtag).ConfigureAwait(false);
 
         // "Nothing you wrote last time changed" — the body would be identical to the one already
         // parsed, and GitHub does not charge for finding that out.
@@ -125,10 +125,10 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
         // far side it never actually saw.
         if (!response.IsSuccessStatusCode)
         {
-            throw new HttpRequestException($"the far folder did not answer: {await SafeMessageAsync(response, cancel)}");
+            throw new HttpRequestException($"the far folder did not answer: {await SafeMessageAsync(response, cancel).ConfigureAwait(false)}");
         }
 
-        using var document = await ReadJsonAsync(response, cancel);
+        using var document = await ReadJsonAsync(response, cancel).ConfigureAwait(false);
 
         var root = document.RootElement;
 
@@ -170,7 +170,7 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
 
     public async Task<RemoteFile?> ReadAsync(string path, CancellationToken cancel)
     {
-        var response = await GetAsync($"contents/{EscapePath(path)}?ref={Escape(_branch!)}", cancel);
+        var response = await GetAsync($"contents/{EscapePath(path)}?ref={Escape(_branch!)}", cancel).ConfigureAwait(false);
 
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
@@ -179,10 +179,10 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
 
         if (!response.IsSuccessStatusCode)
         {
-            throw new HttpRequestException($"the far file did not answer: {await SafeMessageAsync(response, cancel)}");
+            throw new HttpRequestException($"the far file did not answer: {await SafeMessageAsync(response, cancel).ConfigureAwait(false)}");
         }
 
-        using var document = await ReadJsonAsync(response, cancel);
+        using var document = await ReadJsonAsync(response, cancel).ConfigureAwait(false);
 
         var root = document.RootElement;
 
@@ -207,19 +207,19 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
         // Past 1 MB the same call still gives the token but leaves the content empty. The raw
         // media type serves the bytes through api.github.com, which is the domain that is
         // reachable from here — download_url points at raw.githubusercontent.com, which is not.
-        using var raw = await GetAsync($"contents/{EscapePath(path)}?ref={Escape(_branch!)}", cancel, acceptRaw: true);
+        using var raw = await GetAsync($"contents/{EscapePath(path)}?ref={Escape(_branch!)}", cancel, acceptRaw: true).ConfigureAwait(false);
 
         if (!raw.IsSuccessStatusCode)
         {
-            throw new IOException($"the far file is too large for this endpoint and the raw read failed: {await SafeMessageAsync(raw, cancel)}");
+            throw new IOException($"the far file is too large for this endpoint and the raw read failed: {await SafeMessageAsync(raw, cancel).ConfigureAwait(false)}");
         }
 
-        return new RemoteFile(await raw.Content.ReadAsByteArrayAsync(cancel), token);
+        return new RemoteFile(await raw.Content.ReadAsByteArrayAsync(cancel).ConfigureAwait(false), token);
     }
 
     public async Task<WriteResult> WriteAsync(string path, byte[] content, string? expectToken, CancellationToken cancel)
     {
-        await EnsureBranchAsync(cancel);
+        await EnsureBranchAsync(cancel).ConfigureAwait(false);
 
         var body = new Dictionary<string, string>
         {
@@ -233,13 +233,13 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
             body["sha"] = expectToken;
         }
 
-        var response = await SendAsync(HttpMethod.Put, $"contents/{EscapePath(path)}", Json(body), cancel);
+        var response = await SendAsync(HttpMethod.Put, $"contents/{EscapePath(path)}", Json(body), cancel).ConfigureAwait(false);
 
         var status = (int)response.StatusCode;
 
         if (status is 200 or 201)
         {
-            using var document = await ReadJsonAsync(response, cancel);
+            using var document = await ReadJsonAsync(response, cancel).ConfigureAwait(false);
 
             var written = document.RootElement.TryGetProperty("content", out var created)
                 ? created.GetProperty("sha").GetString()
@@ -248,12 +248,12 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
             return new WriteResult(WriteOutcome.Written, written);
         }
 
-        return await DescribeAsync(response, expectToken, cancel);
+        return await DescribeAsync(response, expectToken, cancel).ConfigureAwait(false);
     }
 
     public async Task<WriteOutcome> DeleteAsync(string path, string expectToken, CancellationToken cancel)
     {
-        await EnsureBranchAsync(cancel);
+        await EnsureBranchAsync(cancel).ConfigureAwait(false);
 
         var response = await SendAsync(
             HttpMethod.Delete,
@@ -264,7 +264,7 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
                 ["sha"] = expectToken,
                 ["branch"] = _branch!,
             }),
-            cancel);
+            cancel).ConfigureAwait(false);
 
         var status = (int)response.StatusCode;
 
@@ -273,7 +273,7 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
             return WriteOutcome.Written;
         }
 
-        return (await DescribeAsync(response, expectToken, cancel)).Outcome;
+        return (await DescribeAsync(response, expectToken, cancel).ConfigureAwait(false)).Outcome;
     }
 
     /// <summary>
@@ -286,7 +286,7 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
     {
         var status = (int)response.StatusCode;
 
-        var message = await SafeMessageAsync(response, cancel);
+        var message = await SafeMessageAsync(response, cancel).ConfigureAwait(false);
 
         var retryable = message.Contains(RateLimitHint, StringComparison.OrdinalIgnoreCase);
 
@@ -326,14 +326,14 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
             return;
         }
 
-        var response = await GetAsync(string.Empty, cancel);
+        var response = await GetAsync(string.Empty, cancel).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
-            throw new HttpRequestException($"the far repository did not answer: {await SafeMessageAsync(response, cancel)}");
+            throw new HttpRequestException($"the far repository did not answer: {await SafeMessageAsync(response, cancel).ConfigureAwait(false)}");
         }
 
-        using var document = await ReadJsonAsync(response, cancel);
+        using var document = await ReadJsonAsync(response, cancel).ConfigureAwait(false);
 
         _branch = document.RootElement.TryGetProperty("default_branch", out var name)
             ? name.GetString()
@@ -368,7 +368,7 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
             request.Headers.TryAddWithoutValidation("If-None-Match", ifNoneMatch);
         }
 
-        return await SendAsync(request, cancel);
+        return await SendAsync(request, cancel).ConfigureAwait(false);
     }
 
     private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string suffix, string json, CancellationToken cancel)
@@ -378,12 +378,12 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
             Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
 
-        return await SendAsync(request, cancel);
+        return await SendAsync(request, cancel).ConfigureAwait(false);
     }
 
     private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancel)
     {
-        var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancel);
+        var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancel).ConfigureAwait(false);
 
         // A redirect that landed on a different host means we would be reading JSON from
         // somewhere the caller did not authorize a token for, so the answer is refused rather
@@ -392,7 +392,7 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
 
         if (landed is not null && !string.Equals(landed, _base.Host, StringComparison.OrdinalIgnoreCase))
         {
-            var safe = await SafeMessageAsync(response, cancel);
+            var safe = await SafeMessageAsync(response, cancel).ConfigureAwait(false);
             response.Dispose();
 
             throw new HttpRequestException($"the far side redirected away from {_base.Host} ({safe})");
@@ -405,11 +405,11 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
 
     private static async Task<JsonDocument> ReadJsonAsync(HttpResponseMessage response, CancellationToken cancel)
     {
-        var stream = await response.Content.ReadAsStreamAsync(cancel);
+        var stream = await response.Content.ReadAsStreamAsync(cancel).ConfigureAwait(false);
 
         try
         {
-            return await JsonDocument.ParseAsync(stream, cancellationToken: cancel);
+            return await JsonDocument.ParseAsync(stream, cancellationToken: cancel).ConfigureAwait(false);
         }
         catch (JsonException e)
         {
@@ -422,7 +422,7 @@ public sealed class GitHubContents : IRemoteFiles, IDisposable
     {
         try
         {
-            using var document = await ReadJsonAsync(response, cancel);
+            using var document = await ReadJsonAsync(response, cancel).ConfigureAwait(false);
             var root = document.RootElement;
 
             var message = root.TryGetProperty("message", out var m) ? m.GetString() : null;

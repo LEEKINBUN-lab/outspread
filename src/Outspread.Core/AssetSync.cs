@@ -197,7 +197,7 @@ public static class AssetSync
                 continue;
             }
 
-            var file = await remote.ReadAsync(repoPath, cancel);
+            var file = await remote.ReadAsync(repoPath, cancel).ConfigureAwait(false);
 
             if (file is null)
             {
@@ -258,7 +258,7 @@ public static class AssetSync
             // Null token means "create": the path was not in the tree a moment ago. If another
             // device put one there in between, the answer is a refusal we report, not a
             // overwrite of a picture we never looked at.
-            var written = await remote.WriteAsync(repoPath, bytes, null, cancel);
+            var written = await remote.WriteAsync(repoPath, bytes, null, cancel).ConfigureAwait(false);
 
             switch (written.Outcome)
             {
@@ -312,7 +312,7 @@ public static class AssetSync
         }
 
         var prefix = RepoPrefix(paths);
-        var (usedFar, unreadable) = await FarSiblingsAsync(remote, tree, paths, cancel);
+        var (usedFar, unreadable) = await FarSiblingsAsync(remote, tree, paths, cancel).ConfigureAwait(false);
         var usedHere = new HashSet<string>(ReferencedBy(document), StringComparer.Ordinal);
 
         foreach (var relative in dropped)
@@ -352,7 +352,7 @@ public static class AssetSync
 
             if (token is not null)
             {
-                var outcome = await remote.DeleteAsync(repoPath, token, cancel);
+                var outcome = await remote.DeleteAsync(repoPath, token, cancel).ConfigureAwait(false);
 
                 if (outcome is not (WriteOutcome.Written or WriteOutcome.Missing))
                 {
@@ -418,7 +418,7 @@ public static class AssetSync
                 continue;
             }
 
-            var file = await remote.ReadAsync(entry.Path, cancel);
+            var file = await remote.ReadAsync(entry.Path, cancel).ConfigureAwait(false);
 
             if (file is null)
             {

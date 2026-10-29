@@ -237,7 +237,14 @@ internal sealed class SyncHost
 
         try
         {
-            var report = await EngineFor(config).SynchronizeAsync(cancel);
+            // 引擎那一发整根挪到线程池（10-30 夜刀四）。SyncEngine 里一个 ConfigureAwait 都没有：
+            // 从 UI 上下文直呼，本地读+析+SHA2（RoundAsync 里那三笔是空转一发也照做的）与每个续体
+            // 都钉回 UI 线程——timer 挂在 DispatcherQueue 上，调用上下文就是它。Task.Run 进去后
+            // SynchronizationContext 为空，引擎里所有续体自然落在线程池；回 UI 只为 Say 与调速。
+            // 单飞纪律不靠线程：_running 那道闸在 UI 这一侧判，一轮没落地第二轮只记"待再来"。
+            var report = await Task.Run(
+                () => EngineFor(config).SynchronizeAsync(cancel),
+                cancel);
 
             // A round that was still in flight when this board was closed must not narrate
             // the file it can no longer read. Closing deletes the file; that is not a sync error.

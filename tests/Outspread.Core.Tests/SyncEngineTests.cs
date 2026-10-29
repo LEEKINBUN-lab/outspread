@@ -30,7 +30,7 @@ public class SyncEngineTests
 
     private static string BoardText(Scratch scratch) => CanvasStore.ReadAllText(scratch.BoardPath);
 
-    private static (SyncEngine Engine, SyncLedger Ledger, List<string> Trace) Build(Scratch scratch, FakeRemote far)
+    private static (SyncEngine Engine, SyncLedger Ledger, List<string> Trace) Build(Scratch scratch, IRemoteFiles far)
     {
         var ledger = new SyncLedger(Path.Combine(scratch.Folder, "ledger"));
         var trace = new List<string>();
@@ -987,5 +987,74 @@ public class SyncEngineTests
         Assert.False(far.Files.ContainsKey("boards/assets/img_aaa.png"));
         Assert.Null(AssetStore.ResolveExisting(scratch.BoardPath, "assets/img_aaa.png"));
         Assert.Empty(ledger.Load().PendingDeletions);
+    }
+
+    /// <summary>
+    /// 回归锁（10-30 夜刀四）：真 host 从 UI 线程的 DispatcherQueueTimer 进引擎，SyncEngine 原来
+    /// 一个 ConfigureAwait 都没有——每个续体都钉回 UI 线程，空转一发也做读+析+SHA2。
+    /// 让渡型远端给这一轮一个<b>真实的异步边界</b>（全是已完成任务的远端走 await 的同步快路，
+    /// 什么也量不出来）：旧引擎在让渡那拍 Post 回调用方的上下文（≥2），新引擎落在线程池（引擎 0 次）。
+    /// </summary>
+    private sealed class YieldingRemote(IRemoteFiles inner) : IRemoteFiles
+    {
+        private async Task<T> Yield<T>(Task<T> task)
+        {
+            // 真让渡且不回调用方的上下文：Task.Yield 的续体总是走当前 SynchronizationContext，
+            // 那样这一发自己就把计数污染了。Task.Run 过一道线程池再 ConfigureAwait，两样都占住。
+            await Task.Run(static () => { }).ConfigureAwait(false);
+
+            return await task.ConfigureAwait(false);
+        }
+
+        public Task<RemoteTree?> ReadTreeAsync(CancellationToken cancel) => Yield(inner.ReadTreeAsync(cancel));
+
+        public Task<RemoteFile?> ReadAsync(string path, CancellationToken cancel) => Yield(inner.ReadAsync(path, cancel));
+
+        public Task<WriteResult> WriteAsync(string path, byte[] content, string? expectToken, CancellationToken cancel)
+            => Yield(inner.WriteAsync(path, content, expectToken, cancel));
+
+        public Task<WriteOutcome> DeleteAsync(string path, string expectToken, CancellationToken cancel)
+            => Yield(inner.DeleteAsync(path, expectToken, cancel));
+    }
+
+    private sealed class CountingContext : SynchronizationContext
+    {
+        public int Posts;
+
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+            Posts++;
+
+            base.Post(d, state);
+        }
+    }
+
+    [Fact]
+    public async Task A_round_never_hops_back_to_the_callers_synchronization_context()
+    {
+        using var scratch = new Scratch("sync-context");
+        WriteBoard(scratch, Board(("uone", "one")));
+
+        var (engine, _, _) = Build(scratch, new YieldingRemote(new FakeRemote()));
+
+        var context = new CountingContext();
+        var previous = SynchronizationContext.Current;
+
+        SynchronizationContext.SetSynchronizationContext(context);
+
+        try
+        {
+            var report = await engine.SynchronizeAsync();
+
+            Assert.Equal(SyncOutcome.Pushed, report.Outcome);
+
+            // 引擎内部一个续体都没回调用方的上下文；唯一可能的一发 Post 是测试自己 await 的回执。
+            // 旧引擎在让渡那一拍就已经 Post 回来了（≥2）——这条一旦红，就是又把续体钉回调用方了。
+            Assert.True(context.Posts <= 1, $"引擎回调用方上下文 {context.Posts} 次——续体在往调用线程塞同步活");
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
     }
 }

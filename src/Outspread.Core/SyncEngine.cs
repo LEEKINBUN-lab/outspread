@@ -152,7 +152,7 @@ public sealed class SyncEngine
 
         try
         {
-            var report = await RoundAsync(state, cancel);
+            var report = await RoundAsync(state, cancel).ConfigureAwait(false);
 
             // 改名标记是这一轮**发完自己的板之后**才补的那一发（契约第 5 条的 ③）：新名那份没上去
             // 之前先把标记写进去，同伴会跟到一个仓里还不存在的名字上。发不上去就留着 `pendingRename`
@@ -160,7 +160,7 @@ public sealed class SyncEngine
             if (report.Outcome is SyncOutcome.Pushed or SyncOutcome.Pulled or SyncOutcome.NothingToDo
                 && !string.IsNullOrEmpty(state.PendingRenameTo))
             {
-                await FinishRenameAsync(state, cancel);
+                await FinishRenameAsync(state, cancel).ConfigureAwait(false);
             }
 
             return report;
@@ -210,7 +210,7 @@ public sealed class SyncEngine
 
     private async Task<SyncReport> RoundAsync(SyncState state, CancellationToken cancel)
     {
-        var tree = await _remote.ReadTreeAsync(cancel);
+        var tree = await _remote.ReadTreeAsync(cancel).ConfigureAwait(false);
 
         if (tree is null)
         {
@@ -264,12 +264,12 @@ public sealed class SyncEngine
             // Idle is not the same as carried: the board can have been up there since before
             // this asset layer existed, and the picture it points at must still catch up. The
             // cost of asking is zero — a path already in the tree is never read or written.
-            var idleAssets = await CarryAssetsAsync(localDoc, tree, cancel);
+            var idleAssets = await CarryAssetsAsync(localDoc, tree, cancel).ConfigureAwait(false);
 
             // A deletion this device started and could not finish is still work, so an
             // otherwise idle round goes back for it. With nothing pending this costs no
             // request: the candidates are checked against the tree already in hand.
-            await ReapAsync(localDoc, state.PendingDeletions, tree, idleAssets, state, cancel);
+            await ReapAsync(localDoc, state.PendingDeletions, tree, idleAssets, state, cancel).ConfigureAwait(false);
 
             return new SyncReport(SyncOutcome.NothingToDo, "neither side moved", state.Rev, 0, 0, [], null, idleAssets);
         }
@@ -296,7 +296,7 @@ public sealed class SyncEngine
         }
         else
         {
-            var read = await ReadFarAsync(state, localDoc, cancel);
+            var read = await ReadFarAsync(state, localDoc, cancel).ConfigureAwait(false);
 
             if (read.RenamedTo is not null)
             {
@@ -365,13 +365,13 @@ public sealed class SyncEngine
         var dropped = AssetSync.Tombstones(
             ancestor, merged, manifest?.DroppedAssets ?? state.PendingDeletions);
 
-        var assets = await CarryAssetsAsync(merged, tree, cancel);
+        var assets = await CarryAssetsAsync(merged, tree, cancel).ConfigureAwait(false);
 
         var (round, published, toReap) = delta.IsEmpty
-            ? (await PullOnlyAsync(state, localText, merged, manifest, verdicts, cancel), merged, dropped)
+            ? (await PullOnlyAsync(state, localText, merged, manifest, verdicts, cancel).ConfigureAwait(false), merged, dropped)
             : await PushAsync(
                 state, localDoc, localText, merged, manifest, verdicts,
-                docToken, manifestToken, pending, delta.NodeCount, dropped, cancel);
+                docToken, manifestToken, pending, delta.NodeCount, dropped, cancel).ConfigureAwait(false);
 
         // Reaping waits for the board to be accepted, and works from what that accepted round
         // finally merged: a retry inside the publish can revive a note along with its picture,
@@ -386,7 +386,7 @@ public sealed class SyncEngine
         // and a tombstone must not fire against the board that is now up there.
         if (round.Outcome is SyncOutcome.Pushed or SyncOutcome.Pulled)
         {
-            await ReapAsync(published, toReap, tree, assets, state, cancel);
+            await ReapAsync(published, toReap, tree, assets, state, cancel).ConfigureAwait(false);
         }
 
         // Reported at the one place every non-idle path leaves through, rather than inside the
@@ -423,7 +423,7 @@ public sealed class SyncEngine
         {
             rounds = attempt;
 
-            var written = await _remote.WriteAsync(_paths.DocPath, bytes, docToken, cancel);
+            var written = await _remote.WriteAsync(_paths.DocPath, bytes, docToken, cancel).ConfigureAwait(false);
 
             if (written.Outcome == WriteOutcome.Written)
             {
@@ -454,7 +454,7 @@ public sealed class SyncEngine
 
             Note($"第 {attempt} 发被远端挡回，它已不是我们合并时那份；重新合并");
 
-            var read = await ReadFarAsync(state, localDoc, cancel);
+            var read = await ReadFarAsync(state, localDoc, cancel).ConfigureAwait(false);
 
             if (read.Unreadable)
             {
@@ -495,7 +495,7 @@ public sealed class SyncEngine
             {
                 // What this end wanted to say is already on the far side. Nothing to push;
                 // the ancestor and the local file still have to be brought in line.
-                return (await PullOnlyAsync(state, localText, merged, manifest, verdicts, cancel), merged, dropped);
+                return (await PullOnlyAsync(state, localText, merged, manifest, verdicts, cancel).ConfigureAwait(false), merged, dropped);
             }
         }
 
@@ -539,7 +539,7 @@ public sealed class SyncEngine
             DroppedAssets = [.. dropped],
         };
 
-        var ledgerWritten = await WriteLedgerEntryAsync(next, manifestToken, cancel);
+        var ledgerWritten = await WriteLedgerEntryAsync(next, manifestToken, cancel).ConfigureAwait(false);
 
         // A refusal for the ledger entry is worth one more attempt only when it was a token
         // mismatch, and then only with the token read fresh: a refusal response does not
@@ -548,9 +548,9 @@ public sealed class SyncEngine
         // accept, is terminal and is reported as such.
         if (ledgerWritten.Outcome == WriteOutcome.Conflict)
         {
-            var fresh = await _remote.ReadTreeAsync(cancel);
+            var fresh = await _remote.ReadTreeAsync(cancel).ConfigureAwait(false);
 
-            ledgerWritten = await WriteLedgerEntryAsync(next, fresh?.TokenFor(_paths.ManifestPath), cancel);
+            ledgerWritten = await WriteLedgerEntryAsync(next, fresh?.TokenFor(_paths.ManifestPath), cancel).ConfigureAwait(false);
         }
 
         state.Rev = rev;
@@ -605,9 +605,9 @@ public sealed class SyncEngine
     /// </summary>
     private async Task<AssetReport> CarryAssetsAsync(CanvasDocument document, RemoteTree tree, CancellationToken cancel)
     {
-        var pulled = await AssetSync.PullAsync(_remote, _boardPath, document, tree, _paths, cancel);
+        var pulled = await AssetSync.PullAsync(_remote, _boardPath, document, tree, _paths, cancel).ConfigureAwait(false);
 
-        pulled.Absorb(await AssetSync.PushAsync(_remote, _boardPath, document, tree, _paths, cancel));
+        pulled.Absorb(await AssetSync.PushAsync(_remote, _boardPath, document, tree, _paths, cancel).ConfigureAwait(false));
 
         return pulled;
     }
@@ -644,12 +644,12 @@ public sealed class SyncEngine
             // Read fresh before deleting: a board another device published while this round
             // ran may be the one still pointing at the picture, and a deletion is the one
             // thing here the next round cannot undo.
-            var now = await _remote.ReadTreeAsync(cancel);
+            var now = await _remote.ReadTreeAsync(cancel).ConfigureAwait(false);
 
             if (now is not null)
             {
                 var reaped = await AssetSync.ReapAsync(
-                    _remote, _boardPath, published, now, _paths, live, cancel);
+                    _remote, _boardPath, published, now, _paths, live, cancel).ConfigureAwait(false);
 
                 assets.Absorb(reaped);
                 retry = reaped.Retry;
@@ -685,7 +685,7 @@ public sealed class SyncEngine
                 verdicts));
         }
 
-        var tree = await _remote.ReadTreeAsync(cancel);
+        var tree = await _remote.ReadTreeAsync(cancel).ConfigureAwait(false);
 
         state.DocToken = tree?.TokenFor(_paths.DocPath);
         state.ManifestToken = tree?.TokenFor(_paths.ManifestPath);
@@ -707,15 +707,15 @@ public sealed class SyncEngine
     /// </summary>
     private async Task<FarState> ReadFarAsync(SyncState state, CanvasDocument localDoc, CancellationToken cancel)
     {
-        var file = await _remote.ReadAsync(_paths.DocPath, cancel);
+        var file = await _remote.ReadAsync(_paths.DocPath, cancel).ConfigureAwait(false);
 
         if (file is null)
         {
-            var tree = await _remote.ReadTreeAsync(cancel);
+            var tree = await _remote.ReadTreeAsync(cancel).ConfigureAwait(false);
 
             // 契约第 1 条：只有"我确实跟这块板同步过"才去查改名标记（多发一发读，只在这一格）。
             // 从没上过仓的板走的是老路——这一份就是第一次上传。
-            var renamed = await FollowRenameAsync(state, tree, cancel);
+            var renamed = await FollowRenameAsync(state, tree, cancel).ConfigureAwait(false);
 
             if (renamed is not null)
             {
@@ -751,7 +751,7 @@ public sealed class SyncEngine
             return new FarState(Doc: null!, Unreadable: true, Detail: e.Message);
         }
 
-        var manifestFile = await _remote.ReadAsync(_paths.ManifestPath, cancel);
+        var manifestFile = await _remote.ReadAsync(_paths.ManifestPath, cancel).ConfigureAwait(false);
 
         var manifest = manifestFile is null
             ? null
@@ -781,7 +781,7 @@ public sealed class SyncEngine
     }
 
     private async Task<WriteResult> WriteLedgerEntryAsync(SyncManifest manifest, string? expectToken, CancellationToken cancel)
-        => await _remote.WriteAsync(_paths.ManifestPath, SyncManifest.ToBytes(manifest), expectToken, cancel);
+        => await _remote.WriteAsync(_paths.ManifestPath, SyncManifest.ToBytes(manifest), expectToken, cancel).ConfigureAwait(false);
 
     /// <summary>
     /// The copy lands next to the board but with an extension that is not `.canvas`, because
@@ -875,7 +875,7 @@ public sealed class SyncEngine
             return null;
         }
 
-        var marker = await _remote.ReadAsync(RenameLog.RepoPath, cancel);
+        var marker = await _remote.ReadAsync(RenameLog.RepoPath, cancel).ConfigureAwait(false);
 
         if (marker is null)
         {
@@ -916,12 +916,12 @@ public sealed class SyncEngine
         var from = state.PendingRenameFrom!;
         var to = state.PendingRenameTo!;
 
-        if (!await MarkerIsInAsync(state, from, to, cancel))
+        if (!await MarkerIsInAsync(state, from, to, cancel).ConfigureAwait(false))
         {
             return;
         }
 
-        if (!await ReapOldNameAsync(state, from, cancel))
+        if (!await ReapOldNameAsync(state, from, cancel).ConfigureAwait(false))
         {
             return;
         }
@@ -940,7 +940,7 @@ public sealed class SyncEngine
     {
         for (var attempt = 0; attempt < 2; attempt++)
         {
-            var file = await _remote.ReadAsync(RenameLog.RepoPath, cancel);
+            var file = await _remote.ReadAsync(RenameLog.RepoPath, cancel).ConfigureAwait(false);
             var log = RenameLog.Parse(file is null ? null : Encoding.UTF8.GetString(file.Content), out var problem);
 
             if (log is null || problem is not null)
@@ -962,7 +962,7 @@ public sealed class SyncEngine
 
             log.Append(new RenameEntry(from, to, state.DeviceId, RenameLog.Stamp(DateTimeOffset.UtcNow)));
 
-            var written = await _remote.WriteAsync(RenameLog.RepoPath, RenameLog.ToBytes(log), file?.Token, cancel);
+            var written = await _remote.WriteAsync(RenameLog.RepoPath, RenameLog.ToBytes(log), file?.Token, cancel).ConfigureAwait(false);
 
             if (written.Outcome is WriteOutcome.Written)
             {
@@ -1008,7 +1008,7 @@ public sealed class SyncEngine
                 continue;
             }
 
-            var outcome = await _remote.DeleteAsync(path, token, cancel);
+            var outcome = await _remote.DeleteAsync(path, token, cancel).ConfigureAwait(false);
 
             if (outcome is WriteOutcome.Written or WriteOutcome.Missing)
             {

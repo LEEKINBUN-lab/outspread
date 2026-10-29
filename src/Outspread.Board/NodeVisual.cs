@@ -303,6 +303,7 @@ public sealed class NodeVisual : ContentControl
 
     private readonly Grid _content = new();
 
+
     private readonly Grid _headerHost = new() { Visibility = Visibility.Collapsed };
 
     private readonly TableCardView _table = new() { Visibility = Visibility.Collapsed };
@@ -560,9 +561,12 @@ public sealed class NodeVisual : ContentControl
         return true;
     }
 
+    /// <summary>这一格走的是块（markdown）表示还是单行表示——由内容定，与"这一拍画没画字"无关。</summary>
+    private bool _paintsMarkdown;
+
     /// <summary>自检那一发读的三件事：这格一共几行、视窗装得下几行、现在从第几行开始。</summary>
     internal (int Total, int Visible, int First, bool HasMore, bool Blocks) WindowState()
-        => (_totalLines, _visibleLines, _firstLine, _hasMore, _md.Visibility == Visibility.Visible);
+        => (_totalLines, _visibleLines, _firstLine, _hasMore, _paintsMarkdown);
 
     /// <summary>
     /// 自检那一发读的组的门形：框内还吃不吃鼠标、环带与名牌开没开、名牌抬到了顶边上方几像素。
@@ -851,6 +855,18 @@ public sealed class NodeVisual : ContentControl
         return next;
     }
 
+    /// <summary>这一档该不该画正文（屏幕字高低于不可辨那一档就不画，见 <see cref="NoteSurface.TextLod"/>）。</summary>
+    private bool? _textLod;
+
+    private bool TextLod(double zoom, double scale)
+    {
+        var next = NoteSurface.TextLod(zoom, scale, _textLod ?? NoteSurface.DrawsText(zoom, scale));
+
+        _textLod = next;
+
+        return next;
+    }
+
     private readonly Grid _paint = new();
 
     /// <summary>卡面裁剪矩形随尺寸重建一次就够（剔除/改大小那一拍才变）。</summary>
@@ -874,6 +890,7 @@ public sealed class NodeVisual : ContentControl
         double? FoldDX,
         double? FoldDY,
         bool ShadowLod,
+        bool TextVisible,
         int DecodeTier,
         bool NoRoot,
         int FirstLine,
@@ -912,6 +929,13 @@ public sealed class NodeVisual : ContentControl
     private bool _sigValueValid;
     private bool _worldBoxValid;
     private Grouping.Rect _worldBox;
+
+    /// <summary>
+    /// 这一格<b>自己</b>在世界里的盒（上一拍从文档读来缓存的那一份），不含组框的可见包围盒。
+    /// 对齐基准要的就是这个——<c>SnapDrag</c> 原来逐格读 <c>node.X/Y/Width/Height</c> 四个数，
+    /// 现在改读这里，一个数都不必再回文档取。
+    /// </summary>
+    internal Grouping.Rect OwnWorldBox => _worldBox;
 
     /// <summary>循环刚替这一格判过输入签名（<see cref="WorldBox"/>），Update 直接接着用，不再比第二遍。</summary>
     private bool _tickInputsSame;
@@ -1234,6 +1258,8 @@ public sealed class NodeVisual : ContentControl
 
         // ── 内容账：文档那一侧由上面的输入签名判（同一个值节点＝同一个值），视图这一侧比这一串
         // 现成的小数。两边都没变就到此为止：平移的每一帧、缩放的每一拍，逐格走的只有上面那几笔。
+        var text = TextLod(view.Zoom, rasterizationScale);
+
         var viewStamp = (
             view.FontSizeFor(node.Id),
             NoteStyling.IsDark,
@@ -1249,6 +1275,7 @@ public sealed class NodeVisual : ContentControl
             display.FoldDX,
             display.FoldDY,
             ShadowLod(view.Zoom),
+            text,
             ShowText ? 0 : TierFor((int)(_worldBox.Width * view.Zoom * Math.Max(1, rasterizationScale))),
             XamlRoot is null,
             _firstLine,
@@ -1485,6 +1512,11 @@ public sealed class NodeVisual : ContentControl
 
             var blocks = (Kind == CanvasNodeKind.Text || _entity is not null) && Markdown.LooksLikeMarkdown(marks.Body);
 
+            // 「这一格按哪种表示画」与「这一拍画没画字」是两件事：后者会被文字 LOD 关掉，
+            // 前者只由内容决定。自检读的是前者（它要答"是不是同一张卡"），藏字那一档不许把
+            // 块渲染读成单行。
+            _paintsMarkdown = blocks;
+
             // 手动拉高以后窗口必须说实话：整段现在放得下了，就回到第一行——"↑ 更多"亮着
             // 而下面全是空白，比句末三个点更糟（他 10-22 报的第四条）。放不下但底下露着
             // 空档时，窗口贴住底：不许留"显示不完也滚不动"的半屏空白。
@@ -1521,13 +1553,15 @@ public sealed class NodeVisual : ContentControl
             _hasMore = HiddenBelow(_label.Text, innerWidth, _label.FontSize, leading)
                        || _totalLines - _firstLine > _visibleLines;
 
-            _label.Visibility = blocks ? Visibility.Collapsed : Visibility.Visible;
+            // 看不清那一档不画正文（地图与设计工具都不在不可辨的字号上画标签）。纸面、色条、
+            // 牌子照旧——牌子是 chrome，本来就不随缩放缩。回到可读档位由视野戳里那一笔账唤回。
+            _label.Visibility = blocks || !text ? Visibility.Collapsed : Visibility.Visible;
             if (blocks && !_textHost.Children.Contains(_md))
             {
                 _textHost.Children.Insert(0, _md);   // 文字下面/牌子上面：顺序沿用原来那一挂
             }
 
-            _md.Visibility = blocks ? Visibility.Visible : Visibility.Collapsed;
+            _md.Visibility = blocks && text ? Visibility.Visible : Visibility.Collapsed;
 
             // 有牌子时，多出来的那一行会被文本宿主继续画进牌子带（它不按行高裁字），
             // 而底部渐隐只能停在牌子顶边——渐变带下面于是又露出半行实字（他 10-26 的截图）。
@@ -1836,7 +1870,8 @@ public sealed class NodeVisual : ContentControl
 
     private void UpdateOverflowFades(CanvasNode node, BoardViewState view, double headerWorld)
     {
-        var textCard = ShowText && Kind != CanvasNodeKind.Group;
+        var textCard = ShowText && Kind != CanvasNodeKind.Group
+            && (_label.Visibility == Visibility.Visible || _md.Visibility == Visibility.Visible);
 
         // 渐隐只取决于"内容画不画得下"，与 zoom 无关（他 10-27 的工单：缩放时看到的必须是同一张卡）。
         // 以前这里有一道 view.Zoom >= 0.5 的门槛：缩到总览那一档，淡出变成硬切一行，

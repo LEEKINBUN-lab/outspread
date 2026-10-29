@@ -50,6 +50,21 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<string, NodeVisual> _realized = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// 拖动那一帧的对齐基准索引（两轴各一枚，查询取并集）。
+    /// 建在提交那一拍：<see cref="ArrangeAll"/> 的逐格循环本来就要把每一格的几何读一遍，
+    /// 顺手把它们交出去，一次都不多读。
+    /// 手势中间只有"正被拖着的那几格"会动，而它们本来就当不了自己的基准
+    /// （原来的 <c>!selected.Contains(id)</c> 就是这件事），所以两次提交之间这份索引不会过期。
+    /// </summary>
+    private readonly IntervalIndex _snapIndexX = new();
+
+    private readonly IntervalIndex _snapIndexY = new();
+
+    private readonly List<Grouping.Rect> _snapBoxes = [];
+
+    private int _snapIndexedCount = -1;
+
+    /// <summary>
     /// 每一格"立着的那张卡是按什么造的"那本账（键见 <see cref="ConstructionStamp"/>）。
     /// 与 <see cref="_realized"/> 同生同死：<see cref="Rebuild"/> 拿它对账，只对不拆——
     /// 少了这本账，"这张卡还在不在"根本判不出"要不要换"。
@@ -1037,6 +1052,8 @@ public sealed partial class MainWindow : Window
             NodeVisual.ResetTiming();
         }
 
+        _snapBoxes.Clear();
+
         foreach (var node in nodes)
         {
             var introAt = timing ? Stopwatch.GetTimestamp() : 0;
@@ -1078,6 +1095,11 @@ public sealed partial class MainWindow : Window
             var box = visual.WorldBox(node, display);
 
             anyChanged |= visual.InputsChanged;
+
+            // 对齐索引吃的是"这一格自己的盒"，与 SnapDrag 原来逐格读的那四个数同一份；
+            // 这一发本来就要读几何，交出去不多花一次读。
+            _snapBoxes.Add(visual.OwnWorldBox);
+
             var drawnX = box.X + ((display.FoldDX ?? 0) / _view.Zoom);
             var drawnY = box.Y + ((display.FoldDY ?? 0) / _view.Zoom);
 
@@ -1118,6 +1140,15 @@ public sealed partial class MainWindow : Window
                     hideTicks += Stopwatch.GetTimestamp() - introAt;
                 }
             }
+        }
+
+        // 索引只在几何真的变过那一拍重建（重建是两排序）：平移的提交也走这一发，而它一个几何都没动。
+        // 判据用那一拍的 anyChanged——输入签名覆盖几何、正文与配色，几何单独变也一定翻它。
+        if (anyChanged || _snapBoxes.Count != _snapIndexedCount)
+        {
+            _snapIndexedCount = _snapBoxes.Count;
+            _snapIndexX.Rebuild(_snapBoxes, box => box.X, box => box.X + box.Width);
+            _snapIndexY.Rebuild(_snapBoxes, box => box.Y, box => box.Y + box.Height);
         }
 
         var elapsed = Stopwatch.GetElapsedTime(started);
@@ -4516,14 +4547,32 @@ public sealed partial class MainWindow : Window
 
             var selected = gesture.StartGeometry.Keys;
 
-            // 能当对齐基准的本来只有视野里那几十格，所以只给它们造包装。
-            // 原来这里 `foreach (_document.Nodes)`——那个属性每读一次就为**全部**节点各 new 一枚，
-            // 600 格的板子每按一次指针就白造 600 枚对象（"便签一多拖动就卡"里的那一笔）。
-            var others = _document
-                .NodesWhere(id => !selected.Contains(id)
-                    && _realized.TryGetValue(id, out var visual) && visual.IsHitTestVisible)
-                .Select(node => new Box(node.X, node.Y, node.Width, node.Height))
-                .ToList();
+            // 能当对齐基准的只有压在"移动盒 ± 阈值"那两条带上的格：<b>X 带 ∪ Y 带</b>，不是矩形相交
+            //（一格可以竖直方向离得很远、横向正好对得上，那种基准照样算）。
+            // 原来这一发每帧把整张表的 id 过一遍（600 格就是 600 次判断＋命中那些的包装），
+            // 那是"拖一格的成本随板上总格数涨"里的一笔；现在读提交那一拍建好的两轴区间索引。
+            // 两次提交之间只有正被拖着的那几格会动，而它们本来就被排除在基准之外。
+            var candidates = IntervalIndex.OverlappingEither(
+                _snapIndexX,
+                _snapIndexY,
+                moving.X - SnapThreshold,
+                moving.X + moving.Width + SnapThreshold,
+                moving.Y - SnapThreshold,
+                moving.Y + moving.Height + SnapThreshold);
+
+            var others = new List<Box>(candidates.Count);
+
+            foreach (var hit in candidates)
+            {
+                if (selected.Contains(hit.Id)
+                    || !_realized.TryGetValue(hit.Id, out var candidate)
+                    || !candidate.IsHitTestVisible)
+                {
+                    continue;
+                }
+
+                others.Add(new Box(hit.Box.X, hit.Box.Y, hit.Box.Width, hit.Box.Height));
+            }
 
             var viewport = _view.WorldViewport(BoardArea.ActualWidth, BoardArea.ActualHeight);
 
@@ -5103,6 +5152,91 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 对齐基准的候选集必须与"把整张表扫一遍"逐格相同（2026-10-29 上区间索引时的那把尺）。
+    /// </summary>
+    /// <remarks>
+    /// 索引写错的症状是"少一根参考线、位置差几像素"，最难归因，所以这里按<b>这块板真实的几何</b>
+    /// 逐发对集合。候选集是 <b>X 带 ∪ Y 带</b>，不是矩形相交（一格可以竖直方向很远、横向正好对齐，
+    /// 那种格照样提供一根 X 基准）——判据在测试里另抄一份，两边不一致就报。
+    /// Core 那侧同名差异测试要等另一路的在途改动编译过才跑得动，所以这一发先顶上。
+    /// </remarks>
+    private void SelfTestSnapIndexMatchesScan(List<string> problems)
+    {
+        var boxes = new List<Grouping.Rect>();
+
+        foreach (var node in _document.Nodes)
+        {
+            if (_realized.TryGetValue(node.Id, out var visual))
+            {
+                boxes.Add(visual.OwnWorldBox);
+            }
+        }
+
+        if (boxes.Count == 0)
+        {
+            problems.Add("自检对齐索引: 板上没有已立的格子，这一发不适用");
+
+            return;
+        }
+
+        // 先对"接线"：挂在窗口上那两枚索引装的就是现值——不一致＝提交那一拍没喂到，后面不必再比。
+        var wired = IntervalIndex.OverlappingEither(_snapIndexX, _snapIndexY, -1e12, 1e12, -1e12, 1e12).Count;
+
+        if (wired != boxes.Count)
+        {
+            problems.Add($"自检对齐索引: 索引里 {wired} 格，板上现值 {boxes.Count} 格——提交那一拍没把几何喂进索引");
+
+            return;
+        }
+
+        var threshold = SnapThreshold;
+        var checkedProbes = 0;
+        var totalCandidates = 0;
+
+        foreach (var moving in boxes.Take(24))
+        {
+            var lowX = moving.X - threshold;
+            var highX = moving.X + moving.Width + threshold;
+            var lowY = moving.Y - threshold;
+            var highY = moving.Y + moving.Height + threshold;
+
+            var throughIndex = IntervalIndex.OverlappingEither(_snapIndexX, _snapIndexY, lowX, highX, lowY, highY)
+                .Select(hit => hit.Id)
+                .ToHashSet(StringComparer.Ordinal);
+
+            var byScan = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var box in boxes)
+            {
+                // 压线也算相交（闭区间，与 Core 那条差异测试同一句理由）：压在带沿上的那格
+                // 正好能给出 ±threshold 的增量，BestAxis 收 |delta| ≤ threshold。
+                if (!(box.X > highX || box.X + box.Width < lowX) || !(box.Y > highY || box.Y + box.Height < lowY))
+                {
+                    byScan.Add(box.Id);
+                }
+            }
+
+            throughIndex.Remove(moving.Id);
+            byScan.Remove(moving.Id);
+
+            if (!throughIndex.SetEquals(byScan))
+            {
+                problems.Add(
+                    $"自检对齐索引: {moving.Id} 这一发候选集不同（索引独有 {string.Join(',', throughIndex.Except(byScan).Take(4))}" +
+                    $"／全表独有 {string.Join(',', byScan.Except(throughIndex).Take(4))}）");
+
+                return;
+            }
+
+            checkedProbes++;
+            totalCandidates += byScan.Count;
+        }
+
+        Diagnostics.Write(
+            $"selftest 对齐索引: {checkedProbes} 发候选集与全表扫逐格相同（板上 {boxes.Count} 格，每发平均 {totalCandidates / (double)Math.Max(1, checkedProbes):0.#} 格当基准）");
+    }
+
+    /// <summary>
     /// 缩放＝同一张卡做变换（2026-10-27 他点的工单，两张截图的根因）。这一发把同一格摆进
     /// 30%／50%／100%／200% 四档，各量一次签名：可见行数、总行数、窗口起点、"还有没有藏行"、
     /// 画的是哪一支（块/单字）、牌子亮不亮、上/下渐隐开不开、以及逐行读回的词。
@@ -5156,6 +5290,7 @@ public sealed partial class MainWindow : Window
             var signatures = new List<string>();
             var transformReadings = new List<string>();
             var stateSigs = new List<string>();
+            var zooms = new List<double>();
 
             foreach (var zoom in new[] { 0.3, 0.5, 1.0, 2.0 })
             {
@@ -5196,6 +5331,7 @@ public sealed partial class MainWindow : Window
                     $"词={words}");
 
                 stateSigs.Add(stateSig);
+                zooms.Add(zoom);
                 transformReadings.Add($"{zoom:0.##}→{card.PaintZoomScale:0.####}");
                 signatures.Add($"格={target.Id} 档={zoom:0.##}\n{stateSig}");
             }
@@ -5210,13 +5346,41 @@ public sealed partial class MainWindow : Window
                     && Math.Abs(got - want) < 1e-6;
             });
 
-            if (stateSigs.Count == 4 && transformsOk && stateSigs.Distinct(StringComparer.Ordinal).Count() == 1)
+            // 口径（他 10-29 拍的）：**看得清的那几档必须是同一张卡**；压在不可辨那一档时，允许少的
+            // 只有"正文/markdown 没画"和随之而来的两道渐隐——行数、窗口、牌子、词一个字都不许变。
+            // 判据不另刻一份：读 NoteSurface 那两条线，跟产品同一把尺。
+            var scale = BoardArea.XamlRoot?.RasterizationScale ?? 1;
+            var legible = new List<string>();
+            var illegible = new List<string>();
+            var textMismatch = new List<string>();
+
+            for (var i = 0; i < stateSigs.Count; i++)
+            {
+                var expect = NoteSurface.DrawsText(zooms[i], scale);
+                var drawn = ZoomContentField(stateSigs[i], "画支=") != "无";
+
+                if (drawn != expect)
+                {
+                    textMismatch.Add(
+                        $"{zooms[i]:P0}（屏幕字高 {zooms[i] * scale * NoteTypography.DefaultSize:0.#}px）画支={ZoomContentField(stateSigs[i], "画支=")}，该{(expect ? "画" : "不画")}");
+                }
+
+                (expect ? legible : illegible).Add(stateSigs[i]);
+            }
+
+            var badgesKept = stateSigs.TrueForAll(sig => ZoomContentField(sig, "牌=") == ZoomContentField(stateSigs[0], "牌="));
+            var onlyTextDiffers = legible.Count == 0 || illegible.Count == 0
+                || ZoomContentMasked(legible[0]) == ZoomContentMasked(illegible[^1]);
+
+            if (stateSigs.Count == 4 && transformsOk && textMismatch.Count == 0 && badgesKept && onlyTextDiffers
+                && legible.Distinct(StringComparer.Ordinal).Count() <= 1
+                && illegible.Distinct(StringComparer.Ordinal).Count() <= 1)
             {
                 var firstState = stateSigs[0].Split('\n');
 
                 reports.Add(
                     $"{target.Id}（{firstState[0][2..]}、{firstState[1][3..]}、{firstState[3][2..]}、牌 {firstState[5][2..]}、" +
-                    $"淡 {firstState[6][2..]}/{firstState[7][2..]}、变换 {string.Join('/', transformReadings)}）");
+                    $"淡 {firstState[6][2..]}/{firstState[7][2..]}、可辨 {legible.Count} 档／藏字 {illegible.Count} 档、变换 {string.Join('/', transformReadings)}）");
             }
             else
             {
@@ -5225,10 +5389,30 @@ public sealed partial class MainWindow : Window
                     problems.Add($"自检缩放内容不变: {target.Id} 的内容层变换没跟上相机（{string.Join(" ", transformReadings)}）");
                 }
 
-                if (stateSigs.Count > 1 && stateSigs.Distinct(StringComparer.Ordinal).Count() > 1)
+                if (textMismatch.Count > 0)
+                {
+                    problems.Add($"自检缩放内容不变: {target.Id} 的正文与可辨判据不符——{string.Join("；", textMismatch)}");
+                }
+
+                if (!badgesKept)
+                {
+                    problems.Add($"自检缩放内容不变: {target.Id} 的牌子随缩放变了（藏字不许顺手把标记也藏掉）");
+                }
+
+                if (!onlyTextDiffers)
                 {
                     problems.Add(
-                        $"自检缩放内容不变: {target.Id} 在四档下不是同一张卡——\n{string.Join("\n----\n", signatures)}");
+                        $"自检缩放内容不变: {target.Id} 藏字那一档与可辨那档不止差「画支与两道淡」——\n{string.Join("\n----\n", signatures)}");
+                }
+
+                if (legible.Distinct(StringComparer.Ordinal).Count() > 1)
+                {
+                    problems.Add($"自检缩放内容不变: {target.Id} 在看得清的那几档不是同一张卡——\n{string.Join("\n----\n", signatures)}");
+                }
+
+                if (illegible.Distinct(StringComparer.Ordinal).Count() > 1)
+                {
+                    problems.Add($"自检缩放内容不变: {target.Id} 在看不清的那几档彼此也不同——\n{string.Join("\n----\n", signatures)}");
                 }
             }
         }
@@ -5244,6 +5428,30 @@ public sealed partial class MainWindow : Window
 
         ArrangeAll();
     }
+
+    /// <summary>从那一串内容签名里取一个字段（固定字段都排在「词」前面，所以首个匹配就是它）。</summary>
+    private static string ZoomContentField(string signature, string prefix)
+    {
+        foreach (var line in signature.Split('\n'))
+        {
+            if (line.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return line[prefix.Length..];
+            }
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>抹掉"藏字那一档允许不同"的那三项（画支、上淡、下淡）；其余原样留着——行数与词不许跟着镜头动。</summary>
+    private static string ZoomContentMasked(string signature)
+        => string.Join(
+            '\n',
+            signature.Split('\n').Select(line =>
+                line.StartsWith("画支=", StringComparison.Ordinal) ? "画支=?"
+                    : line.StartsWith("上淡=", StringComparison.Ordinal) ? "上淡=?"
+                        : line.StartsWith("下淡=", StringComparison.Ordinal) ? "下淡=?"
+                            : line));
 
     /// <summary>
     /// Exercises the camera, the realisation and the adorner without a mouse, so the
@@ -5271,6 +5479,9 @@ public sealed partial class MainWindow : Window
         // 验收①（他 10-27 的工单）：同一格在 30%/50%/100%/200% 四档下，可见行数、牌子、
         // 渐隐开关必须一字不差——缩放是变换，不是重排。放在最前面：后面的每一发都会改板面。
         SelfTestCardContentZoomInvariant(problems);
+
+        // 对齐索引那把尺：候选集必须与全表扫逐格相同（先于会改板面的那些发）。
+        SelfTestSnapIndexMatchesScan(problems);
 
         SelfTestIconsUseDesignGrid(problems);
         SelfTestGroups(problems);
@@ -8784,10 +8995,13 @@ public sealed partial class MainWindow : Window
         var lastTickAt = System.Diagnostics.Stopwatch.GetTimestamp();
         var ticks = new List<(int Frame, double Ms, double Gap, double AllocKb, int G0, int G1, int G2, int Arrange, int Rebuild, int Repaint, int Resize)>();
 
-        timer.Interval = TimeSpan.FromMilliseconds(16);
-        timer.IsRepeating = true;
-
-        timer.Tick += (_, _) =>
+        // 节拍挂在渲染那一拍，不挂计时器：这台机器的系统时钟粒度是 15.625ms（10-28 现测：
+        // 100 发"睡 16 毫秒"实测落在 27–36ms、众数 31ms），而这版投影的 DispatcherQueueTimer
+        // 没有 IsHighResolution（编译当场拒绝那个成员）。16ms 的请求被并成两拍，于是
+        // "稳态帧间隔 30.7ms"量的是装置自己的节拍，不是合成器画得动几帧。
+        // CompositionTarget.Rendering 是产品自己走的那条节拍（滚轮缓动在用它，见 OnWheelFrame），
+        // 挂上它，帧间隔才等于他眼睛看到的那一列帧。
+        void Beat()
         {
             var nowTick = System.Diagnostics.Stopwatch.GetTimestamp();
             var gap = Ticks(nowTick - lastTickAt);
@@ -8835,6 +9049,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
+            Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= OnRenderBeat;
             timer.Stop();
 
             onReport?.Invoke();
@@ -8867,6 +9082,23 @@ public sealed partial class MainWindow : Window
 
             // 探针必须自己收场：WinUI 3 关掉最后一扇窗口并不会结束进程，留着它就是一个
             // 在后台每 16ms 挪一次相机（或每帧重建一次点阵）的东西——他叫停过这类事。
+            Environment.Exit(0);
+        }
+
+        void OnRenderBeat(object? sender, object e) => Beat();
+
+        Microsoft.UI.Xaml.Media.CompositionTarget.Rendering += OnRenderBeat;
+
+        // 兜底：窗口没在前台合成时渲染节拍一次也不会来，那一发就不许留在后台。到点之后多等 5 秒
+        // 就把"这一发只跑了 N 帧"如实写进日志并结束进程——读数少一发好过装置自己变成常驻活。
+        timer.Interval = TimeSpan.FromMilliseconds(milliseconds + 5_000);
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) =>
+        {
+            Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= OnRenderBeat;
+
+            Diagnostics.Write($"{label} 兜底收场：{milliseconds + 5_000}ms 到，只跑了 {frames} 帧（渲染节拍没来够）");
+
             Environment.Exit(0);
         };
 

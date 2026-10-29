@@ -65,6 +65,15 @@ public sealed partial class MainWindow : Window
     private int _snapIndexedCount = -1;
 
     /// <summary>
+    /// 遮挡那一拍的两本平行账（cells ↔ 待摆的格，一一对应）：视窗内、按文档序（＝绘制序）收上来，
+    /// <see cref="Occlusion.CulledCells"/> 的答案落回去——被摘的 Collapse，剩下的 Update。
+    /// 与 <see cref="_snapBoxes"/> 同一生命周期：每一发先 Clear。
+    /// </summary>
+    private readonly List<Occlusion.Cell> _occlusionCells = [];
+
+    private readonly List<(CanvasNode Node, NodeVisual Visual, NodeVisual.Display Display)> _occlusionPending = [];
+
+    /// <summary>
     /// 每一格"立着的那张卡是按什么造的"那本账（键见 <see cref="ConstructionStamp"/>）。
     /// 与 <see cref="_realized"/> 同生同死：<see cref="Rebuild"/> 拿它对账，只对不拆——
     /// 少了这本账，"这张卡还在不在"根本判不出"要不要换"。
@@ -1042,6 +1051,7 @@ public sealed partial class MainWindow : Window
         long placeTicks = 0;
         long updateTicks = 0;
         long hideTicks = 0;
+        long cullTicks = 0;
 
         // 这一拍有没有任何一格的输入真变了（小地图要不要重走那本账就看它）。
         var anyChanged = false;
@@ -1053,6 +1063,8 @@ public sealed partial class MainWindow : Window
         }
 
         _snapBoxes.Clear();
+        _occlusionCells.Clear();
+        _occlusionPending.Clear();
 
         foreach (var node in nodes)
         {
@@ -1117,13 +1129,41 @@ public sealed partial class MainWindow : Window
 
             if (intersects)
             {
-                // 位置、尺寸、缩放、命中、内容都由 Update 按"上一拍写过什么"对账，只写真变的那几笔。
-                visual.Update(node, _view, scale, display);
-                visible++;
+                // 遮挡账先记，Update 推到 CulledCells 之后：被摘的那几格这一拍什么都不画，
+                // 不该再花一次逐格对账（内容账一翻就要重排整段 markdown）。
+                // 实心纸＝非组框（组框纸面透明，压不住任何东西）、没折走、没被筛选压暗——
+                // 亮度读的是上一拍 Update 写下的 Opacity，筛选拍差一帧，错的方向是"少摘"，安全。
+                var opaque = visual.Kind != CanvasNodeKind.Group
+                    && !display.FoldedAway
+                    && (display.Revealed || !_view.Filtering || visual.Opacity >= 1d);
+
+                // 能被摘的再排除选中、编辑、正拖正拉的那几格：它们要么有 chrome 伸出盒外，
+                // 要么下一拍就要动，摘了会把用户的注意目标藏掉。
+                var droppable = opaque
+                    && !_selection.Contains(id)
+                    && id != _editingId
+                    && !(_nodeGesture?.StartGeometry.ContainsKey(id) ?? false)
+                    && !(_resizeGesture?.Start.ContainsKey(id) ?? false);
+
+                // 画到的那一圈＝盒往下加阴影的外扩；阴影这一档关掉时只剩底线那 2 宽
+                // （ShadowReachWorld 自己把它算作下限）。折走的、压暗的、组框也进账
+                // （CanCover/CanCull 都是 false），CulledCells 自己会跳过它们。
+                var reach = opaque && NoteSurface.DrawsShadow(_view.Zoom)
+                    ? NoteSurface.ShadowReachWorld(id)
+                    : NoteSurface.FallbackLineWidth;
+
+                _occlusionCells.Add(new Occlusion.Cell(
+                    id,
+                    new Grouping.Rect(id, drawnX, drawnY, box.Width, box.Height),
+                    new Grouping.Rect(id, drawnX, drawnY, box.Width, box.Height + reach),
+                    CanCover: opaque,
+                    CanCull: droppable));
+
+                _occlusionPending.Add((node, visual, display));
 
                 if (timing)
                 {
-                    updateTicks += Stopwatch.GetTimestamp() - introAt;
+                    placeTicks += Stopwatch.GetTimestamp() - introAt;
                 }
             }
             else
@@ -1142,6 +1182,52 @@ public sealed partial class MainWindow : Window
             }
         }
 
+        // ── 遮挡那一拍：完全被上面那几格盖住的格，这一拍什么都不画（WinUI 不做遮挡剔除，
+        // 挂在树上的每一层照旧被栅格化、被混合——那本账是每像素的）。摘掉走与屏外同一套
+        // Collapse（Hidden, not discarded）：盖它的卡一挪走，几何变了，下一发 Update 自己立回来。
+        var cullAt = timing ? Stopwatch.GetTimestamp() : 0;
+        var culledCount = 0;
+
+        IReadOnlyList<string>? culledIds = _occlusionCells.Count > 1
+            ? Occlusion.CulledCells(_occlusionCells)
+            : null;
+
+        HashSet<string>? culledSet = culledIds is { Count: > 0 }
+            ? new HashSet<string>(culledIds, StringComparer.Ordinal)
+            : null;
+
+        if (timing)
+        {
+            cullTicks += Stopwatch.GetTimestamp() - cullAt;
+        }
+
+        foreach (var (pendingNode, pendingVisual, pendingDisplay) in _occlusionPending)
+        {
+            var updateAt = timing ? Stopwatch.GetTimestamp() : 0;
+
+            if (culledSet is not null && culledSet.Contains(pendingNode.Id))
+            {
+                pendingVisual.Collapse();
+                culledCount++;
+
+                if (timing)
+                {
+                    cullTicks += Stopwatch.GetTimestamp() - updateAt;
+                }
+
+                continue;
+            }
+
+            // 位置、尺寸、缩放、命中、内容都由 Update 按"上一拍写过什么"对账，只写真变的那几笔。
+            pendingVisual.Update(pendingNode, _view, scale, pendingDisplay);
+            visible++;
+
+            if (timing)
+            {
+                updateTicks += Stopwatch.GetTimestamp() - updateAt;
+            }
+        }
+
         // 索引只在几何真的变过那一拍重建（重建是两排序）：平移的提交也走这一发，而它一个几何都没动。
         // 判据用那一拍的 anyChanged——输入签名覆盖几何、正文与配色，几何单独变也一定翻它。
         if (anyChanged || _snapBoxes.Count != _snapIndexedCount)
@@ -1157,7 +1243,7 @@ public sealed partial class MainWindow : Window
 
         if (App.SelfTest)
         {
-            Diagnostics.Write($"selftest arrange: {nodes.Count} 格 · 可见 {visible} · 内容账命中 {guardHits} · 整跑 {NodeVisual.ContentFullRuns - fullBefore} · 循环 {loopMs:0.0}ms");
+            Diagnostics.Write($"selftest arrange: {nodes.Count} 格 · 可见 {visible} · 遮挡摘 {culledCount} · 内容账命中 {guardHits} · 整跑 {NodeVisual.ContentFullRuns - fullBefore} · 循环 {loopMs:0.0}ms");
         }
 
         // 小地图跟着这一拍走：小块只在文档几何真变了时才拆建（Sync 里自己对账），
@@ -1194,7 +1280,7 @@ public sealed partial class MainWindow : Window
             Diagnostics.Write(
                 $"perf 逐格账: 取视觉 {Ticks(introTicks)}ms · 算位置/剔除 {Ticks(placeTicks)}ms · Update {Ticks(updateTicks)}ms" +
                 $"（相机 {NodeVisual.TimingCameraMs:0.00} · 内容账 {NodeVisual.TimingStampMs:0.00} · 整跑 {NodeVisual.TimingFullMs:0.00}）" +
-                $" · 隐藏 {Ticks(hideTicks)}ms ｜ 可见 {visible}/{nodes.Count}");
+                $" · 遮挡 {Ticks(cullTicks)}ms（摘 {culledCount}） · 隐藏 {Ticks(hideTicks)}ms ｜ 可见 {visible}/{nodes.Count}");
             Diagnostics.Write(
                 $"perf ArrangeAll 全账: 共 {Ticks(doneAt - frameAt)}ms ＝ 衣服 {Ticks(chromeAt - frameAt)}" +
                 $" · 连线 {Ticks(linksAt - chromeAt)} · 点阵 {Ticks(gridAt - linksAt)}" +
@@ -5491,6 +5577,7 @@ public sealed partial class MainWindow : Window
         SelfTestBatchTag(problems);
         SelfTestUniformSize(problems);
         SelfTestCulledVisuals(problems);
+        SelfTestOcclusionStack(problems);
         SelfTestFreshNoteIsFree(problems);
 
         // 改键：四条面（派发 / Tab 清单 / 右键菜单 / 键位页）读的是同一份，改键要能落盘、能挡住冲突。
@@ -8742,6 +8829,68 @@ public sealed partial class MainWindow : Window
         {
             Diagnostics.Write($"selftest 剔除: {culled.Count} 格已 Collapsed，阴影带不再露");
         }
+    }
+
+    /// <summary>
+    /// 遮挡剔除的活体验证：夹具板上没有整格被盖住的叠摞（其余各发的"遮挡摘 0"说明不了摘得对），
+    /// 这一发自己造一枚——两格同位叠放，下面那格该被摘（Collapsed）；盖它的那格挪走，它下一发自己回来。
+    /// 摘错的代价是屏幕上少一张卡，所以两段都要看：摘得掉，也回得来。
+    /// </summary>
+    /// <remarks>
+    /// 节点走 <see cref="CanvasDocument.Add"/> 直进文档，不经命令层，撤销栈里不留痕；走前造齐、
+    /// 走前拆净，后面每一发看到的还是进门前那块板。
+    /// </remarks>
+    private void SelfTestOcclusionStack(List<string> problems)
+    {
+        const string bottomId = "uoccbottom";
+        const string topId = "uocctop";
+
+        // 落在锚点那一格的世界坐标上：在视口内，遮挡账才收得到它。
+        var anchorX = _view.ToWorldX(400);
+        var anchorY = _view.ToWorldY(300);
+
+        // 上面那张加高 32：阴影伸出量按 id 的 lift 各不相同（ShadowReachWorld），同尺寸的
+        // 两张卡互相盖不满底下那条阴影带——按规格那真就不该摘。测试要的不是"恰好同尺寸"，
+        // 是"盖得住"，加高一段把 lift 差吃掉。
+        var bottomNode = _document.Add(CanvasNodeKind.Text, anchorX, anchorY, 220, 130, id: bottomId);
+        var topNode = _document.Add(CanvasNodeKind.Text, anchorX, anchorY, 220, 162, id: topId);
+
+        Rebuild();
+        ArrangeAll();
+
+        var bottom = _realized[bottomId];
+        var top = _realized[topId];
+
+        if (bottom.Visibility != Visibility.Collapsed)
+        {
+            problems.Add($"遮挡剔除: 同位叠摞的下面那格没被摘（Visibility={bottom.Visibility}）——完全被盖住的格还在栅格化、还在混合");
+        }
+
+        if (top.Visibility != Visibility.Visible)
+        {
+            problems.Add($"遮挡剔除: 上面那格反而不见了（Visibility={top.Visibility}）——判定把活着的那格摘了");
+        }
+
+        // 挪走盖它的那格：下面那格必须自己回来。摘掉走的是 Collapse，回来靠 Update 里
+        // 那一笔 _collapsed 复位——这条断言钉的就是那条复位路。
+        topNode.X = anchorX + 320;
+        ArrangeAll();
+
+        if (_realized[bottomId].Visibility != Visibility.Visible)
+        {
+            problems.Add("遮挡剔除: 盖它的那格挪走后，下面那格没回来——回来那一拍多半还叠着旧账");
+        }
+
+        if (_realized[topId].Visibility != Visibility.Visible)
+        {
+            problems.Add("遮挡剔除: 挪开的那格自己倒不见了");
+        }
+
+        _document.Remove(topId);
+        _document.Remove(bottomId);
+
+        Rebuild();
+        ArrangeAll();
     }
 
     /// <summary>

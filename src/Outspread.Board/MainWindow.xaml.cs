@@ -1378,6 +1378,9 @@ public sealed partial class MainWindow : Window
 
     private void OnSurfacePressed(object sender, PointerRoutedEventArgs e)
     {
+        // 演示滑页途中他按了板面：弃飞，那一拍起交给 interactive（与滚轮同一句理由）。
+        StopPresentGlide();
+
         // 组名也是一样：这一发按在板子上＝名字到此为止，而且要在下面改选中之前收笔
         // （CommitRename 里的 Rebuild 会清选中）。落在框里（例如右键要文本框菜单）不算。
         if (_groupRenameBox is not null)
@@ -1907,6 +1910,9 @@ public sealed partial class MainWindow : Window
         {
             return;
         }
+
+        // 演示滑页途中他动了滚轮：弃飞，相机归 interactive（Miro 同款——演的人随时能上手）。
+        StopPresentGlide();
 
         // 正在写那一格时，滚轮不再是"缩放整块板子"：那一发要把正在编辑的内容滚进视野
         // （他 10-24 点的）。一格走多少屏幕像素是手感，所以这个数留在界面，几何在 Core。
@@ -5158,6 +5164,17 @@ public sealed partial class MainWindow : Window
     /// <summary>演示那一拍收起来的界面根（标签条、徽章、小地图）与它们各自的可见性：退场时按原样还。</summary>
     private readonly List<(FrameworkElement Element, Visibility Visibility)> _chromeHiddenForPresent = [];
 
+    /// <summary>滑页那一发的状态：目标相机 + 是否在飞。飞的时候每帧把真相机朝目标指数逼近
+    /// （ZoomTween 同一把步长）；pan 的收口用自己的绝对阈值——ZoomTween 那条按 |target| 定比例，
+    /// 目标在原点附近时永远到不了。指针一动/滚轮一动就弃飞（Miro interactive：演的人随时能上手）。</summary>
+    private bool _presentGliding;
+
+    private double _presentToPanX;
+
+    private double _presentToPanY;
+
+    private double _presentToZoom;
+
     private void TogglePresent()
     {
         if (_presenting)
@@ -5217,6 +5234,8 @@ public sealed partial class MainWindow : Window
     {
         _presenting = false;
 
+        StopPresentGlide();
+
         foreach (var (element, visibility) in _chromeHiddenForPresent)
         {
             element.Visibility = visibility;
@@ -5258,7 +5277,8 @@ public sealed partial class MainWindow : Window
         Say($"第 {_presentIndex + 1}/{pages.Count} 页 · {pages[_presentIndex].Label}");
     }
 
-    /// <summary>把当前页取景：成员盒并集装进视口（四周留 48px），居中。与 ResetView 同一套相机账。</summary>
+    /// <summary>把当前页取景：成员盒并集装进视口（四周留 48px），居中。与 ResetView 同一套相机账。
+    /// 相机不再瞬移——交给 <see cref="GlideTo"/> 逐帧滑过去（Miro/tldraw 的演示都是滑的，瞬移是 v1 偷的懒）。</summary>
     private void PresentShow()
     {
         var slides = Presenting.SlidesOf(_document);
@@ -5276,9 +5296,87 @@ public sealed partial class MainWindow : Window
         var width = Math.Max(1, BoardArea.ActualWidth - 96);
         var height = Math.Max(1, BoardArea.ActualHeight - 96);
 
-        _view.Zoom = Math.Clamp(Math.Min(width / bounds.Width, height / bounds.Height), MinZoom, MaxZoom);
-        _view.PanX = (BoardArea.ActualWidth / 2) - ((bounds.X + (bounds.Width / 2)) * _view.Zoom);
-        _view.PanY = (BoardArea.ActualHeight / 2) - ((bounds.Y + (bounds.Height / 2)) * _view.Zoom);
+        var zoom = Math.Clamp(Math.Min(width / bounds.Width, height / bounds.Height), MinZoom, MaxZoom);
+
+        GlideTo(
+            (BoardArea.ActualWidth / 2) - ((bounds.X + (bounds.Width / 2)) * zoom),
+            (BoardArea.ActualHeight / 2) - ((bounds.Y + (bounds.Height / 2)) * zoom),
+            zoom);
+    }
+
+    /// <summary>朝目标相机起飞：差得远才挂渲染节拍，已在原地就一步落定（首发的相机可能就是这一页）。</summary>
+    private void GlideTo(double panX, double panY, double zoom)
+    {
+        _presentToPanX = panX;
+        _presentToPanY = panY;
+        _presentToZoom = zoom;
+
+        var settled = Math.Abs(_view.PanX - panX) < 0.5
+            && Math.Abs(_view.PanY - panY) < 0.5
+            && Math.Abs(_view.Zoom - zoom) < 0.001;
+
+        if (settled)
+        {
+            LandPresent();
+
+            return;
+        }
+
+        if (!_presentGliding)
+        {
+            _presentGliding = true;
+            Microsoft.UI.Xaml.Media.CompositionTarget.Rendering += OnPresentFrame;
+        }
+    }
+
+    private void StopPresentGlide()
+    {
+        if (!_presentGliding)
+        {
+            return;
+        }
+
+        _presentGliding = false;
+        Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= OnPresentFrame;
+    }
+
+    /// <summary>滑页那一帧：真相机每通道朝目标走一段（指数平滑，滚轮缓动同一把步长），
+    /// 每帧一次完整排布（这一档 0.3–0.5ms，250ms 里十几帧，付得起）；三通道都进绝对阈值就落定。</summary>
+    private void OnPresentFrame(object? sender, object args)
+    {
+        if (!_presenting)
+        {
+            StopPresentGlide();
+
+            return;
+        }
+
+        var panX = ZoomTween.Step(_view.PanX, _presentToPanX);
+        var panY = ZoomTween.Step(_view.PanY, _presentToPanY);
+        var zoom = ZoomTween.Step(_view.Zoom, _presentToZoom);
+
+        if (Math.Abs(panX - _presentToPanX) < 0.5 && Math.Abs(panY - _presentToPanY) < 0.5
+            && Math.Abs(zoom - _presentToZoom) < 0.001)
+        {
+            StopPresentGlide();
+            LandPresent();
+
+            return;
+        }
+
+        _view.PanX = panX;
+        _view.PanY = panY;
+        _view.Zoom = zoom;
+
+        ArrangeAll();
+    }
+
+    /// <summary>落定：精确踩到目标相机、排布一次。滑页途中被指针/滚轮打断就停在那，交给 interactive。</summary>
+    private void LandPresent()
+    {
+        _view.PanX = _presentToPanX;
+        _view.PanY = _presentToPanY;
+        _view.Zoom = _presentToZoom;
 
         ArrangeAll();
     }

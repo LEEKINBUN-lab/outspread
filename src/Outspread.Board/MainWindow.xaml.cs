@@ -5152,6 +5152,9 @@ public sealed partial class MainWindow : Window
 
     private (double PanX, double PanY, double Zoom) _cameraBeforePresent;
 
+    /// <summary>演示那一拍收起来的界面根（标签条、徽章、小地图）与它们各自的可见性：退场时按原样还。</summary>
+    private readonly List<(FrameworkElement Element, Visibility Visibility)> _chromeHiddenForPresent = [];
+
     private void TogglePresent()
     {
         if (_presenting)
@@ -5178,6 +5181,17 @@ public sealed partial class MainWindow : Window
         ClearSelection();
         ProjectSelection();
 
+        // 界面收干净再演（Miro 演示同样把 UI 藏掉）：标签条、徽章、小地图退场，各自记原样，
+        // Esc 那一发按记录还——谁本来就该是 Collapsed 的，退场时也回到 Collapsed。
+        // 那句翻页播报（SayHost）留着：它是演示自己的页码。
+        _chromeHiddenForPresent.Clear();
+
+        foreach (var element in new FrameworkElement[] { TitleBarHost, BadgeHost, _miniMap.Root })
+        {
+            _chromeHiddenForPresent.Add((element, element.Visibility));
+            element.Visibility = Visibility.Collapsed;
+        }
+
         _cameraBeforePresent = (_view.PanX, _view.PanY, _view.Zoom);
         _presenting = true;
         _presentIndex = 0;
@@ -5199,6 +5213,13 @@ public sealed partial class MainWindow : Window
     private void ExitPresent()
     {
         _presenting = false;
+
+        foreach (var (element, visibility) in _chromeHiddenForPresent)
+        {
+            element.Visibility = visibility;
+        }
+
+        _chromeHiddenForPresent.Clear();
 
         (_view.PanX, _view.PanY, _view.Zoom) = _cameraBeforePresent;
 

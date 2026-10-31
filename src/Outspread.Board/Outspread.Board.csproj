@@ -24,9 +24,10 @@
     <WinUISDKReferences>false</WinUISDKReferences>
 
     <!-- Unpackaged: plain .exe, no MSIX, no package identity. Packaged installs
-         build fine on this machine but do not launch (see Helm README), and the
-         Windows App Runtime 2.5.1 is already installed machine-wide, so the
-         framework-dependent layout is the one that actually runs here. -->
+         build fine on this machine but do not launch (2026-10 实测记录，原件已随 Helm
+         迁入回收站——教训留在这句话里), and the Windows App Runtime 2.5.1 is already
+         installed machine-wide, so the framework-dependent layout is the one that
+         actually runs here. -->
     <WindowsPackageType>None</WindowsPackageType>
     <EnableMsixTooling>false</EnableMsixTooling>
     <EnableWinAppRunSupport>false</EnableWinAppRunSupport>

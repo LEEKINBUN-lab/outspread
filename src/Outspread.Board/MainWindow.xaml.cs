@@ -285,6 +285,7 @@ public sealed partial class MainWindow : Window
         BoardArea.PointerWheelChanged += OnWheel;
         BoardArea.SizeChanged += (_, _) => ArrangeAll();
         BoardArea.DragOver += OnDragOver;
+        BoardArea.DragLeave += OnDragLeave;
         BoardArea.Drop += OnDrop;
         BoardArea.DoubleTapped += OnSurfaceDoubleTapped;
 
@@ -3132,6 +3133,7 @@ public sealed partial class MainWindow : Window
         var folders = 0;
         var skipped = 0;
         var missing = new List<string>();
+        var blocked = new List<string>();
         var large = new List<(int Index, string Path, long Bytes)>();
 
         for (var index = 0; index < files.Count; index++)
@@ -3184,9 +3186,15 @@ public sealed partial class MainWindow : Window
                     // 按住 Ctrl 放下＝一件都不复制，只留链接；超过 10 MB 的那些也不再问。
                     large.Add((index, path, length));
                 }
-                else if (CreateCachedFileCard(path, spot) is not null)
+                else if (CreateCachedFileCard(path, spot, out var failure) is not null)
                 {
                     cached++;
+                }
+                else if (failure is not null)
+                {
+                    // 收纳没成必须点名：一句「详情见日志」是让贴文件的人替回执做调试
+                    // （10-31 他贴一份正开着的表格文件撞了锁，回执只说没建上）。
+                    blocked.Add(System.IO.Path.GetFileName(path));
                 }
                 else
                 {
@@ -3215,10 +3223,15 @@ public sealed partial class MainWindow : Window
             foreach (var (index, path, _) in large)
             {
                 var spot = new Point(worldAt.X + (index * 24), worldAt.Y + (index * 24));
+                string? failure = null;
 
-                if (choice == LargeFileChoice.Cache && CreateCachedFileCard(path, spot) is not null)
+                if (choice == LargeFileChoice.Cache && CreateCachedFileCard(path, spot, out failure) is not null)
                 {
                     cached++;
+                }
+                else if (failure is not null)
+                {
+                    blocked.Add(System.IO.Path.GetFileName(path));
                 }
                 else if (choice == LargeFileChoice.Link && CreateLinkedFileCard(path, spot) is not null)
                 {
@@ -3256,13 +3269,29 @@ public sealed partial class MainWindow : Window
             parts.Add($"{folders} 个文件夹");
         }
 
-        var receipt = parts.Count == 0
-            ? "放下的内容均未建卡（详情见日志）"
+        var message = parts.Count == 0
+            ? (blocked.Count > 0 ? string.Empty : "放下的内容均未建卡")
             : $"已放置 {string.Join("、", parts)}" + (skipped > 0 ? $"；{skipped} 个未放置" : string.Empty);
 
-        Say(missing.Count == 0
-            ? receipt
-            : $"{receipt}；{missing.Count} 条路径在这个位置不存在，未建卡：{string.Join("、", missing.Take(3))}");
+        if (blocked.Count > 0)
+        {
+            // 他 10-31 拍的：点名就够——原因与绕法不进回执，日志里有。
+            message += (message.Length > 0 ? "；" : string.Empty)
+                + $"{blocked.Count} 个文件未建卡：{string.Join("、", blocked.Take(3))}";
+        }
+
+        if (missing.Count > 0)
+        {
+            message += $"；{missing.Count} 条路径在这个位置不存在，未建卡：{string.Join("、", missing.Take(3))}";
+        }
+
+        // 谁都没被点名、又一张卡没落（比如整批图片都读不出）：只有日志还知道为什么。
+        if (parts.Count == 0 && blocked.Count == 0 && missing.Count == 0)
+        {
+            message += "（详情见日志）";
+        }
+
+        Say(message);
     }
 
     private enum LargeFileChoice
@@ -3427,13 +3456,14 @@ public sealed partial class MainWindow : Window
         await CreateCardFromLocationAsync(entry.Text, PasteWorld());
     }
 
-    private CanvasNode? CreateCachedFileCard(string sourcePath, Point worldAt)
+    private CanvasNode? CreateCachedFileCard(string sourcePath, Point worldAt, out string? failure)
     {
         const double width = 280;
         const double height = 180;
 
         try
         {
+            failure = null;
             var boardForAsset = IsAllNotes(_boardPath) ? UnfiledPath : _boardPath!;
             var relative = AttachmentStore.WriteFile(boardForAsset, sourcePath, out var reused);
 
@@ -3457,6 +3487,12 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Diagnostics.Write($"attachment write failed {sourcePath}: {ex.Message}");
+
+            // 失败要能对人说清为什么。0x80070020/21 是共享/锁冲突——文件正被某个程序开着
+            // （Excel、WPS 挂着一份表格文件就是它），这一档最常见，也最容易误会是板子坏了。
+            failure = ex.HResult == unchecked((int)0x80070020) || ex.HResult == unchecked((int)0x80070021)
+                ? "正被其他程序占用"
+                : ex is UnauthorizedAccessException ? "权限不够，读不了" : "读不出来";
             return null;
         }
     }
@@ -3897,9 +3933,30 @@ public sealed partial class MainWindow : Window
         e.AcceptedOperation = holdsFiles ? Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy
             : Windows.ApplicationModel.DataTransfer.DataPackageOperation.None;
 
-        e.DragUIOverride.Caption = holdsFiles ? "放到板上" : "放不下";
-        e.DragUIOverride.IsCaptionVisible = true;
+        // 系统那个气泡画在文件幽灵正中（他 10-31 的截图：文案盖住了拖着的文件），关掉，
+        // 换成自己的模式牌。牌子与松手那一发读同一组键，途中就看得见会落成哪种卡。
+        e.DragUIOverride.IsCaptionVisible = false;
         e.DragUIOverride.IsGlyphVisible = false;
+
+        DragChipText.Text = holdsFiles
+            ? (DropWantsLink() ? "只放链接（不复制副本）" : "放到板上")
+            : "放不下";
+
+        var at = e.GetPosition(BoardArea);
+
+        DragChipOffset.X = at.X + 18;
+        DragChipOffset.Y = at.Y + 20;
+        DragChip.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>拖入时的修饰键判据：Ctrl 或 Shift 都算"只放链接"。牌面与松手同一把尺，
+    /// 他按住键时看到的字就是落地后的结果。</summary>
+    private static bool DropWantsLink()
+        => KeyDownIs(Windows.System.VirtualKey.Control) || KeyDownIs(Windows.System.VirtualKey.Shift);
+
+    private void OnDragLeave(object sender, DragEventArgs e)
+    {
+        DragChip.Visibility = Visibility.Collapsed;
     }
 
     private async void OnDrop(object sender, DragEventArgs e)
@@ -3910,6 +3967,9 @@ public sealed partial class MainWindow : Window
 
         try
         {
+            // 拖入已经结束，模式牌立刻收掉；后面是异步的，不能等它跑完。
+            DragChip.Visibility = Visibility.Collapsed;
+
             _lastPointer = e.GetPosition(BoardArea);
 
             var paths = new List<string>();
@@ -3926,8 +3986,8 @@ public sealed partial class MainWindow : Window
 
             if (paths.Count > 0)
             {
-                // 按住 Ctrl 放下＝切换到链接型；默认那条"小于 10 MB 自动收纳、删卡后清理"照旧。
-                await PlaceFilesAsync(paths, PasteWorld(), KeyDownIs(Windows.System.VirtualKey.Control));
+                // 按住 Ctrl（或 Shift）放下＝切换到链接型；默认那条"小于 10 MB 自动收纳、删卡后清理"照旧。
+                await PlaceFilesAsync(paths, PasteWorld(), DropWantsLink());
             }
             else
             {
@@ -4026,9 +4086,19 @@ public sealed partial class MainWindow : Window
 
         BeginGesture("新建便签");
 
-        var node = CreateTextNote(string.Empty, FreeOfGroups(e.GetPosition(BoardArea) is { } screen
-            ? new Point(_view.ToWorldX(screen.X), _view.ToWorldY(screen.Y))
-            : PasteWorld()));
+        var screen = e.GetPosition(BoardArea);
+        var world = new Point(_view.ToWorldX(screen.X), _view.ToWorldY(screen.Y));
+
+        // 他 10-31 拍的：双击落在哪个组的框里，新格就直接生在组里——不再被 FreeOfGroups
+        // 挪到框外再人肉拖回来。这发是显式动作（对比 10-22 那个"莫名其妙入组"）：
+        // 框长过去罩住新格，框上有名单就把名字写进名单，没有名单的框仍走几何。
+        var home = HomeGroupAt(world);
+        var node = CreateTextNote(string.Empty, home is null ? FreeOfGroups(world) : world);
+
+        if (home is not null)
+        {
+            AdoptIntoGroup(node, home);
+        }
 
         EndGesture();
 
@@ -4036,6 +4106,48 @@ public sealed partial class MainWindow : Window
 
         BeginEdit(node.Id);
         e.Handled = true;
+    }
+
+    /// <summary>世界坐标那一发落点压着的组框（最内层优先，嵌套时归小框）；不在任何框里＝null。</summary>
+    private CanvasNode? HomeGroupAt(Point world)
+    {
+        var point = new Grouping.Rect("double-tap", world.X, world.Y, 0, 0);
+
+        return _document.Nodes
+            .Where(node => node.Kind == CanvasNodeKind.Group)
+            .Select(frame => (frame, box: RectOf(frame)))
+            .Where(pair => pair.box.Holds(point))
+            .OrderBy(pair => pair.box.Width * pair.box.Height)
+            .Select(pair => pair.frame)
+            .FirstOrDefault();
+    }
+
+    /// <summary>双击建卡进组的落笔：框长过去罩住新格（组钮拖入同一条 Enclose）；
+    /// 框上有名单就把新格写进名单——没有名单的框仍按几何，不凭空长出一张表。</summary>
+    private void AdoptIntoGroup(CanvasNode node, CanvasNode frameNode)
+    {
+        var members = Groups().Members(frameNode.Id)
+            .Where(member => member.Id != node.Id)
+            .Append(RectOf(node))
+            .ToList();
+
+        var grown = Grouping.Enclose(frameNode.Id, members);
+
+        frameNode.X = grown.X;
+        frameNode.Y = grown.Y;
+        frameNode.Width = grown.Width;
+        frameNode.Height = grown.Height;
+
+        if (frameNode.GroupMemberIds is { Count: > 0 } roster && !roster.Contains(node.Id))
+        {
+            frameNode.SetGroupMembers([.. roster, node.Id]);
+        }
+
+        Diagnostics.Write(
+            $"double-tap adopt: {node.Id} 生在框 {frameNode.Id} 里，框长到 {grown.Width:0.#}×{grown.Height:0.#}，"
+            + $"名单 {(frameNode.GroupMemberIds is { Count: > 0 } list ? $"{list.Count} 格" : "无（几何档）")}");
+
+        Rebuild();
     }
 
     /// <summary>双击落在哪一组的名牌上（含名牌抬起后那一块）。</summary>

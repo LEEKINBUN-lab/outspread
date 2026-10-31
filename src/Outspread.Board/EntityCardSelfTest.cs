@@ -26,7 +26,7 @@ public sealed partial class MainWindow
 
         try
         {
-            var fileNode = CreateCachedFileCard(source, new Point(40000, 40000));
+            var fileNode = CreateCachedFileCard(source, new Point(40000, 40000), out _);
 
             if (fileNode is null)
             {
@@ -181,7 +181,34 @@ public sealed partial class MainWindow
                 problems.Add("自检拖入: forceLink 放下后板上没有多出格子");
             }
 
-            var second = CreateCachedFileCard(source, new Point(40400, 40000));
+            // 他 10-31 两拍：先"拒建并点名说原因"，随即嫌回执太长，改成只点名。
+            // 锁住的文件必须拒建且回执整串就是「N 个文件未建卡：文件名」——谁往回加字谁红。
+            var lockedSource = Path.Combine(root, $"locked-{Guid.NewGuid():N}.txt");
+            File.WriteAllText(lockedSource, "selftest locked attachment");
+
+            using (var held = File.Open(lockedSource, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                var beforeLock = _document.Nodes.Count;
+
+                PlaceFilesAsync([lockedSource], new Point(40600, 40000)).GetAwaiter().GetResult();
+
+                if (_document.Nodes.Count != beforeLock)
+                {
+                    problems.Add("自检拖入: 被占用的文件仍然建了卡（应拒建）");
+                }
+
+                var receipt = _sayRow.Text;
+                var expected = $"1 个文件未建卡：{Path.GetFileName(lockedSource)}";
+
+                if (receipt != expected)
+                {
+                    problems.Add($"自检拖入: 被占用的文件回执要短到只点名，读到「{receipt}」，应为「{expected}」");
+                }
+            }
+
+            File.Delete(lockedSource);
+
+            var second = CreateCachedFileCard(source, new Point(40400, 40000), out _);
 
             if (second is null)
             {
@@ -400,6 +427,63 @@ public sealed partial class MainWindow
             {
                 problems.Add($"自检分组: 组名读到「{groupCard.GroupName}」，可用宽 {groupCard.GroupNameMaxWidth:0.#}");
             }
+
+            // 他 10-31 拍的两发。其一：双击组内空白＝直接生在组里（长框与名单走组钮拖入同一套）。
+            var frameBox = RectOf(group);
+            var insidePoint = new Point(frameBox.X + 40, frameBox.Y + 14);
+
+            var home = HomeGroupAt(insidePoint);
+
+            if (home is null || home.Id != group.Id)
+            {
+                problems.Add($"自检分组: 框内那发双击没有认到这个组（{(home is null ? "null" : home.Label)}）");
+            }
+            else
+            {
+                var adopted = CreateTextNote(string.Empty, insidePoint);
+                created.Add(adopted.Id);
+                AdoptIntoGroup(adopted, home);
+
+                if (!RectOf(home).Holds(RectOf(adopted)))
+                {
+                    problems.Add("自检分组: 双击建卡后框没有长到罩住新格");
+                }
+
+                if (Groups().GroupOf(RectOf(adopted))?.Id != group.Id)
+                {
+                    problems.Add("自检分组: 生在框里的新格没有被算进组成员");
+                }
+
+                var roster = group.GroupMemberIds;
+
+                if (roster is null || !roster.Contains(adopted.Id))
+                {
+                    problems.Add($"自检分组: 框上有名单却没把新格写进去（{(roster is null ? "名单丢了" : $"{roster.Count} 格")}）");
+                }
+            }
+
+            // 其二：组钮拖入被打断（指针取消／捕获丢失）后，警示态必须一发清得干净——
+            // 蓝框卡死那格的回归锁：亮起、清空、读回必须归位到虚线。
+            if (!_realized.TryGetValue(group.Id, out var alerted))
+            {
+                problems.Add("自检分组: 组框没有画出来，警示态那发不适用");
+            }
+            else
+            {
+                alerted.SetGroupAlert("in");
+
+                if (alerted.GroupChrome().Alert != "in")
+                {
+                    problems.Add("自检分组: 警示态没有亮起来，清不清无从谈起");
+                }
+
+                ClearGroupAlerts();
+
+                if (alerted.GroupChrome().Alert is not null)
+                {
+                    problems.Add($"自检分组: 清理之后组框还亮着（{alerted.GroupChrome().Alert}）——拖入被打断就会卡成那样");
+                }
+            }
         }
         finally
         {
@@ -441,7 +525,7 @@ public sealed partial class MainWindow
 
         if (problems.Count == 0)
         {
-            Diagnostics.Write("selftest 实体卡: 六枚 Fluent 形状解析得出、牌子文案与释义、静止不亮动作且淡入不改卡头高、备注占位与编辑区不越卡、Ctrl 放下走链接、表格就地改格与下方备注、文件夹缩略图、一行路径或网址建得上屏（不存在就拒建并点名）各过一发");
+            Diagnostics.Write("selftest 实体卡: 六枚 Fluent 形状解析得出、牌子文案与释义、静止不亮动作且淡入不改卡头高、备注占位与编辑区不越卡、Ctrl 放下走链接、被占用的文件拒建且回执只点名、表格就地改格与下方备注、文件夹缩略图、一行路径或网址建得上屏（不存在就拒建并点名）各过一发");
         }
     }
 

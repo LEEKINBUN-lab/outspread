@@ -1332,6 +1332,18 @@ public sealed partial class MainWindow
             e.Handled = true;
         };
 
+        // 拖入只有"正常松手"一条出口会清警示态，是他 10-31 报的蓝框卡死的根子：指针一旦被
+        // 打断（系统取消触摸、窗口失活收回捕获），Released 不来，最后压着的那枚框就永远亮着。
+        // 取消与捕获丢失都走同一条收尾：手势拆掉、全部框的蓝/红回到虚线。
+        group.PointerCanceled += (_, e) =>
+        {
+            RailPress(group, down: false);
+            AbortGroupDrag();
+            e.Handled = true;
+        };
+
+        group.PointerCaptureLost += (_, _) => AbortGroupDrag();
+
         _railColor!.PointerPressed += (_, e) =>
         {
             RailPress(_railColor, down: true);
@@ -1522,6 +1534,45 @@ public sealed partial class MainWindow
         }
     }
 
+    /// <summary>把组警示态全部收掉（拖进＝蓝、拖出＝红、光标环、组钮激活环）：
+    /// 正常松手与被打断的出口共用这一把尺，谁也不许留下亮着的框。</summary>
+    private void ClearGroupAlerts()
+    {
+        foreach (var frame in GroupRects())
+        {
+            if (_realized.TryGetValue(frame.Id, out var visual))
+            {
+                visual.SetGroupAlert(null);
+            }
+        }
+
+        if (_tether is not null)
+        {
+            _tether.Visibility = Visibility.Collapsed;
+        }
+
+        SetRailGroupActive(false);
+    }
+
+    /// <summary>拖入被打断（指针取消／捕获丢失）：手势当场拆掉，警示态一发清干净。
+    /// 没有这条出口，最后压着的那枚框会一直亮到他重启窗口（他 10-31 报的蓝框卡死）。</summary>
+    private void AbortGroupDrag()
+    {
+        if (_railDrag is null && _nodeGesture is not { GroupMode: true })
+        {
+            return;
+        }
+
+        _railDrag = null;
+        _nodeGesture = null;
+        DrawGuides([]);
+        EndGesture();
+        ProjectSelection();
+        ClearGroupAlerts();
+
+        Diagnostics.Write("group drag: 指针被打断（取消或捕获丢失），手势拆除、警示态全清");
+    }
+
     private void EndGroupDrag(RailDrag state)
     {
         // 松手那一拍重新问一次"现在跟哪个框碰上了"——不依赖拖动中途缓存的末态：末态只在指针
@@ -1538,24 +1589,7 @@ public sealed partial class MainWindow
         SaveSoon();
         ArrangeAll();
         ProjectSelection();
-
-        foreach (var frame in GroupRects())
-        {
-            if (_realized.TryGetValue(frame.Id, out var visual))
-            {
-                visual.SetGroupAlert(null);
-            }
-        }
-
-        if (_tether is not null)
-        {
-            _tether.Visibility = Visibility.Collapsed;
-        }
-
-        if (_railGroup is not null)
-        {
-            SetRailGroupActive(false);
-        }
+        ClearGroupAlerts();
 
         if (NodeOf(state.NodeId) is not { } node)
         {

@@ -30,3 +30,6 @@ boards/Agent 出口.canvas.view.json
 
 # Python 字节码缓存：探针工具的运行产物，不进版本库。
 __pycache__/
+
+# 板子的收纳件（attachments/）：运行数据，走远端同步仓备份，不进版本库。
+boards/attachments/

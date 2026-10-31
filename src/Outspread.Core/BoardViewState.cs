@@ -37,6 +37,13 @@ public sealed class BoardViewState
     /// content, so it lives in the sidecar like the camera does.</summary>
     public NoteSizeMode NoteSize { get; set; } = NoteSizeMode.Automatic;
 
+    /// <summary>
+    /// 这台设备要不要把这块板同步上远端。null＝没表过态（同步，与既有板一致）；false＝标记不同步——
+    /// 性能/回归那种几百格的测试板用它挡在远端仓外（2026-10-31 他拍的：agent 测试板不许污染仓库）。
+    /// 设备本地的态，不进 .canvas、不进同步契约：一块板完全可以"这台不推、那台推"。
+    /// </summary>
+    public bool? SyncEnabled { get; set; }
+
     public IReadOnlyDictionary<string, double> FontSizes => _fontSizes;
 
     /// <summary>
@@ -186,6 +193,12 @@ public sealed class BoardViewState
             ["noteSize"] = NoteSize == NoteSizeMode.Fixed ? "fixed" : "auto",
         };
 
+        // 只在表过态时写：没这枚字段的板就是同步的，旧侧车一个字节不用动。
+        if (SyncEnabled is { } sync)
+        {
+            root["sync"] = sync;
+        }
+
         if (_fontSizes.Count > 0)
         {
             var fonts = new JsonObject();
@@ -257,6 +270,21 @@ public sealed class BoardViewState
         if (root["noteSize"] is JsonValue sizeNode && sizeNode.TryGetValue(out string? sizeWord))
         {
             state.NoteSize = sizeWord == "fixed" ? NoteSizeMode.Fixed : NoteSizeMode.Automatic;
+        }
+
+        // 读不懂当没表过态（同步）：这枚字段挡的是测试板上仓，不能反过来把真板的同步弄哑。
+        if (root["sync"] is JsonValue syncNode)
+        {
+            try
+            {
+                if (syncNode.TryGetValue(out bool sync))
+                {
+                    state.SyncEnabled = sync;
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+            {
+            }
         }
 
         if (root["fontSize"] is JsonObject fonts)

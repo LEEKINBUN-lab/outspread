@@ -12,6 +12,12 @@ MCP 连接器（名字 `outspread-board`，六枚工具：`board_post` / `board_
 `board_search` / `board_patch` / `board_shot`）就是这条出口；连接器不在时，
 `dotnet build src/Outspread.Mcp` 出来的 `outspread-mcp.exe` 走 stdio 接上即可。
 
+## 测试板不许上远端仓（他 10-31 拍的）
+
+性能/回归那种几百格的测试板推上同步仓就是污染。规矩二选一：测试板**放 %TEMP%**（那里的板同步不了），
+或建完立刻 `outspread sync off --board <路径>` 标记不同步（侧车 `sync:false`，窗口与 CLI 都认）。
+正经工作板（出口板等）不受影响，照常推。
+
 ## 写什么（判据只有一句）
 
 **这条不需要他做什么、也不需要他知道，就别上板。** 叙述、过程、"我做了什么"留在会话里——

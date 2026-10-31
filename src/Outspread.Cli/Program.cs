@@ -112,6 +112,9 @@ internal static class Program
                                把手机要的配对载荷打在屏幕上：只出现一次，不落盘、不进日志；画成二维码还没接上
               outspread sync forget [--all]
                                忘掉这块板与远端的对应关系；远端和本地板子都不动
+              outspread sync on|off [--board 路径]
+                               这块板这台设备要不要同步。off＝测试板挡在远端仓外（窗口与 once 都拒发）；
+                               标记在侧车里，是设备本地的，远端与别的设备不知道
 
             板子按 --board > TANKAI_BOARD > 向上找 boards/scratch.canvas > 本目录第一个 .canvas 的顺序定位。
             所有改动都是在磁盘当下那份上打补丁，并与界面共用同一把写锁。

@@ -41,7 +41,8 @@ internal static class SyncCommand
             "once" or "push" or "pull" => Once(options, boardPath),
             "pair" => PairCommand.Run(options),
             "forget" => Forget(options, boardPath),
-            _ => throw new ArgumentException($"outspread sync 不认识 \"{sub}\"；能用的有 link、status、once、pair、forget"),
+            "on" or "off" => SetSyncEnabled(options, boardPath, sub == "on"),
+            _ => throw new ArgumentException($"outspread sync 不认识 \"{sub}\"；能用的有 link、status、once、pair、forget、on、off"),
         };
     }
 
@@ -217,6 +218,7 @@ internal static class SyncCommand
             var payload = new Dictionary<string, object?>
             {
                 ["board"] = boardPath,
+                ["syncEnabled"] = SyncEnabledFlag(boardPath),
                 ["host"] = config?.Host,
                 ["remote"] = config is null || !config.IsSet ? null : config.ShortName,
                 ["branch"] = config?.Branch,
@@ -248,6 +250,7 @@ internal static class SyncCommand
 
         Console.WriteLine($"  板子    {boardPath}");
         Console.WriteLine($"  远端    {(config is null || !config.IsSet ? "还没定（outspread sync link --remote owner/仓库名）" : $"{config.Host} {config.ShortName}:{config.Branch} → {SyncPaths.ForBoard(boardPath).DocPath}")}");
+        Console.WriteLine($"  同步    {(SyncEnabledFlag(boardPath) == false ? "关（侧车标记，outspread sync on --board 可恢复）" : "开")}");
         Console.WriteLine($"  令牌    {(token is null ? "没有" : $"{SyncCredentials.Origin()}，指纹 {SyncCredentials.Fingerprint(token)}")}");
         Console.WriteLine($"  设备    {state.DeviceId}");
         Console.WriteLine($"  账本    r{state.Rev} · 远端 {Short(state.ContentSha)} · 待发 {pending}");
@@ -267,6 +270,11 @@ internal static class SyncCommand
     private static int Once(Options options, string boardPath)
     {
         var config = LoadConfig() ?? throw new SyncSetupException("还没定远端仓库：outspread sync link --remote owner/仓库名 --token-stdin");
+
+        if (SyncEnabledFlag(boardPath) == false)
+        {
+            throw new SyncSetupException($"这块板已标记不同步（侧车 sync=false），一发不发。要恢复：outspread sync on --board \"{boardPath}\"");
+        }
 
         var trace = new List<string>();
         var ledger = new SyncLedger(SyncLayout.LedgerFolder(boardPath));
@@ -372,6 +380,42 @@ internal static class SyncCommand
     }
 
     private static SyncConfig? LoadConfig() => SyncConfig.Load(SyncLayout.Root);
+
+    /// <summary>侧车里的同步开关：null＝没表过态（同步）。读不懂侧车也当同步——这枚字段挡的是
+    /// 测试板上仓，不能反过来把真板的同步弄哑。</summary>
+    private static bool? SyncEnabledFlag(string boardPath)
+        => BoardViewState.TryLoad(CanvasStore.SidecarPath(boardPath)).State.SyncEnabled;
+
+    /// <summary>
+    /// 他 10-31 拍的：测试板不许上仓。off 之后窗口与 <c>sync once</c> 都拒发；标记是设备本地的，
+    /// 远端与别的设备一个字不知道，也不会被同步出去。
+    /// </summary>
+    private static int SetSyncEnabled(Options options, string boardPath, bool enable)
+    {
+        var sidecarPath = CanvasStore.SidecarPath(boardPath);
+        var (state, problem) = BoardViewState.TryLoad(sidecarPath);
+
+        if (problem is not null)
+        {
+            return Fail($"侧车读不出来，没敢动：{problem}");
+        }
+
+        if (state.SyncEnabled == enable)
+        {
+            Console.WriteLine(enable ? "  这块板本来就在同步，没动。" : "  这块板本来就被标记不同步，没动。");
+
+            return 0;
+        }
+
+        state.SyncEnabled = enable;
+        state.Save(sidecarPath);
+
+        Console.WriteLine(enable
+            ? $"  已恢复同步：下一次保存或轮询照常走。侧车 {sidecarPath}"
+            : $"  已标记不同步：这块板的改动不再上远端，窗口与 outspread sync once 都会拒。侧车 {sidecarPath}");
+
+        return 0;
+    }
 
     /// <summary>
     /// How many nodes differ between this disk and the ancestor this device last agreed on —

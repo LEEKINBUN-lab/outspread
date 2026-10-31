@@ -218,6 +218,27 @@ public class ValidationAssetAndViewTests
     }
 
     [Fact]
+    public void The_no_sync_mark_survives_the_sidecar_and_an_unmarked_board_stays_on()
+    {
+        using var scratch = new Scratch("view-sync-flag");
+
+        // 没表过态＝同步：老侧车一个字节不用动。
+        Assert.Null(BoardViewState.TryLoad(scratch.SidecarPath).State.SyncEnabled);
+
+        var off = new BoardViewState { SyncEnabled = false };
+        off.Save(scratch.SidecarPath);
+        Assert.False(BoardViewState.TryLoad(scratch.SidecarPath).State.SyncEnabled);
+
+        var on = new BoardViewState { SyncEnabled = true };
+        on.Save(scratch.SidecarPath);
+        Assert.True(BoardViewState.TryLoad(scratch.SidecarPath).State.SyncEnabled);
+
+        // 读不懂的值当没表过态：这枚字段挡的是测试板上仓，不能反过来把真板的同步弄哑。
+        File.WriteAllText(scratch.SidecarPath, "{ \"panX\": 1, \"sync\": \"yes\" }");
+        Assert.Null(BoardViewState.TryLoad(scratch.SidecarPath).State.SyncEnabled);
+    }
+
+    [Fact]
     public void The_camera_file_round_trips_and_reports_that_it_cannot_read_one()
     {
         using var scratch = new Scratch("view");

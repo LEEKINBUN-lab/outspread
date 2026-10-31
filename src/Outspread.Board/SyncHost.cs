@@ -138,6 +138,14 @@ internal sealed class SyncHost
             return true;
         }
 
+        // 他 10-31 拍的：测试板不许上仓。标记是设备本地的（侧车 sync 字段），关着就一发都不发。
+        if (BoardViewState.TryLoad(CanvasStore.SidecarPath(_boardPath)).State.SyncEnabled == false)
+        {
+            Diagnostics.Write($"sync skipped: 板已标记不同步 {_boardPath}");
+
+            return true;
+        }
+
         return false;
     }
 

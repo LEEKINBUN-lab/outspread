@@ -525,6 +525,7 @@ public sealed partial class MainWindow : Window
 
             // 闸门投影在第一帧渲染前就位：造出来的每一格在 CreateVisual 里就带上自己的状态牌。
             _gateByCard = LoadGateChips(_boardPath);
+            Diagnostics.Write($"gate projection at load: {_gateByCard.Count} 卡有账 ← {CanvasStore.GatePath(_boardPath)}");
 
             NoteStyling.IsDark = Root.ActualTheme == ElementTheme.Dark;
             StyleTabStripChrome();
@@ -2967,15 +2968,14 @@ public sealed partial class MainWindow : Window
             if (node is not null)
             {
                 visual.Update(node, _view, scale);
+                Diagnostics.Write($"gate refresh: {id} status={chip?.Status.ToString() ?? "null"} painted={visual.PaintedChipCount}");
+            }
+            else
+            {
+                Diagnostics.Write($"gate refresh: {id} 设了牌但节点不在文档里，Update 没跑");
             }
         }
-
-        if (changed > 0)
-        {
-            Diagnostics.Write($"gate ledger changed: {changed} 卡的状态牌换新");
-        }
     }
-
     /// <summary>
     /// Reads what someone else wrote and applies only their changes onto this document.
     /// </summary>

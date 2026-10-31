@@ -908,7 +908,12 @@ public sealed class NodeVisual : ContentControl
         double CardHeight,
         string? Text,
         string? Color,
-        string? Label) _viewStamp;
+        string? Label,
+
+        // 闸门牌（helm-gate）：账本是插件在画的另一路文件，不进这笔账的话
+        // ApplyGateChange 的重画会被内容账早退吞掉（实测牌停在旧字）。
+        string? GateSource,
+        string? GateLabel) _viewStamp;
 
     private bool _viewStampValid;
 
@@ -1294,7 +1299,12 @@ public sealed class NodeVisual : ContentControl
             shown.Height,
             node.Text,
             node.Color,
-            node.Label);
+            node.Label,
+
+            // 闸门牌也进账：账本是插件在画的另一路文件，不改 node 不改视图，
+            // 不进这一笔账的话 ApplyGateChange 重画的那发会被这一段早退吞掉（实测：牌永远停在旧字）。
+            GateMark?.Source,
+            GateMark?.Label);
 
         if (inputsSame && _viewStampValid && viewStamp.Equals(_viewStamp))
         {

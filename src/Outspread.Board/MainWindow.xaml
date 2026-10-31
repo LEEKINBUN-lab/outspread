@@ -193,6 +193,28 @@
                 <Canvas x:Name="EditorLayer" IsHitTestVisible="True" />
             </Canvas>
 
+            <!-- 拖入模式牌：系统那个拖拽气泡画在文件幽灵正中，把拖的是什么都盖掉了（他 10-31 的截图）。
+                 关掉系统气泡，换成这枚跟指针偏右下走的牌，永远不压文件；牌上的字跟着修饰键换
+                 （放到板上／只放链接），按没按在拖动途中就看得见——此前只有松手那一刻才生效，等于没有反馈。
+                 直接挂在 BoardArea（不是 PanLayer）下：它跟指针走，不吃平移与缩放。 -->
+            <Border
+                x:Name="DragChip"
+                IsHitTestVisible="False"
+                Visibility="Collapsed"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                CornerRadius="4"
+                Background="#E6202128"
+                Padding="10,5">
+                <Border.RenderTransform>
+                    <TranslateTransform x:Name="DragChipOffset" />
+                </Border.RenderTransform>
+                <TextBlock
+                    x:Name="DragChipText"
+                    Foreground="White"
+                    FontSize="12" />
+            </Border>
+
             <!-- 键位清单（按住 Tab 出现）。不是 Popup：Popup 是另一个顶层窗口，
                  outspread shot 拍不到，于是它的样式成了一个没有读数支持的断言。这块是板子树里的
                  Border，截图能看见，判语就能自己复验。

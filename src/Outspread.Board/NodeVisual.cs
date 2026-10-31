@@ -260,6 +260,13 @@ public sealed class NodeVisual : ContentControl
     /// chip brings out the × and clicking it takes that span out of the text — which is the whole
     /// delete path, because the tokens themselves are hidden from the editor.
     /// </summary>
+    /// <summary>
+    /// 闸门插件（helm-gate）给这一格的状态牌，由窗口按 <c>&lt;板&gt;.gate.json</c> 投影设置；
+    /// null＝这一格没被记账（缺文件的板完全没有这东西，跟没装插件一样）。只读，进牌子排
+    /// 但不进编辑/删除。账本归插件，画板一个字节都不写它。
+    /// </summary>
+    internal NoteMarks.Mark? GateMark { get; set; }
+
     private readonly StackPanel _chips = new()
     {
         Orientation = Orientation.Horizontal,
@@ -1478,6 +1485,13 @@ public sealed class NodeVisual : ContentControl
             var withChips = (int)Math.Floor(((room - band) / leading) + lineEpsilon);
 
             IReadOnlyList<NoteMarks.Mark> chips = isGroup ? Array.Empty<NoteMarks.Mark>() : NoteMarks.Chips(marks, view.Today);
+
+            // 闸门状态牌排在自家牌子最前面：它是这张卡"现在干到哪了"的头等事实。
+            // 组不画牌子（组是关系不是任务），闸门牌也不给组。
+            if (GateMark is { } gate && !isGroup)
+            {
+                chips = new[] { gate }.Concat(chips).ToList();
+            }
 
             // 卡片小得装不下一行正文加一排牌子时，先保正文：色条还在，时间这件事不会变成沉默。
             var showChips = chips.Count > 0 && withChips >= 1;

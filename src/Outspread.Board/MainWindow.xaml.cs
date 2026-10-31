@@ -176,6 +176,12 @@ public sealed partial class MainWindow : Window
 
     private FileWatcher? _watcher;
 
+    // 闸门插件（helm-gate）的状态投影：账本 <板>.gate.json 归插件写，窗口只读。
+    // 没装插件的板这份是空的，一切照旧——显示挂接必须是零打扰的。
+    private FileWatcher? _gateWatcher;
+
+    private Dictionary<string, GateChip> _gateByCard = new(StringComparer.Ordinal);
+
     private ShotServer? _shotServer;
     private SyncHost? _sync;
 
@@ -516,6 +522,9 @@ public sealed partial class MainWindow : Window
             {
                 Diagnostics.Write($"camera file unusable, using the default view: {sidecar.Problem}");
             }
+
+            // 闸门投影在第一帧渲染前就位：造出来的每一格在 CreateVisual 里就带上自己的状态牌。
+            _gateByCard = LoadGateChips(_boardPath);
 
             NoteStyling.IsDark = Root.ActualTheme == ElementTheme.Dark;
             StyleTabStripChrome();
@@ -943,6 +952,12 @@ public sealed partial class MainWindow : Window
         // 「所有便签」里每格的图片要按它**所属的那块板**解析（相对路径相对源文件的 assets/），
         // 不能拿哨兵当 base——那会把全部图片解析成"找不到"，甚至踩到 Border.Child 的异常。
         var visual = new NodeVisual(node, (relative) => AssetForNode(node, relative), entity);
+
+        // 闸门状态牌在造格子时就带上：账本先于第一帧就位（LoadBoard），后面的变化走 ApplyGateChange。
+        if (_gateByCard.TryGetValue(node.Id, out var gateChip))
+        {
+            visual.GateMark = gateChip.ToMark();
+        }
 
         visual.PointerPressed += OnNodePressed;
 
@@ -2901,7 +2916,64 @@ public sealed partial class MainWindow : Window
         // has to come back to the dispatcher.
         _watcher.Changed += () => DispatcherQueue.TryEnqueue(ApplyExternalChange);
 
+        // 闸门账本是另一路文件：插件（helm-gate CLI/MCP）改它，画板只跟着重画牌子。
+        // 它不进 ApplyExternalChange 的合并链路——投影永远不与 .canvas 合并。
+        var gatePath = CanvasStore.GatePath(_boardPath);
+        _gateWatcher?.Dispose();
+        _gateWatcher = new FileWatcher(gatePath);
+        _gateWatcher.Changed += () => DispatcherQueue.TryEnqueue(ApplyGateChange);
+
         Diagnostics.Write($"watching {_boardPath} for outside writes");
+    }
+
+    /// <summary>读闸门投影；文件不在（没装插件）或读不懂都归空，绝不让可选件炸板子。</summary>
+    private static Dictionary<string, GateChip> LoadGateChips(string boardPath)
+        => GateProjection.TryLoad(boardPath) is { } chips
+            ? chips.ToDictionary(chip => chip.CardId, StringComparer.Ordinal)
+            : new Dictionary<string, GateChip>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// 闸门账本变了：重读投影，给在场每一格换上（或摘掉）它的状态牌并当场重画。
+    /// 只动牌子层，不碰文档、不碰撤销栈、不等手势——账本不是画布，没有合并冲突可言。
+    /// </summary>
+    private void ApplyGateChange()
+    {
+        if (_boardPath is null)
+        {
+            return;
+        }
+
+        var fresh = LoadGateChips(_boardPath);
+        _gateByCard = fresh;
+
+        var scale = BoardArea.XamlRoot?.RasterizationScale ?? 1;
+        var changed = 0;
+
+        foreach (var (id, visual) in _realized)
+        {
+            fresh.TryGetValue(id, out var chip);
+            NoteMarks.Mark? mark = chip?.ToMark();
+
+            if (Equals(visual.GateMark, mark))
+            {
+                continue;
+            }
+
+            visual.GateMark = mark;
+            changed++;
+
+            var node = _document?.Nodes.FirstOrDefault(n => string.Equals(n.Id, id, StringComparison.Ordinal));
+
+            if (node is not null)
+            {
+                visual.Update(node, _view, scale);
+            }
+        }
+
+        if (changed > 0)
+        {
+            Diagnostics.Write($"gate ledger changed: {changed} 卡的状态牌换新");
+        }
     }
 
     /// <summary>

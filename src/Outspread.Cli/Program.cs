@@ -49,6 +49,7 @@ internal static class Program
                 "shot" => Shot(options),
                 "new" => New(options),
                 "sync" => SyncCommand.Run(options),
+                "plugin" => PluginCommand.Run(options),
                 var other => Fail($"不认识的命令 \"{other}\"；用 outspread help 看能做什么"),
             };
         }
@@ -115,6 +116,9 @@ internal static class Program
               outspread sync on|off [--board 路径]
                                这块板这台设备要不要同步。off＝测试板挡在远端仓外（窗口与 once 都拒发）；
                                标记在侧车里，是设备本地的，远端与别的设备不知道
+
+              outspread plugin list
+                               看本机登记了哪些可选插件（登记由插件自己的 install 写，这里只读）
 
             板子按 --board > TANKAI_BOARD > 向上找 boards/scratch.canvas > 本目录第一个 .canvas 的顺序定位。
             所有改动都是在磁盘当下那份上打补丁，并与界面共用同一把写锁。

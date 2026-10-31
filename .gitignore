@@ -33,3 +33,7 @@ __pycache__/
 
 # 板子的收纳件（attachments/）：运行数据，走远端同步仓备份，不进版本库。
 boards/attachments/
+
+# helm-gate 插件的账本与计划文本（每板一份、机器本地：账归插件，画板与同步仓都不收）
+*.canvas.gate.json
+*.canvas.gate.plan.md

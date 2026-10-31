@@ -127,7 +127,9 @@ public static class NoteMarks
     /// already carries. Tags leave it <see cref="DueState.None"/> — they have no state to show.</param>
     /// <param name="Done">完成标记的那一枚：true＝已完成、false＝未完成、null＝别的牌子。
     /// 牌子要据此换色与换形状（绿勾／红叉），不能再和标签长一样。</param>
-    public readonly record struct Mark(string Label, string Source, bool IsDate, DueState State = DueState.None, bool? Done = null);
+    /// <param name="Gate">闸门插件的状态牌（helm-gate，只读）：None＝普通牌子。非 None 的牌子
+    /// 不进编辑/删除，颜色按闸门状态来（进行中蓝、堵住橙、已完成走 Done 的绿勾、已放弃删除线）。</param>
+    public readonly record struct Mark(string Label, string Source, bool IsDate, DueState State = DueState.None, bool? Done = null, GateStatus Gate = GateStatus.None);
 
     /// <summary>The chips a card's bottom-left corner is made of: the date first, then its tags.</summary>
     public static IReadOnlyList<Mark> Chips(NoteProperties marks, DateOnly today)

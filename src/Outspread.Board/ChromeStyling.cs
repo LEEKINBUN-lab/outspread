@@ -196,7 +196,32 @@ internal static class ChromeStyling
             null => self,
         };
 
-        var tinted = mark.Done is not null;
+        // 闸门状态牌（helm-gate，只读）：进行中＝蓝（活跃）、堵住＝橙（警惕）。
+        // 已完成那枚走上面 Done=true 的绿勾老路；待开工走普通标签的灰底；
+        // 已放弃也是灰底但字加删除线。同一张卡上"状态"这件事仍然只说一种颜色语言。
+        var gateColour = mark.Gate switch
+        {
+            GateStatus.Doing => dark ? new Rgb(0x6C, 0xB8, 0xF6) : new Rgb(0x0F, 0x6C, 0xBD),
+            GateStatus.Blocked => dark ? new Rgb(0xFF, 0xB9, 0x00) : new Rgb(0x9D, 0x5D, 0x00),
+            _ => (Rgb?)null,
+        };
+
+        var gateFill = mark.Gate switch
+        {
+            GateStatus.Doing => dark ? new Rgb(0x0C, 0x3B, 0x5E) : new Rgb(0xEF, 0xF6, 0xFC),
+            GateStatus.Blocked => dark ? new Rgb(0x4D, 0x35, 0x00) : new Rgb(0xFF, 0xF4, 0xCE),
+            _ => (Rgb?)null,
+        };
+
+        if (gateColour is { } gateInk)
+        {
+            stateColour = gateInk;
+            stateFill = gateFill!.Value;
+        }
+
+        var readOnly = mark.Gate is not GateStatus.None;
+
+        var tinted = mark.Done is not null || gateColour is not null;
 
         // × 压在牌尾的那块底：悬停底色压在卡面**之后**的实色。用实色而不是半透明，是因为它的活
         // 就是把底下那几个字盖掉——半压上去只会变成"× 叠在字上"糊成一团。
@@ -280,11 +305,17 @@ internal static class ChromeStyling
 
         inner.Children.Add(label);
 
+        // 闸门牌是记账方的投影：删除线给"已放弃"，其余原样。它不吃编辑、不吃 ×——
+        // 点它什么都不会发生，账本在插件手里，画板只显示。
+        if (mark.Gate is GateStatus.Dropped)
+        {
+            label.TextDecorations = Windows.UI.Text.TextDecorations.Strikethrough;
+        }
+
         // 牌面是一层 Grid：字在左，× 盖在右端。两枚互不计入对方的宽度。
         var face = new Grid();
 
         face.Children.Add(inner);
-        face.Children.Add(crossHost);
 
         var border = new Border
         {
@@ -296,6 +327,14 @@ internal static class ChromeStyling
             // 至少留两个字那么宽：不然"n7"这种短牌一悬停就被 × 整枚盖没。
             MinWidth = (NoteType.ChipPadX * 2 + NoteType.ChipCrossHitPx) * scale,
         };
+
+        if (readOnly)
+        {
+            ToolTipService.SetToolTip(border, "验收闸门的状态牌：helm-gate 记账，画板只显示");
+            return border;
+        }
+
+        face.Children.Add(crossHost);
 
         ToolTipService.SetToolTip(border, mark.IsDate ? "点一下＝改这个日期；点 × 去掉" : "点一下＝改这个标签；点 × 去掉");
 

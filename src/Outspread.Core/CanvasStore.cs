@@ -47,6 +47,14 @@ public static class CanvasStore
     /// <summary>Path of the app-owned sidecar that holds the camera and per-node font sizes.</summary>
     public static string SidecarPath(string boardPath) => boardPath + ".view.json";
 
+    /// <summary>
+    /// Path of the helm-gate plugin's ledger for a board. The plugin owns this
+    /// file outright — the board only reads it as a projection and never writes
+    /// it — so it sits in the sidecar family (.view.json / .canvas.inbox.json)
+    /// without entering the canvas format or the sync contract.
+    /// </summary>
+    public static string GatePath(string boardPath) => boardPath + ".gate.json";
+
     public static string ReadAllText(string path)
     {
         using var stream = new FileStream(

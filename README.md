@@ -85,6 +85,10 @@ src\Outspread.Cli\bin\Debug\net10.0\outspread.exe list
 
 界面开着时，外面改了文件会在 0.4 秒内并进来（只并入对方改的那些格，不覆盖你正在拖的那格），并且这一步可以撤销。`outspread shot` 向**运行中的界面**要一张 PNG（`--mode view|fit|node|chrome`，可带 `--select 节点,节点` 把选中态画进去、`--panel filter|cheat|rename` 把那几层打开来拍，拍完都恢复原样；`--panel rename` 只预览行内输入框，不提交改名）；没有开着的界面就明确报错，不会自己另画一份。
 
+## 可选插件：helm-gate（验收闸门）
+
+画板只负责显示；机制住在独立目录 `D:\MyProject\outspread-plugins\helm-gate`（自 Helm 保真迁移），作为**可选插件**跟着某一块板走：账本 `<板>.gate.json`、计划文本 `<板>.gate.plan.md`，都在板旁、机器本地（不进格式、不进同步仓、gitignore 已收）。`helm-gate attach <节点> --card <卡id>` 之后，卡上多一枚**只读状态牌**（待开工灰／进行中蓝／堵住橙／已完成绿勾／已放弃删除线）——账本归插件，画板一个字节都不写它；文件不在，卡就跟没装过插件一样。登记面：`helm-gate install` 写 `%LOCALAPPDATA%\Outspread\plugins.json`，`outspread plugin list` 查看。
+
 ## 手机 ↔ 电脑同步
 
 板子的**跨端副本**放一个私有仓库（现在：`LEEKINBUN-lab/tankan-boards`），只用平台的"按路径读写单文件"HTTPS API 搬——**不装 git、不装同步软件、不买服务器**。`.canvas` 本体仍是纯 JSON Canvas 1.0，同步元数据一律在外面：远端多一个 `boards/.sync/<名字>.manifest.json`，每台设备自己在 `%LOCALAPPDATA%\Outspread\sync\` 存**上次大家一致的祖先全文**。

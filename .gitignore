@@ -40,3 +40,8 @@ boards/attachments/
 
 # ZCode 会话的工作文件（计划稿等）：工具产物，不进版本库
 .zcode/
+
+# 板子的图片素材：他自己板上的走远端同步仓；夹具引用的那两枚点名保留。
+boards/assets/*
+!boards/assets/img_18d054585ce5.png
+!boards/assets/img_6e9b865ba37a.png

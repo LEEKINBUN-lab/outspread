@@ -55,6 +55,10 @@ echo [4/6] 命令行构建
 dotnet build src\Outspread.Cli\outspread.csproj -c Debug
 if not "%ERRORLEVEL%"=="0" goto :fail
 
+echo [4/6] 连接器 exe 顺手刷新（尽力；被别的连接器锁着就跳过，不挡闸门——它会在下次会话自 build）
+dotnet build src\Outspread.Mcp\Outspread.Mcp.csproj -c Debug
+if not "%ERRORLEVEL%"=="0" echo 跳过：exe 被锁或构建失败；不挡闸门
+
 echo [5/6] 界面自检（在临时副本上跑，绝不动 boards 里的板子）
 call :reset_scratch
 rem The board path must be passed explicitly. The window locates a board by

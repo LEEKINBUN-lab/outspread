@@ -19,6 +19,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows 控制台的默认编码是 GBK：回执里有 −（U+2212）这类字符就会 UnicodeEncodeError。
+# 在脚本里把流掰成 UTF-8，调用方就不必记着 -X utf8（PYTHONIOENCODING 会被 -I 吃掉，靠不住）。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 EXE = Path(__file__).resolve().parents[1] / "src/Outspread.Mcp/bin/Debug/net10.0/outspread-mcp.exe"
 
 

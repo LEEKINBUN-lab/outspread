@@ -6,8 +6,9 @@ description: 这块板子（铺陈 / Outspread）的出口流程：每轮开头�
 # 出口流程（每轮照做，不问、不提醒）
 
 工具在 MCP `outspread_board` 下：`board_inbox` / `board_tickets` / `board_post` / `board_patch` /
-`board_archive` / `board_read` / `board_tidy` / `board_shot` / `board_search`。
-板子落在他最近打开的「Agent 出口」板（不填 `board` 就是它）。
+`board_archive` / `board_read` / `board_tidy` / `board_shot` / `board_search` / `board_delete`。
+板子落在他最近打开的「Agent 出口」板（不填 `board` 就是它）。编号整串 13 位与 `@n` 短号都认；
+已完结／过期的卡用 `board_delete` 清（名单与组框它自己收，恢复走远端同步仓 git 历史），别直改 .canvas。
 
 ## 0. 每轮开头：先对账（他改过的、新加的、@a 工单）
 

@@ -8,9 +8,11 @@
 
 这块板子（铺陈 / Outspread）把人的注意力从一大串文字变成一个个具体的格子。
 它对你的意义：**你的产出有地方落，他不用翻聊天记录就能看到、能勾、能改。**
-MCP 连接器（名字 `outspread-board`，六枚工具：`board_post` / `board_archive` / `board_read` /
-`board_search` / `board_patch` / `board_shot`）就是这条出口；连接器不在时，
-`dotnet build src/Outspread.Mcp` 出来的 `outspread-mcp.exe` 走 stdio 接上即可。
+MCP 连接器（名字 `outspread-board`，十枚工具：`board_post` / `board_archive` / `board_read` /
+`board_search` / `board_patch` / `board_delete` / `board_shot` / `board_inbox` / `board_tickets` / `board_tidy`）就是这条出口；
+已挂用户级（`~/.zcode/cli/config.json` → `mcp.servers`，入口 `tools/board-mcp.py`：exe 缺了或比源码旧先 build），
+每个会话开箱自带。连接器不在时（构建中、起失败），`dotnet build src/Outspread.Mcp` 出来的
+`outspread-mcp.exe` 走 stdio 接上即可（`tools/board-call.py` 就是那条路）。
 
 ## 测试板不许上远端仓（他 10-31 拍的）
 
@@ -52,4 +54,4 @@ MCP 连接器（名字 `outspread-board`，六枚工具：`board_post` / `board_
 3. 汇报里点出哪几格在等他。
 
 只写了会话、没落板，等于这条回答没交付完。反过来，把叙述抄上板来凑数也是没交付。
-`board_archive` 只认整串编号（13 位），喂截断的编号它会整发拒绝——别绕过它去猜。
+`board_archive`／`board_patch`／`board_delete` 的编号认整串 13 位，也认 `@n` 短号（序号唯一，不许猜的规矩没变）；清已完结的卡直接 `board_delete`（名单与框它自己收），别再直改 .canvas。

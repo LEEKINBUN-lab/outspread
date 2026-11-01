@@ -696,13 +696,17 @@ public sealed class BoardTools
     }
 
     [McpServerTool(Name = "board_patch"), Description(
-        "改一格：换正文、加一个 @标签、或把它标成已完成（@b1）。你用来收口，agent 用来更新同一件事而不是再贴一张新的。")]
+        "改一格：换正文、加一个 @标签、或把它标成已完成（@b1）。你用来收口，agent 用来更新同一件事而不是再贴一张新的。"
+        + "写入矩阵（chamber 第一刀）：decision（红）的勾只归他本人在界面上点，tool 标 done 一律被拒；"
+        + "task/risk 标 done 必须同发 evidence（一句宏级实测读数），凭据带署名与时间写上卡面，缺凭据整发被拒；"
+        + "note 不占他的待办，不用打勾。取消勾（done=false）不受限。")]
     public static string BoardPatch(
         [Description("格子编号")] string id,
         [Description("新正文；不填就不动")] string? text = null,
         [Description("要加的 @标签（不带 @）")] string? add_tag = null,
         [Description("署名：这一改是谁做的（补一枚 @tby-名字，重复传同一名字是幂等的）。不填不动标签。")] string? agent = null,
         [Description("true＝标已完成，false＝标未完成，不填＝不动")] bool? done = null,
+        [Description("完成凭据：标 done=true 时必填的一句实测读数（闸门绿、测试条数、坐标），会以「凭据：…」行写上卡面可审计。")] string? evidence = null,
         [Description("画板文件路径。不填就用你的「Agent 出口」板。")] string? board = null)
     {
         var path = ResolveBoard(board);
@@ -722,6 +726,35 @@ public sealed class BoardTools
 
         var body = text ?? node.Text ?? string.Empty;
 
+        // 写入矩阵（chamber 第一刀，他 10-31 拍的 A）：勾的写权按卡的种类分三种。
+        // decision 是他在表态，tool 代勾等于替他拍板（AGENTS.md 的规矩从 prose 变成闸）；
+        // note 不占他的待办，打勾是噪声；task/risk 可以勾，但凭据必须同发并上卡——
+        // 「改完了」却不留读数，正是他抱怨「为什么不改成已完成」时缺的那半边。
+        if (done == true)
+        {
+            if (node.Kind == CanvasNodeKind.Group)
+            {
+                return $"{node.Id} 是组：组是关系不是卡，不打勾。";
+            }
+
+            if (node.Color == "1")
+            {
+                return $"{node.Id} 是 decision（红）：勾只归他本人在界面上点，tool 标 done 一律拒（写入矩阵）。"
+                    + "要表达立场就贴新卡并 @ 这一格。";
+            }
+
+            if (Tags.Read(node.Text ?? string.Empty).Done is null)
+            {
+                return $"{node.Id} 是 note：不占他的待办，不需要打勾。";
+            }
+
+            if (string.IsNullOrWhiteSpace(evidence))
+            {
+                return $"{node.Id} 缺凭据：标 done 请同发 evidence（一句实测读数，如「pytest 11 全绿」）。"
+                    + "凭据会带署名与时间写上卡面——没有凭据的「改完了」就是这道闸要拦的东西。";
+            }
+        }
+
         if (add_tag is { Length: > 0 })
         {
             body = Tags.AddTag(body, add_tag!.TrimStart('@'));
@@ -735,6 +768,13 @@ public sealed class BoardTools
 
         if (done is { } finished)
         {
+            if (finished)
+            {
+                // 凭据上卡：谁、何时、拿什么读数勾的——卡面自审计，验收人不必翻聊天记录。
+                body = body.TrimEnd()
+                    + $"\n凭据：{evidence!.Trim()}（{agent ?? "未署名"} {DateTime.Now:yyyy-MM-dd HH:mm}）";
+            }
+
             body = Tags.SetDone(body, finished);
         }
 

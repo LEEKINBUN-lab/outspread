@@ -229,8 +229,9 @@ public sealed class BoardTools
 
         // 编号对不上必须说出来：10-27 我喂了一串截断的编号，工具一声不吭只收了 3/5 格，
         // 于是"这一轮已收全"是句假话。宁可整发不动，也不要在少收几格的时候报成功。
+        // 编号认全串 13 位，也认 @n 短号（ResolveCardRef）；对不上照样整发拒。
         var missing = ids is { Length: > 0 }
-            ? ids.Where(id => document.Find(id) is null).ToList()
+            ? ids.Where(id => ResolveCardRef(document, id) is null).ToList()
             : [];
 
         if (missing.Count > 0)
@@ -239,7 +240,7 @@ public sealed class BoardTools
         }
 
         var wanted = ids is { Length: > 0 }
-            ? ids.Select(document.Find).Where(node => node is not null).Select(node => node!).ToList()
+            ? ids.Select(id => ResolveCardRef(document, id)).Where(node => node is not null).Select(node => node!).ToList()
             : document.Nodes
                 .Where(node => node.Kind == CanvasNodeKind.Text)
                 .Where(node => !InsideAnyGroup(document, node))
@@ -334,7 +335,10 @@ public sealed class BoardTools
         name = WithStamp(name, BlockTime(
             wanted.ToDictionary(node => node.Id, node => node, StringComparer.Ordinal),
             wanted.Select(node => node.Id).ToList()));
-        var groupId = into_group is { Length: > 0 } ? into_group : NodeIds.New(NodeIds.AgentNamespace);
+        // into_group 也认 @n 短号：先解析成全串 id，后面一律用它；解析出来不是组也当没有。
+        var reuseGroup = into_group is { Length: > 0 } ? ResolveCardRef(document, into_group) : null;
+        var reuseGroupId = reuseGroup is { Kind: CanvasNodeKind.Group } ? reuseGroup.Id : null;
+        var groupId = reuseGroupId ?? NodeIds.New(NodeIds.AgentNamespace);
         var frame = new JsonObject
         {
             ["label"] = name,
@@ -348,8 +352,8 @@ public sealed class BoardTools
         if (into_group is { Length: > 0 })
         {
             // 复用他那枚组：他把组名写成了给我的话（"改成合适的名字"），这里就地改名换成员，
-            // 不再甩一枚新组、把他画的那个框留在原地。
-            if (document.Find(into_group) is null)
+            // 不再甩一枚新组、把他画的那个框留在原地。解析不出来在上面那一发就拒了。
+            if (reuseGroupId is null)
             {
                 return $"{path} 里没有 {into_group} 这枚组，这一发没动盘。";
             }
@@ -701,7 +705,7 @@ public sealed class BoardTools
         + "task/risk 标 done 必须同发 evidence（一句宏级实测读数），凭据带署名与时间写上卡面，缺凭据整发被拒；"
         + "note 不占他的待办，不用打勾。取消勾（done=false）不受限。")]
     public static string BoardPatch(
-        [Description("格子编号")] string id,
+        [Description("格子编号（整串 13 位或 @n 短号）")] string id,
         [Description("新正文；不填就不动")] string? text = null,
         [Description("要加的 @标签（不带 @）")] string? add_tag = null,
         [Description("署名：这一改是谁做的（补一枚 @tby-名字，重复传同一名字是幂等的）。不填不动标签。")] string? agent = null,
@@ -717,11 +721,11 @@ public sealed class BoardTools
         }
 
         var document = CanvasStore.Load(path);
-        var node = document.Find(id);
+        var node = ResolveCardRef(document, id);
 
         if (node is null)
         {
-            return $"{path} 里没有 {id} 这一格。";
+            return $"{path} 里没有 {id} 这一格（整串 13 位或 @n 短号都认）。";
         }
 
         var body = text ?? node.Text ?? string.Empty;
@@ -785,6 +789,134 @@ public sealed class BoardTools
         CanvasStore.SavePatch(path, patch);
 
         return $"{node.Id} 已更新：{FirstLine(body)}";
+    }
+
+    [McpServerTool(Name = "board_delete"), Description(
+        "把已完结／过期／不需要他再看的格子从板上删掉（11-01 他拍的：已结的别占板面）。"
+        + "编号认整串 13 位，也认 @n 短号。删卡会顺带剪掉所在组的名单、把框收缩到幸存成员；删组框＝拆组，成员卡原地变散格。"
+        + "删除不走界面撤销，恢复靠远端同步仓的 git 历史——下手前想清楚。还在等他的卡（@b0）删了就是替他扔待办，回执会点名提醒。")]
+    public static string BoardDelete(
+        [Description("要删的格子编号，一次一批（整串 13 位或 @n 短号）")] string[] ids,
+        [Description("画板文件路径。不填就用你的「Agent 出口」板。")] string? board = null)
+    {
+        var path = ResolveBoard(board);
+
+        if (!File.Exists(path))
+        {
+            return $"{path}：没这块板。";
+        }
+
+        if (ids is not { Length: > 0 })
+        {
+            return "没给编号，这一发没动盘。";
+        }
+
+        var document = CanvasStore.Load(path);
+
+        var targets = new List<CanvasNode>();
+        var unknown = new List<string>();
+
+        foreach (var reference in ids)
+        {
+            if (ResolveCardRef(document, reference) is { } node)
+            {
+                targets.Add(node);
+            }
+            else
+            {
+                unknown.Add(reference);
+            }
+        }
+
+        targets = targets.DistinctBy(node => node.Id).ToList();
+
+        if (targets.Count == 0)
+        {
+            return $"{path} 里找不到这些编号：{string.Join("、", unknown)}——这一发没动盘。";
+        }
+
+        var deleting = targets.Select(node => node.Id).ToHashSet(StringComparer.Ordinal);
+        var patch = new DocPatch();
+        var named = new List<string>();
+        var awaiting = new List<string>();
+
+        foreach (var node in targets)
+        {
+            patch.Removals.Add(node.Id);
+            named.Add($"{node.Id} {FirstLine(node.Text)}");
+
+            if (node.Kind != CanvasNodeKind.Group && AwaitsHim(node))
+            {
+                awaiting.Add($"{node.Id} {FirstLine(node.Text)}");
+            }
+        }
+
+        // 剪名单＋缩框：删了成员的组（组自己没删的），名单去掉死 id，框按幸存成员重新包拢——
+        // 2026-11-01 清板那一发就是这么收的，那回是手工 Python，这一发起是正式工具。
+        var pruned = new List<string>();
+
+        foreach (var frame in document.Nodes.Where(node => node.Kind == CanvasNodeKind.Group && !deleting.Contains(node.Id)))
+        {
+            var roster = frame.GroupMemberIds;
+
+            if (roster is null || !roster.Any(deleting.Contains))
+            {
+                continue;
+            }
+
+            var alive = roster.Where(id => !deleting.Contains(id)).ToList();
+
+            if (alive.Count == 0)
+            {
+                // 成员删光＝框也到头了：框是派生的，留着就是一枚空壳占板面。
+                patch.Removals.Add(frame.Id);
+                pruned.Add($"{frame.Label ?? frame.Id}（成员删光，空框一并删）");
+
+                continue;
+            }
+
+            var boxes = alive
+                .Select(id => document.Find(id))
+                .Where(node => node is not null)
+                .Select(node => new Grouping.Rect(node!.Id, node.X, node.Y, node.Width, node.Height))
+                .ToList();
+
+            if (boxes.Count > 0)
+            {
+                var hug = Grouping.Enclose(frame.Id, boxes);
+
+                patch.SetNumber(frame.Id, "x", hug.X);
+                patch.SetNumber(frame.Id, "y", hug.Y);
+                patch.SetNumber(frame.Id, "width", hug.Width);
+                patch.SetNumber(frame.Id, "height", hug.Height);
+            }
+
+            patch.Set(frame.Id, "members", new JsonArray(alive.Select(id => (JsonNode)JsonValue.Create(id)!).ToArray()));
+            pruned.Add(frame.Label ?? frame.Id);
+        }
+
+        CanvasStore.SavePatch(path, patch);
+
+        var receipt = $"已删 {named.Count} 格（{path}）：\n{string.Join("\n", named)}";
+
+        if (pruned.Count > 0)
+        {
+            receipt += $"\n名单剪过、框收过的组：{string.Join("、", pruned)}";
+        }
+
+        if (awaiting.Count > 0)
+        {
+            receipt += $"\n注意：删掉的里面有 {awaiting.Count} 格还在等他（@b0）——{string.Join("、", awaiting.Take(5))}";
+        }
+
+        if (unknown.Count > 0)
+        {
+            receipt += $"\n没删（板上对不上号）：{string.Join("、", unknown)}";
+        }
+
+        receipt += "\n恢复走远端同步仓的 git 历史。";
+
+        return receipt;
     }
 
     [McpServerTool(Name = "board_shot"), Description(
@@ -923,6 +1055,32 @@ public sealed class BoardTools
             .ToList();
 
         return Grouping.GroupOf(new Grouping.Rect(node.Id, node.X, node.Y, node.Width, node.Height), groups) is not null;
+    }
+
+    /// <summary>编号引用认全串 13 位，也认 @n 短号（"@n8"／"n8"）：先按 id 找，没找着就按卡上的
+    /// @n 序号对。序号在板上从不重发，唯一；对出零枚或两枚以上都当作没有——不许猜（archive 那次的教训）。</summary>
+    private static CanvasNode? ResolveCardRef(CanvasDocument document, string reference)
+    {
+        var trimmed = reference.Trim();
+
+        if (document.Find(trimmed) is { } direct)
+        {
+            return direct;
+        }
+
+        var bare = trimmed.TrimStart('@');
+
+        if (!bare.StartsWith("n", StringComparison.OrdinalIgnoreCase)
+            || !int.TryParse(bare[1..], out var ordinal))
+        {
+            return null;
+        }
+
+        var hits = document.Nodes
+            .Where(node => Tags.Read(node.Text ?? string.Empty).Sequence == ordinal)
+            .ToList();
+
+        return hits.Count == 1 ? hits[0] : null;
     }
 
     /// <summary>@n 接在板上已有的最大序号后面：两批之间也能互相引用（他写"参考@n1"用的就是这个）。</summary>

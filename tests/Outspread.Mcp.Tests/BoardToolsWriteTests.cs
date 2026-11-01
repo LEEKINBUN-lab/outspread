@@ -500,6 +500,90 @@ public sealed class BoardToolsWriteTests : IDisposable
         Assert.Contains("甲写的一格", all);
     }
 
+    [Fact]
+    public void Board_patch_accepts_the_short_ordinal_and_reports_unknown_ones()
+    {
+        var board = SeededBoard(ordinal: 7);
+
+        var receipt = BoardTools.BoardPatch("@n7", text: "短号改的正文", board: board);
+
+        Assert.Contains("已更新", receipt);
+        Assert.Contains("短号改的正文", CanvasStore.Load(board).Nodes.Single(node => node.Id == "u1").Text);
+
+        var miss = BoardTools.BoardPatch("@n999", text: "不该落盘", board: board);
+
+        Assert.Contains("没有", miss);
+        Assert.DoesNotContain("不该落盘", string.Join('\n', CanvasStore.Load(board).Nodes.Select(node => node.Text)));
+    }
+
+    [Fact]
+    public void Deleting_a_card_prunes_the_roster_shrinks_the_frame_and_answers_the_short_ordinal()
+    {
+        var board = SeededBoard(ordinal: 7);
+
+        BoardTools.BoardPost(
+            "删除试验",
+            [Card("note", "甲"), Card("note", "乙"), Card("note", "丙")],
+            round: "删除",
+            board: board);
+
+        var before = CanvasStore.Load(board);
+        var frame = before.Nodes.Single(node => node.Kind == CanvasNodeKind.Group && (node.Label ?? string.Empty).Contains("删除试验", StringComparison.Ordinal));
+        var victim = before.Nodes.Single(node => (node.Text ?? string.Empty).Contains("\n乙", StringComparison.Ordinal));
+        var ordinal = Tags.Read(victim.Text).Sequence ?? throw new InvalidOperationException("乙没有号");
+
+        var frameBoxBefore = (frame.X, frame.Y, frame.Width, frame.Height);
+
+        var receipt = BoardTools.BoardDelete([$"@n{ordinal}"], board);
+
+        Assert.Contains(victim.Id, receipt);
+        Assert.DoesNotContain(victim.Id, CanvasStore.Load(board).Nodes.Select(node => node.Id));
+
+        var after = CanvasStore.Load(board).Nodes.Single(node => node.Id == frame.Id);
+
+        Assert.DoesNotContain(victim.Id, after.GroupMemberIds ?? []);
+        Assert.Equal(3, (after.GroupMemberIds ?? []).Count);
+
+        // 框的契约＝幸存成员的 Enclose（标题卡横贯整行，宽度本就不会缩，别拿"变小"当尺）。
+        var aliveIds = ((frame.GroupMemberIds ?? []).Where(id => id != victim.Id)).ToList();
+        var expected = Grouping.Enclose(frame.Id, aliveIds
+            .Select(id => before.Nodes.First(node => node.Id == id))
+            .Select(node => new Grouping.Rect(node.Id, node.X, node.Y, node.Width, node.Height))
+            .ToList());
+
+        Assert.Equal(expected.X, after.X);
+        Assert.Equal(expected.Y, after.Y);
+        Assert.Equal(expected.Width, after.Width);
+        Assert.Equal(expected.Height, after.Height);
+        _ = frameBoxBefore;
+
+        // 组里三格删光＝空框一并消失；成员卡原地留着。
+        BoardTools.BoardDelete([after.Id], board);
+
+        var cleared = CanvasStore.Load(board);
+
+        Assert.DoesNotContain(after.Id, cleared.Nodes.Select(node => node.Id));
+        Assert.Equal(2, cleared.Nodes.Count(node => (node.Text ?? string.Empty).Contains("\n甲")
+            || (node.Text ?? string.Empty).Contains("\n丙")));
+    }
+
+    [Fact]
+    public void Deleting_what_awaits_him_is_named_in_the_receipt_and_unknown_ids_are_reported()
+    {
+        var board = SeededBoard(ordinal: 7);
+
+        BoardTools.BoardPost("等他拍的", [Card("decision", "要不要删")], round: "等他拍", board: board);
+
+        var document = CanvasStore.Load(board);
+        var pending = document.Nodes.Single(node => (node.Text ?? string.Empty).Contains("要不要删", StringComparison.Ordinal));
+
+        var receipt = BoardTools.BoardDelete([pending.Id, "n999"], board);
+
+        Assert.Contains("@b0", receipt);
+        Assert.Contains("n999", receipt);
+        Assert.DoesNotContain(pending.Id, CanvasStore.Load(board).Nodes.Select(node => node.Id));
+    }
+
     /// <summary>
     /// 测试用的卡。三档要挂 @b0 的（decision/risk/task）必须带一行「要你：」，否则 <c>board_post</c>
     /// 那枚闸会把整发拒掉（10-27 加的：我落了两格"记我自己的待办/一条外推曲线"，他读完回的是

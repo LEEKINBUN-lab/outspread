@@ -35,6 +35,11 @@ public static class SyncCredentials
     /// <summary>The old name is copied up, never deleted: an earlier build may still be reading it.</summary>
     public static string? LastMigration { get; private set; }
 
+    /// <summary>迁移通知只报一次（每进程）。认领是幂等的，窗口每 8 秒一轮的同步里把它复读成
+    /// 日志洪水（2026-11-01 查日志：同一条从 10-21 起刷了 3807 遍）。真正要另查的是：窗口进程
+    /// 为什么每轮都读不到新名字那条令牌而 CLI 读得到——把通知闭嘴不是把那个修好。</summary>
+    private static bool _migrationAnnounced;
+
     private static string? ReadRaw(string target)
     {
         if (!OperatingSystem.IsWindows())
@@ -110,9 +115,12 @@ public static class SyncCredentials
         // deleting a credential this program no longer owns the meaning of is not ours to do.
         var adopted = Write(legacy, user: null, target: Target);
 
-        LastMigration = adopted
-            ? $"令牌从旧名字 {LegacyTarget} 认到了 {Target}（旧那条仍在凭据管理器里，没删）"
-            : $"找到了旧名字 {LegacyTarget} 下的令牌，但没能复制到 {Target}：这次先用旧的，下次还得再认一遍";
+        LastMigration = _migrationAnnounced
+            ? null
+            : adopted
+                ? $"令牌从旧名字 {LegacyTarget} 认到了 {Target}（旧那条仍在凭据管理器里，没删）"
+                : $"找到了旧名字 {LegacyTarget} 下的令牌，但没能复制到 {Target}：这次先用旧的，下次还得再认一遍";
+        _migrationAnnounced = true;
 
         return legacy;
     }

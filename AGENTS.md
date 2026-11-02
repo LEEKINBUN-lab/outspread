@@ -8,17 +8,19 @@
 
 这块板子（铺陈 / Outspread）把人的注意力从一大串文字变成一个个具体的格子。
 它对你的意义：**你的产出有地方落，他不用翻聊天记录就能看到、能勾、能改。**
-MCP 连接器（名字 `outspread-board`，十枚工具：`board_post` / `board_archive` / `board_read` /
-`board_search` / `board_patch` / `board_delete` / `board_shot` / `board_inbox` / `board_tickets` / `board_tidy`）就是这条出口；
+MCP 连接器（名字 `outspread-board`，十二枚工具：`board_post` / `board_archive` / `board_read` /
+`board_search` / `board_patch` / `board_delete` / `board_shot` / `board_inbox` / `board_tickets` / `board_tidy` /
+`board_list` / `board_notes`）就是这条出口；
 已挂用户级（`~/.zcode/cli/config.json` → `mcp.servers`，入口 `tools/board-mcp.py`：exe 缺了或比源码旧先 build），
 每个会话开箱自带。连接器不在时（构建中、起失败），`dotnet build src/Outspread.Mcp` 出来的
 `outspread-mcp.exe` 走 stdio 接上即可（`tools/board-call.py` 就是那条路）。
 
 ## 测试板不许上远端仓（他 10-31 拍的）
 
-性能/回归那种几百格的测试板推上同步仓就是污染。规矩二选一：测试板**放 %TEMP%**（那里的板同步不了），
-或建完立刻 `outspread sync off --board <路径>` 标记不同步（侧车 `sync:false`，窗口与 CLI 都认）。
-正经工作板（出口板等）不受影响，照常推。
+性能/回归那种几百格的测试板推上同步仓就是污染。**现在不是靠提醒**：`outspread new` 与 MCP `board_post`
+新建的板会自动写侧车 `sync:false`（「Agent 出口」例外），默认不进同步仓；他在界面里新建的板才默认同步。
+测试板仍优先放 `%TEMP%`；要临时同步一块 agent 板，显式 `outspread sync on --board <路径>`。
+**远端仓只留他创建的板**——`final` / `measure` 这类量尺板已经清掉，别再生成到 `boards/` 下。
 
 ## 写什么（判据只有一句）
 

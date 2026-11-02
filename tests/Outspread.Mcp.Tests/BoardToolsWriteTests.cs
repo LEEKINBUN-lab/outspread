@@ -609,4 +609,26 @@ public sealed class BoardToolsWriteTests : IDisposable
 
         return path;
     }
+
+    [Fact]
+    public void A_board_created_by_the_tool_is_marked_not_to_sync()
+    {
+        var path = Path.Combine(_root, "量尺.canvas");
+
+        BoardTools.BoardPost("量尺", [Card("note", "一格")], round: "量尺", board: path);
+
+        Assert.False(
+            BoardViewState.TryLoad(CanvasStore.SidecarPath(path)).State.SyncEnabled,
+            "agent 新建的板默认同步＝测试板会混进他的同步仓");
+    }
+
+    [Fact]
+    public void The_outlet_board_is_the_one_exception_and_stays_on()
+    {
+        var path = Path.Combine(_root, "Agent 出口.canvas");
+
+        BoardTools.BoardPost("出口", [Card("note", "一格")], round: "出口", board: path);
+
+        Assert.Null(BoardViewState.TryLoad(CanvasStore.SidecarPath(path)).State.SyncEnabled);
+    }
 }

@@ -320,6 +320,8 @@ internal static class Program
         }
 
         CanvasStore.Write(target, CanvasDocument.CreateNew().ToJson());
+        // CLI 新建的板默认不进同步仓（测试/量尺板由 agent 建）；他要同步再 `outspread sync on`。
+        CanvasStore.DisableSync(target);
         Console.WriteLine(target);
 
         return 0;

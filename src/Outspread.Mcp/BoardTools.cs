@@ -60,10 +60,17 @@ public sealed class BoardTools
         }
 
         var path = ResolveBoard(board);
+        var createdHere = !File.Exists(path);
         var tag = "@t" + NormaliseTag(round is { Length: 0 } or null ? "agent" : round!);
         // 署名是第二枚标签（@tby-名字），与轮次标签并排：他按轮次筛、别的 agent 按署名筛，两把尺互不妨碍。
         var stamps = string.IsNullOrWhiteSpace(agent) ? tag : $"{tag} @tby-{NormaliseTag(agent!)}";
         var document = CanvasStore.LoadOrCreate(path);
+
+        // agent 新建的板默认不同步：测试板/量尺板不许混进他的同步仓。出口板是产品面，照旧同步。
+        if (createdHere && !Path.GetFileName(path).Equals("Agent 出口.canvas", StringComparison.Ordinal))
+        {
+            CanvasStore.DisableSync(path);
+        }
 
         var (left, top) = FreeColumnBelow(document);
         var across = Math.Clamp(columns, 1, 4);
@@ -667,6 +674,350 @@ public sealed class BoardTools
         return $"{path}\n未结：{(pending.Count == 0 ? "没有——他要看的都结清了" : string.Join(" / ", pending))}\n"
             + string.Join("\n", lines);
     }
+
+    [McpServerTool(Name = "board_list"), Description(
+        "列出他开着的板和最后在看的那块。不知道「他说看画板是哪一块」时先叫它；"
+        + "返回的板名可以直接喂给 board_notes。")]
+    public static string BoardList() => BoardListFor(BoardSession.DefaultDirectory());
+
+    /// <summary>目录可注入，只为测试；产品入口永远读本机 %LOCALAPPDATA%\Outspread。</summary>
+    public static string BoardListFor(string directory)
+    {
+        var open = BoardSession.ReadOpenBoards(directory);
+        var recorded = ReadLastBoardRecord(directory);
+        var last = BoardSession.ReadLastBoard(directory);
+        var lines = new List<string>();
+
+        if (recorded == AllNotesSentinel)
+        {
+            lines.Add($"他最后在看：所有便签（跨 {open.Count} 块板）");
+        }
+        else if (last is not null)
+        {
+            lines.Add($"他最后在看：{StemOf(last)}");
+        }
+        else
+        {
+            lines.Add("他最后在看：没有记忆（桌面还没打开过画板）");
+        }
+
+        if (open.Count == 0)
+        {
+            lines.Add("开着的板：没有");
+        }
+        else
+        {
+            lines.Add($"开着的 {open.Count} 块：");
+
+            foreach (var path in open)
+            {
+                var document = TryLoad(path);
+                var notes = document?.Nodes.Count(node => node.Kind != CanvasNodeKind.Group);
+                var mark = string.Equals(path, last, StringComparison.OrdinalIgnoreCase) ? " | 最后在看" : string.Empty;
+
+                lines.Add($"- {StemOf(path)} | {(notes is null ? "读不到" : $"{notes} 格")}{mark} | {path}");
+            }
+        }
+
+        var siblings = SiblingBoards(open, last)
+            .Where(path => !open.Contains(path, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        if (siblings.Count > 0)
+        {
+            lines.Add("同目录还有：" + string.Join("、", siblings.Select(StemOf)));
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    [McpServerTool(Name = "board_notes"), Description(
+        "读他画板上的便签。不填 board＝他最后在看的那块（零参数就是给「直接说看画板」用的）；"
+        + "板名（待办事项）或完整路径都行。只读：不写 .inbox 账，也不改他的板。")]
+    public static string BoardNotes(
+        [Description("板名（如 待办事项）或完整路径。不填＝他最后在看的那块。")] string? board = null,
+        [Description("最多列几格，默认 60。")] int limit = 60)
+        => BoardNotesFor(BoardSession.DefaultDirectory(), board, limit);
+
+    /// <summary>目录可注入，只为测试；产品入口永远读本机 %LOCALAPPDATA%\Outspread。</summary>
+    public static string BoardNotesFor(string directory, string? board = null, int limit = 60)
+    {
+        var paths = ResolveNotesBoards(directory, board, out var problem);
+
+        if (problem is not null)
+        {
+            return problem;
+        }
+
+        if (paths.Count == 0)
+        {
+            return "没有记忆中的板：桌面还没打开过画板。";
+        }
+
+        var remaining = Math.Clamp(limit, 1, 200);
+        var lines = new List<string>();
+        var shown = 0;
+        var total = 0;
+
+        if (paths.Count == 1)
+        {
+            var document = TryLoad(paths[0]);
+
+            if (document is null)
+            {
+                return $"{StemOf(paths[0])}：读不到（文件可能被移走）。";
+            }
+
+            var notes = NotesOf(document);
+
+            total += notes.Count;
+            lines.Add($"板：{StemOf(paths[0])}（{notes.Count} 格）");
+            lines.AddRange(NoteLines(notes, remaining));
+            shown = Math.Min(notes.Count, remaining);
+        }
+        else
+        {
+            lines.Add($"所有便签：跨 {paths.Count} 块板");
+
+            foreach (var path in paths)
+            {
+                var document = TryLoad(path);
+
+                if (document is null)
+                {
+                    lines.Add($"— {StemOf(path)}：读不到 —");
+
+                    continue;
+                }
+
+                var notes = NotesOf(document);
+
+                total += notes.Count;
+                lines.Add($"— {StemOf(path)} —");
+
+                if (shown < remaining)
+                {
+                    var take = NoteLines(notes, remaining - shown);
+
+                    lines.AddRange(take);
+                    shown += take.Count;
+                }
+
+                if (shown >= remaining)
+                {
+                    break;
+                }
+            }
+        }
+
+        if (shown < total)
+        {
+            lines.Add($"…还有更多（只列了 {shown} 格；要全看就调大 limit）");
+        }
+
+        return shown == 0 ? "这块板上没有便签。" : string.Join("\n", lines);
+    }
+
+    private static List<CanvasNode> NotesOf(CanvasDocument document)
+        => document.Nodes
+            .Where(node => node.Kind != CanvasNodeKind.Group)
+            .OrderBy(node => node.Y)
+            .ThenBy(node => node.X)
+            .ToList();
+
+    private static List<string> NoteLines(IReadOnlyList<CanvasNode> notes, int take)
+        => notes
+            .Take(take)
+            .Select(node => $"{node.Id} | {FirstLine(node.Text)} | {string.Join(",", Tags.Of(node.Text))} | "
+                + $"{node.X:0},{node.Y:0} {node.Width:0}×{node.Height:0}")
+            .ToList();
+
+    private static List<string> ResolveNotesBoards(string directory, string? board, out string? problem)
+    {
+        problem = null;
+
+        if (!string.IsNullOrWhiteSpace(board))
+        {
+            var asked = board.Trim();
+
+            if (asked == AllNotesSentinel || asked == "所有便签")
+            {
+                var open = BoardSession.ReadOpenBoards(directory).ToList();
+
+                if (open.Count == 0)
+                {
+                    problem = "他最后在看「所有便签」，但现在没有开着的板可读。";
+                }
+
+                return open;
+            }
+
+            var hits = ResolveBoardName(directory, asked);
+
+            if (hits.Count == 0)
+            {
+                problem = $"没找到「{asked}」这块板。先调 board_list 看有哪些。";
+            }
+            else if (hits.Count > 1)
+            {
+                problem = $"「{asked}」对上 {hits.Count} 块板，指一块：" + string.Join("、", hits.Select(StemOf));
+            }
+
+            return hits;
+        }
+
+        if (ReadLastBoardRecord(directory) == AllNotesSentinel)
+        {
+            var open = BoardSession.ReadOpenBoards(directory).ToList();
+
+            if (open.Count == 0)
+            {
+                problem = "他最后在看「所有便签」，但现在没有开着的板可读。";
+            }
+
+            return open;
+        }
+
+        var last = BoardSession.ReadLastBoard(directory);
+
+        if (last is not null)
+        {
+            return [last];
+        }
+
+        var fallback = BoardSession.ReadOpenBoards(directory).ToList();
+
+        if (fallback.Count == 0)
+        {
+            problem = "没有记忆中的板：桌面还没打开过画板。";
+        }
+
+        return fallback.Take(1).ToList();
+    }
+
+    /// <summary>
+    /// 板名只做精确匹配，不做模糊猜：猜错一块板比让 agent 多问一句坏得多。重名就列候选。
+    /// 路径写法（有分隔符、或以 .canvas 结尾）按文件走。
+    /// </summary>
+    private static List<string> ResolveBoardName(string directory, string asked)
+    {
+        if (asked.Contains('\\') || asked.Contains('/') || Path.IsPathRooted(asked))
+        {
+            var full = Path.GetFullPath(asked);
+
+            return File.Exists(full) ? [full] : [];
+        }
+
+        var wanted = asked.EndsWith(".canvas", StringComparison.OrdinalIgnoreCase) ? asked[..^7] : asked;
+        var hits = new List<string>();
+
+        foreach (var path in BoardSession.ReadOpenBoards(directory))
+        {
+            if (StemOf(path).Equals(wanted, StringComparison.OrdinalIgnoreCase))
+            {
+                hits.Add(path);
+            }
+        }
+
+        var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var path in BoardSession.ReadOpenBoards(directory))
+        {
+            if (Path.GetDirectoryName(path) is { Length: > 0 } folder)
+            {
+                directories.Add(folder);
+            }
+        }
+
+        if (BoardSession.ReadLastBoard(directory) is { } last && Path.GetDirectoryName(last) is { Length: > 0 } lastFolder)
+        {
+            directories.Add(lastFolder);
+        }
+
+        var localBoards = Path.Combine(directory, "boards");
+
+        if (Directory.Exists(localBoards))
+        {
+            directories.Add(localBoards);
+        }
+
+        foreach (var folder in directories.Where(Directory.Exists))
+        {
+            foreach (var path in Directory.EnumerateFiles(folder, "*.canvas"))
+            {
+                if (StemOf(path).Equals(wanted, StringComparison.OrdinalIgnoreCase))
+                {
+                    hits.Add(path);
+                }
+            }
+        }
+
+        return hits.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static IEnumerable<string> SiblingBoards(IReadOnlyList<string> open, string? last)
+    {
+        var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var anchors = new List<string>(open);
+
+        if (last is not null)
+        {
+            anchors.Add(last);
+        }
+
+        foreach (var path in anchors)
+        {
+            if (Path.GetDirectoryName(path) is { Length: > 0 } folder)
+            {
+                directories.Add(folder);
+            }
+        }
+
+        foreach (var folder in directories.Where(Directory.Exists).OrderBy(folder => folder, StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (var path in Directory.EnumerateFiles(folder, "*.canvas").OrderBy(Path.GetFileName, StringComparer.Ordinal))
+            {
+                yield return path;
+            }
+        }
+    }
+
+    private static string? ReadLastBoardRecord(string directory)
+    {
+        try
+        {
+            var path = Path.Combine(directory, BoardSession.LastBoardFileName);
+
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            var recorded = File.ReadAllText(path).Trim();
+
+            return recorded.Length == 0 ? null : recorded;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static CanvasDocument? TryLoad(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? CanvasStore.Load(path) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or CanvasDocumentException)
+        {
+            return null;
+        }
+    }
+
+    private static string StemOf(string path) => Path.GetFileNameWithoutExtension(path);
+
+    private const string AllNotesSentinel = "<<所有便签>>";
 
     [McpServerTool(Name = "board_search"), Description("在一块板里找字（也认 @标签），返回命中的格子。回答\"上次那条写哪去了\"这类问题用它。")]
     public static string BoardSearch(

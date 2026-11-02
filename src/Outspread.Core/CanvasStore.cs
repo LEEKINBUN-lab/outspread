@@ -48,6 +48,19 @@ public static class CanvasStore
     public static string SidecarPath(string boardPath) => boardPath + ".view.json";
 
     /// <summary>
+    /// 把一块板标成“这台设备不同步”。给 **agent/CLI 新建的板** 用：测试板、量尺板不该混进他的同步仓；
+    /// 他在界面里新建的板仍然默认同步。侧车是设备本地的，远端那条 manifest 不会带这个开关。
+    /// </summary>
+    public static void DisableSync(string boardPath)
+    {
+        var sidecar = SidecarPath(boardPath);
+        var state = BoardViewState.TryLoad(sidecar).State;
+
+        state.SyncEnabled = false;
+        state.Save(sidecar);
+    }
+
+    /// <summary>
     /// Path of the helm-gate plugin's ledger for a board. The plugin owns this
     /// file outright — the board only reads it as a projection and never writes
     /// it — so it sits in the sidecar family (.view.json / .canvas.inbox.json)

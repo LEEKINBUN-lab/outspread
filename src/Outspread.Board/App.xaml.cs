@@ -71,6 +71,7 @@ public partial class App : Application
 
             return args.Any(arg => arg.StartsWith("--pan-probe", StringComparison.OrdinalIgnoreCase)
                 || arg.StartsWith("--zoom-probe", StringComparison.OrdinalIgnoreCase)
+                || arg.StartsWith("--zoom-preview", StringComparison.OrdinalIgnoreCase)
                 || arg.StartsWith("--drag-probe", StringComparison.OrdinalIgnoreCase)
                 || arg.StartsWith("--zoom-band", StringComparison.OrdinalIgnoreCase));
         }
@@ -202,6 +203,13 @@ public partial class App : Application
         if (zoomProbe > 0)
         {
             window.BeginZoomProbe(zoomProbe);
+        }
+
+        var previewProbe = ProbeMilliseconds("--zoom-preview");
+
+        if (previewProbe > 0)
+        {
+            window.BeginZoomPreviewProbe(previewProbe);
         }
 
         var dragProbe = ProbeMilliseconds("--drag-probe");

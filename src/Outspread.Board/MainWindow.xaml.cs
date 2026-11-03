@@ -8352,6 +8352,7 @@ public sealed partial class MainWindow : Window
         // 滚轮的一发值多少毫秒：他 10-23 报"快速滚轮卡顿"，先把用户真走的那条路量成一条读数，
         // 再决定是合并事件、还是把网格/投影的重活挪出每一发。
         SelfTestWheelBurst(problems);
+        SelfTestPreviewNeverCommits(problems);
 
         Diagnostics.Write(
             $"selftest: zoom now {Percent()}, realised {_realized.Count}/{_document.Nodes.Count}, " +
@@ -9026,6 +9027,65 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 预览那一拍不许提交：相机一动不动、一次重排都不跑；停手提交那两样都要动（正对照）。
+    /// </summary>
+    /// <remarks>
+    /// 这条尺是给 <see cref="BeginZoomPreviewProbe"/> 本身用的——探针要是偷偷提交了，它量到的就是停手
+    /// 那一发，"手势期重不重栅格"又会退回成一句没有读数的断言（11-03 就是这么发现的：仓里唯一的滚轮
+    /// 探针每拍都替手提交，于是"每帧 82ms"那本账其实记在提交头上）。
+    /// </remarks>
+    private void SelfTestPreviewNeverCommits(List<string> problems)
+    {
+        var savedX = _view.PanX;
+        var savedY = _view.PanY;
+        var savedZoom = _view.Zoom;
+        var arrangeBefore = _arrangeCalls;
+        var at = new Point(BoardArea.ActualWidth / 2, BoardArea.ActualHeight / 2);
+
+        for (var notch = 0; notch < 3; notch++)
+        {
+            ApplyWheel(at, 120);
+        }
+
+        for (var frame = 0; frame < 8; frame++)
+        {
+            OnWheelFrame(null, new object());
+        }
+
+        if (_view.Zoom != savedZoom)
+        {
+            problems.Add($"selftest 预览不提交: 还没停手相机就从 {savedZoom:0.###} 走到 {_view.Zoom:0.###}——预览在偷偷提交");
+        }
+
+        if (_arrangeCalls != arrangeBefore)
+        {
+            problems.Add($"selftest 预览不提交: 三发滚轮加八帧缓动里跑了 {_arrangeCalls - arrangeBefore} 次重排——预览不该重排");
+        }
+
+        var committedBefore = _arrangeCalls;
+
+        CommitWheelPreview();
+
+        if (_view.Zoom == savedZoom)
+        {
+            problems.Add("selftest 预览不提交: 停手提交也没动相机——这一发量的是空气（正对照丢了）");
+        }
+        else if (_arrangeCalls == committedBefore)
+        {
+            problems.Add("selftest 预览不提交: 提交之后一次重排都没跑，那本「重排」账是假的");
+        }
+
+        _view.PanX = savedX;
+        _view.PanY = savedY;
+        _view.Zoom = savedZoom;
+
+        ArrangeAll();
+        ProjectSelection();
+
+        Diagnostics.Write("selftest 预览不提交: 三发预览＋八帧缓动里相机没动、重排 0 次；停手提交两样都动（正对照在）");
+    }
+
+    /// <summary>
     /// 编辑中那一发滚轮：把正在写的那一格滚进视野，缩放一档不许动；走到边就明着"没地方可滚"。
     /// </summary>
     /// <remarks>
@@ -9650,6 +9710,25 @@ public sealed partial class MainWindow : Window
             ApplyWheel(new Point(BoardArea.ActualWidth / 2, BoardArea.ActualHeight / 2), frame % 2 == 0 ? 120 : -120);
             CommitWheelPreview();
         }));
+
+    /// <summary>
+    /// 只走预览、不提交的那几秒：答<b>手势期间到底重不重栅格</b>——这一问至今没有读数。
+    /// </summary>
+    /// <remarks>
+    /// <see cref="BeginZoomProbe"/> 每一拍都替手调一次 <see cref="CommitWheelPreview"/>，所以它量的是
+    /// "每次停手的清晰重建 × 频率"，不是他手在滚的那一段；两件事的账差着一个数量级（停手那一发
+    /// 300 格实测 543.7ms，而预览最慢一帧 4.0ms）。这一发只喂 <see cref="ApplyWheel"/>：
+    /// 滚轮节流被每拍重启，永远不提交，相机一动不动，画面靠 <c>PanLayer</c> 那枚合成变换走。
+    /// <see cref="SelfTestPreviewNeverCommits"/> 钉的就是"这一发确实没在提交"。
+    /// <para>
+    /// 判据（读的是它自己那一行 <c>preview …ms: … 帧 · 每帧均 …ms 最慢 …ms</c> 与帧间隔中位）：
+    /// 帧间隔中位 ≤25ms ⇒ 重栅格只发生在提交那一拍，快照代理层（K4）不必立项，钱该花在牌子与跨档重跑上；
+    /// ≥40ms ⇒ 合成侧每帧都在按新倍率重画，代理层才是正解。中间那一档不算答案，重跑一遍再说。
+    /// </para>
+    /// </remarks>
+    public void BeginZoomPreviewProbe(int milliseconds) => WaitUntilLaidOut("preview", () =>
+        RunGestureProbe(milliseconds, "preview", frame =>
+            ApplyWheel(new Point(BoardArea.ActualWidth / 2, BoardArea.ActualHeight / 2), frame % 2 == 0 ? 120 : -120)));
 
     /// <summary>
     /// 持续按住一格走那几秒。他工单的原话是"便签一多，<b>拖动</b>都变得卡顿了"——

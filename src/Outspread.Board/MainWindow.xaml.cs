@@ -8353,6 +8353,7 @@ public sealed partial class MainWindow : Window
         // 再决定是合并事件、还是把网格/投影的重活挪出每一发。
         SelfTestWheelBurst(problems);
         SelfTestPreviewNeverCommits(problems);
+        SelfTestLodCrossIsCheap(problems);
 
         Diagnostics.Write(
             $"selftest: zoom now {Percent()}, realised {_realized.Count}/{_document.Nodes.Count}, " +
@@ -9083,6 +9084,86 @@ public sealed partial class MainWindow : Window
         ProjectSelection();
 
         Diagnostics.Write("selftest 预览不提交: 三发预览＋八帧缓动里相机没动、重排 0 次；停手提交两样都动（正对照在）");
+    }
+
+    /// <summary>
+    /// 跨过 LOD 档那一拍不许整格重跑内容（11-03 K1 的回归锁：换档只值两笔可见性）。
+    /// </summary>
+    /// <remarks>
+    /// 靶子挑"停在屏幕正中的那一枚文字格"，判据压在它<b>自己</b>那本逐格整跑账上：全局那本账会被
+    /// 新露出来的格污染，拿它当尺会把装置自己的开销读成产品缺陷（阴性读数必须有正对照，反过来也一样）。
+    /// 第一趟来回只用来把两侧内容各建一次，那一趟允许整跑；判据在第二趟。
+    /// </remarks>
+    private void SelfTestLodCrossIsCheap(List<string> problems)
+    {
+        const double lowZoom = 0.24;      // 阴影阈值 0.25 之下：画底线
+        const double highZoom = 0.31;     // 迟滞带 0.30 之上：画阴影。两档必须真分家，否则这条锁是空的
+
+        if (NoteSurface.DrawsShadow(lowZoom) == NoteSurface.DrawsShadow(highZoom))
+        {
+            problems.Add("selftest 跨档不整跑: 选的两档没跨过阴影阈值——这一发没在测换档（正对照丢了）");
+
+            return;
+        }
+
+        if (_document.Nodes.FirstOrDefault(node => node.Kind == CanvasNodeKind.Text) is not { } seed)
+        {
+            problems.Add("selftest 跨档不整跑: 这块板上没有文字格，这一发不适用");
+
+            return;
+        }
+
+        var savedPanX = _view.PanX;
+        var savedPanY = _view.PanY;
+        var savedZoom = _view.Zoom;
+        var centreX = seed.X + (seed.Width / 2);
+        var centreY = seed.Y + (seed.Height / 2);
+
+        void AtZoom(double zoom)
+        {
+            // 把靶子钉在视口正中：两档都看得见它，才分得开"换档重跑"与"新露出来才重跑"。
+            _view.Zoom = zoom;
+            _view.PanX = (BoardArea.ActualWidth / 2) - (centreX * zoom);
+            _view.PanY = (BoardArea.ActualHeight / 2) - (centreY * zoom);
+
+            ArrangeAll();
+        }
+
+        AtZoom(lowZoom);
+        AtZoom(highZoom);
+
+        if (!_realized.TryGetValue(seed.Id, out var target))
+        {
+            problems.Add($"selftest 跨档不整跑: {seed.Id} 没在视觉表里，这一发没有靶子");
+
+            return;
+        }
+
+        var before = target.FullRuns;
+
+        AtZoom(lowZoom);
+        AtZoom(highZoom);
+
+        var delta = target.FullRuns - before;
+
+        if (target.PaintsShadow != NoteSurface.DrawsShadow(highZoom))
+        {
+            problems.Add("selftest 跨档不整跑: 停在高档却没画阴影——那条轻账根本没在切画法");
+        }
+
+        if (delta > 0)
+        {
+            problems.Add($"selftest 跨档不整跑: 来回翻两次档，{seed.Id} 整跑了 {delta} 次（该是 0：换档只值两笔可见性）");
+        }
+
+        Diagnostics.Write($"selftest 跨档不整跑: {seed.Id} 两档来回翻，整跑 {delta} 次；阴影画法确实翻了档（正对照在）");
+
+        _view.PanX = savedPanX;
+        _view.PanY = savedPanY;
+        _view.Zoom = savedZoom;
+
+        ArrangeAll();
+        ProjectSelection();
     }
 
     /// <summary>

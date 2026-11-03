@@ -913,6 +913,23 @@ public sealed class NodeVisual : ContentControl
     /// <summary>这一档该不该画正文（屏幕字高并进一像素以下才不画，见 <see cref="NoteSurface.TextLod"/>）。</summary>
     private bool? _textLod;
 
+    /// <summary>
+    /// 换档那两位上一次画成什么样（11-03 K1）：翻档只切正文可见性与阴影画法这两笔，
+    /// 不进整格内容账——进了就是"一跨档，全部可见格整套重跑"（300 格实测 543.7ms）。
+    /// </summary>
+    private bool? _lodText;
+
+    private bool? _lodShadow;
+
+    /// <summary>这一格走没走过"正文那一排"：组与图卡不归这条轻账管，别去动它们的可见性。</summary>
+    private bool _textLodOwned;
+
+    /// <summary>这一格自己整跑过几回内容（跨档该是 0 次；自检拿它当靶，全局那两枚计数器会被新露出来的格污染）。</summary>
+    internal int FullRuns;
+
+    /// <summary>这一格此刻画的是阴影还是那条底线（自检的正对照）。</summary>
+    internal bool PaintsShadow => _lodShadow ?? NoteSurface.DrawsShadow(1);
+
     private bool TextLod(double zoom, double scale)
     {
         var next = NoteSurface.TextLod(zoom, scale, _textLod ?? NoteSurface.DrawsText(zoom, scale));
@@ -927,8 +944,9 @@ public sealed class NodeVisual : ContentControl
     /// <summary>卡面裁剪矩形随尺寸重建一次就够（剔除/改大小那一拍才变）。</summary>
     private string _clipKey = string.Empty;
 
-    /// <summary>内容账（视图那一侧）：卡片画什么还取决于这几项——换档的两处后果（ShadowLod／
-    /// DecodeTier）已折算成阈值位，<b>没有裸的 view.Zoom</b>；带裸缩放就是把"每档重量每张卡"请回来。
+    /// <summary>内容账（视图那一侧）：卡片画什么还取决于这几项——<b>没有裸的 view.Zoom</b>，
+    /// 带裸缩放就是把"每档重量每张卡"请回来；图卡的解码档仍折算成阈值位（DecodeTier）留在账里。
+    /// 阴影与正文那两位 11-03 起挪出去了：换档只值两笔可见性，走 <c>ApplyLod</c> 那条轻账。
     /// 文档那一侧不在这本账里，改由下面的输入签名判（每拍读九个数太贵）。</summary>
     private (
         double FontSize,
@@ -946,8 +964,9 @@ public sealed class NodeVisual : ContentControl
         Grouping.Rect? Shown,
         double? FoldDX,
         double? FoldDY,
-        bool ShadowLod,
-        bool TextVisible,
+
+        // 换档那两位（阴影／正文）不在这一串里：它们只值两笔可见性，走 ApplyLod 那条轻账。
+        // 一进这本账，跨过阈值的那一发就是全部可见格整套重跑（300 格实测 543.7ms，11-03 K1）。
         int DecodeTier,
         bool NoRoot,
         int FirstLine,
@@ -1404,6 +1423,15 @@ public sealed class NodeVisual : ContentControl
         // ── 内容账：文档那一侧由上面的输入签名判（同一个值节点＝同一个值），视图这一侧比这一串
         // 现成的小数。两边都没变就到此为止：平移的每一帧、缩放的每一拍，逐格走的只有上面那几笔。
         var text = TextLod(view.Zoom, rasterizationScale);
+        var shadowed = ShadowLod(view.Zoom);
+
+        // 换档（0.25 阴影线、亚像素文字线）不在这本账里：它只值两笔可见性/画法，走 ApplyLod 那条轻账。
+        // 以前这两位进账，一跨档就是全部可见格整套重跑——300 格实测 543.7ms，而同样的两拍第二趟只 35.7ms，
+        // 说明贵的不是画，是重跑（11-03 K1，他拍的"跨档只切可见性"）。
+        if (_viewStampValid)
+        {
+            ApplyLod(node, view, text, shadowed);
+        }
 
         var viewStamp = (
             view.FontSizeFor(node.Id),
@@ -1421,8 +1449,6 @@ public sealed class NodeVisual : ContentControl
             display.ShownFrame,
             display.FoldDX,
             display.FoldDY,
-            ShadowLod(view.Zoom),
-            text,
             ShowText ? 0 : TierFor((int)(_worldBox.Width * view.Zoom * Math.Max(1, rasterizationScale))),
             XamlRoot is null,
             _firstLine,
@@ -1454,6 +1480,7 @@ public sealed class NodeVisual : ContentControl
         }
 
         ContentFullRuns++;
+        FullRuns++;
         _viewStamp = viewStamp;
         _viewStampValid = true;
 
@@ -1588,13 +1615,16 @@ public sealed class NodeVisual : ContentControl
             NoteStyling.IsDark);
 
         UpdateEdge(node, view);
+        _lodShadow = shadowed;
 
         if (isGroup)
         {
+            _textLodOwned = false;
             PaintGroupPlate(node, view, type, display);
         }
         else if (ShowText)
         {
+            _textLodOwned = true;
             var leading = type.Leading;
             var band = NoteType.ChipBand(1);
 
@@ -1721,6 +1751,9 @@ public sealed class NodeVisual : ContentControl
             // 他日常那一档（23%，字高 3.4 像素）整板没字，报「不显示有些影响观感」，而藏字每帧只省 11~12ms，
             // 比牌子那层（~50ms）小一个数量级。纸面、色条、牌子照旧——牌子是 chrome，本来就不随缩放缩。
             _label.Visibility = blocks || !text ? Visibility.Collapsed : Visibility.Visible;
+
+            // 整跑已经把这一档的字画到位了，换档那笔轻账从这里接手。
+            _lodText = text;
             if (blocks && !_textHost.Children.Contains(_md))
             {
                 _textHost.Children.Insert(0, _md);   // 文字下面/牌子上面：顺序沿用原来那一挂
@@ -2294,6 +2327,36 @@ public sealed class NodeVisual : ContentControl
     /// shadow budget. Rebuilds only when the geometry actually changed: a pan moves the whole
     /// control and must not re-make N brushes per frame.
     /// </summary>
+    /// <summary>
+    /// 换档那一拍的轻账：只切"画不画正文"与"阴影 ↔ 底线"这两笔。整格重跑（牌子、裁切、行数、渐隐）
+    /// 留给真变了的事——这两位一旦进内容账，跨过阈值的那一发就是全部可见格整套重跑。
+    /// </summary>
+    /// <remarks>
+    /// 只有走过"正文那一排"的格子归它管（<see cref="_textLodOwned"/>）：组的牌子是 chrome，
+    /// 图卡与表格的第二行各有自己的画法，都不该被这一档翻掉。
+    /// </remarks>
+    private void ApplyLod(CanvasNode node, BoardViewState view, bool text, bool shadowed)
+    {
+        if (text != _lodText)
+        {
+            _lodText = text;
+
+            if (_textLodOwned)
+            {
+                _label.Visibility = _paintsMarkdown || !text ? Visibility.Collapsed : Visibility.Visible;
+                _md.Visibility = _paintsMarkdown && text ? Visibility.Visible : Visibility.Collapsed;
+            }
+        }
+
+        if (shadowed != _lodShadow)
+        {
+            _lodShadow = shadowed;
+
+            // UpdateEdge 自己 keyed（_shadowKey 变了才拆建那三条带子），所以这里只管叫它来看一眼。
+            UpdateEdge(node, view);
+        }
+    }
+
     private void UpdateEdge(CanvasNode node, BoardViewState view)
     {
         if (Kind == CanvasNodeKind.Group)

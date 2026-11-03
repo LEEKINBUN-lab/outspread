@@ -5803,15 +5803,19 @@ public sealed partial class MainWindow : Window
         var face = chip.Child as Grid;
 
         // 静止时那三个零件不在树上（11-03 减元素：满屏 384 枚牌子＝1152 个"永远不画却被点一遍名"的零件）。
-        if (face?.Children.OfType<Grid>().Any() == true)
+        // 判据是"这一层里有没有钮"——牌面上还有一层胶囊宿主（11-03 起胶囊底由合成层画），
+        // 它也是 Grid，但它挂的是合成视觉、没有 Border 子元素，不该被当成 × 那一层。
+        static bool IsCrossLayer(Grid layer) => layer.Children.OfType<Border>().Any();
+
+        if (face?.Children.OfType<Grid>().Any(IsCrossLayer) == true)
         {
-            problems.Add("selftest 牌子 × 钮: 没悬停牌面上就多一层 Grid——那枚钮又常驻了");
+            problems.Add("selftest 牌子 × 钮: 没悬停牌面上就有一层带钮的 Grid——那枚钮又常驻了");
         }
 
         // 量它之前先"悬停一次"：这枚钮是第一次悬停才建的。
         (chip.Tag as Action)?.Invoke();
 
-        var layer = face?.Children.OfType<Grid>().FirstOrDefault();
+        var layer = face?.Children.OfType<Grid>().FirstOrDefault(IsCrossLayer);
         var knob = layer?.Children.OfType<Border>().FirstOrDefault();
 
         if (layer is null || knob is null)
@@ -6206,6 +6210,7 @@ public sealed partial class MainWindow : Window
         SelfTestMarkChipEdits(problems);
         SelfTestMarkEditEnter(problems);
         SelfTestDoneChip(problems);
+        SelfTestManagerShadow(problems);
         SelfTestBatchTag(problems);
         SelfTestUniformSize(problems);
         SelfTestCulledVisuals(problems);

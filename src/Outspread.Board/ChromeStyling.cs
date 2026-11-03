@@ -308,6 +308,82 @@ internal static class ChromeStyling
             MinWidth = (NoteType.ChipPadX * 2 + NoteType.ChipCrossHitPx) * scale,
         };
 
+        /* 胶囊底交给合成层画（11-03，A′ 落地）：XAML 画一块圆角填充实测 0.14ms/枚，满屏 384 枚就是 47ms。
+           换的是"谁来画"而不是长相——一枚 ShapeVisual 的圆角几何＋实色，挂在牌面层最底下这枚宿主上，
+           外观逐像素不变。同一把尺（50%↔150% 来回、每拍提交）：95.6/88.1ms → 46.5/46.9ms，无牌子地板 25ms。
+           悬停/主题换色时改的是那支颜色笔刷，不是重画一块圆角。 */
+        var capsuleHost = new Grid
+        {
+            IsHitTestVisible = false,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+        };
+
+        face.Children.Insert(0, capsuleHost);
+
+        Microsoft.UI.Composition.CompositionColorBrush? capsuleBrush = null;
+        Microsoft.UI.Composition.CompositionRoundedRectangleGeometry? capsuleGeometry = null;
+        Microsoft.UI.Composition.ShapeVisual? capsuleVisual = null;
+
+        void SyncCapsule()
+        {
+            if (capsuleGeometry is null || capsuleVisual is null)
+            {
+                return;
+            }
+
+            var size = new System.Numerics.Vector2((float)capsuleHost.ActualWidth, (float)capsuleHost.ActualHeight);
+
+            if (size.X <= 0 || size.Y <= 0)
+            {
+                return;
+            }
+
+            capsuleGeometry.Size = size;
+            capsuleVisual.Size = size;
+        }
+
+        void PaintCapsule(Color colour)
+        {
+            if (capsuleBrush is null)
+            {
+                // 还没 Loaded：先用 XAML 那块兜底，等合成层就位再交给它。
+                border.Background = new SolidColorBrush(colour);
+
+                return;
+            }
+
+            capsuleBrush.Color = colour;
+        }
+
+        capsuleHost.SizeChanged += (_, _) => SyncCapsule();
+
+        capsuleHost.Loaded += (_, _) =>
+        {
+            var compositor = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(capsuleHost).Compositor;
+            var radius = (float)(NoteType.ChipRadiusPx * scale);
+
+            capsuleGeometry = compositor.CreateRoundedRectangleGeometry();
+            capsuleGeometry.CornerRadius = new System.Numerics.Vector2(radius, radius);
+
+            capsuleBrush = compositor.CreateColorBrush(rest);
+
+            var shape = compositor.CreateSpriteShape();
+            shape.Geometry = capsuleGeometry;
+            shape.FillBrush = capsuleBrush;
+
+            capsuleVisual = compositor.CreateShapeVisual();
+            capsuleVisual.Shapes.Add(shape);
+            capsuleVisual.Size = new System.Numerics.Vector2((float)capsuleHost.ActualWidth, (float)capsuleHost.ActualHeight);
+
+            Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.SetElementChildVisual(capsuleHost, capsuleVisual);
+
+            // 合成层接手了，XAML 那块圆角底就撤——留着等于白付那 0.14ms/枚。
+            border.Background = null;
+
+            SyncCapsule();
+        };
+
         if (readOnly)
         {
             ToolTipService.SetToolTip(border, "验收闸门的状态牌：helm-gate 记账，画板只显示");
@@ -345,13 +421,13 @@ internal static class ChromeStyling
 
         border.PointerEntered += (_, _) =>
         {
-            border.Background = new SolidColorBrush(hover);
+            PaintCapsule(hover);
             EnsureCross();
             ShowChipCross(crossLayer!, true);
         };
         border.PointerExited += (_, _) =>
         {
-            border.Background = new SolidColorBrush(rest);
+            PaintCapsule(rest);
 
             if (crossLayer is not null)
             {

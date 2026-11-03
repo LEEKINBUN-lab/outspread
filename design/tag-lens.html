@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>铺陈 · 标签镜头四候选</title>
+<style>
+  :root {
+    --bg: hsl(210 20% 98%);
+    --surface: #ffffff;
+    --text: #1e1e1e;
+    --muted: #5a6068;
+    --line: hsl(0 0% 0% / .12);
+    --panel: #fbfcfd;
+    --accent: hsl(214 84% 56%);
+    --dur-fast: 83ms; --dur-base: 167ms; --dur-slow: 320ms;
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --radius: 0;
+    --font-ui: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+    --state-hover: rgb(0 0 0 / .08);
+    --due-late: #d13415; --due-soon: #ab6400;
+    --paper-top: rgb(255 255 255 / .16); --paper-bottom: rgb(0 0 0 / .04);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 var(--font-ui); }
+  main { max-width: 960px; margin: 0 auto; padding: 28px 20px 64px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 40px 0 2px; }
+  .school { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+  .lead { max-width: 68em; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0 8px; font-size: 13px; }
+  th, td { border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: var(--panel); font-weight: 600; }
+  .verdict { background: var(--panel); border: 1px solid var(--line); padding: 10px 14px; margin: 14px 0; }
+  .trade { color: var(--muted); font-size: 12.5px; margin: 8px 0 0; padding-left: 1.2em; }
+  .trade b { color: var(--text); font-weight: 600; }
+
+  /* ── 微型板面：与 feel.html 同一套纸面/牌子/压暗语言 ───────────────── */
+  .mini { position: relative; width: 100%; height: 430px; margin-top: 10px;
+          background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
+  .card { position: absolute; background: linear-gradient(var(--paper-top), var(--paper-bottom)), var(--surface);
+          border: 1px solid var(--line); padding: 10px 12px; font-size: 13px; line-height: 1.45;
+          box-shadow: 0 1px 3px rgb(0 0 0 / .10); user-select: none;
+          transition: transform 380ms var(--ease-out), opacity var(--dur-base) linear; }
+  .card .t { margin-bottom: 2px; }
+  .card .chips { position: absolute; left: 8px; bottom: 6px; right: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; line-height: 16px;
+          padding: 2px 6px; border: 1px solid var(--line); background: rgb(0 0 0 / .035); color: rgb(30 30 30 / .86); }
+  .chip.late { color: var(--due-late); }
+  .chip.today { color: var(--due-soon); }
+  .board-a .chip { cursor: pointer; }
+  .board-a .chip:hover { background: rgb(0 0 0 / .09); text-decoration: underline; }
+  .card.dimmed { opacity: .22; pointer-events: none; }
+  .status { position: absolute; left: 12px; top: 8px; font-size: 12px; color: var(--muted);
+            opacity: 0; transition: opacity var(--dur-base); pointer-events: none; }
+  .status.on { opacity: 1; }
+
+  .ctl { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 8px; z-index: 6; }
+  .ctl button, .dialbtn { font: 12.5px var(--font-ui); padding: 5px 11px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--text); cursor: pointer; }
+  .ctl button:hover { background: var(--state-hover); }
+
+  /* 漏斗抽屉（B）：与右键菜单同族——面板底 251,252,253，行 32，字号 14，计数在提示列 */
+  .sheet { position: absolute; right: 10px; bottom: 46px; width: 264px; max-height: 336px; overflow: auto;
+           background: var(--panel); border: 1px solid var(--line); box-shadow: 0 10px 24px rgb(0 0 0 / .14);
+           padding: 6px 0 8px; display: none; z-index: 8; }
+  .sheet.on { display: block; }
+  .sheet h4 { margin: 8px 14px 2px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+  .row { display: flex; justify-content: space-between; align-items: center; height: 32px;
+         padding: 0 14px; cursor: pointer; white-space: nowrap; }
+  .row:hover { background: var(--state-hover); }
+  .row .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .row.on { color: var(--accent); }
+
+  /* 常用档轨道（C）：左下角常驻，逾期两档在左，动态标签档续右 */
+  .rail { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 6px; align-items: center;
+          background: var(--panel); border: 1px solid var(--line); padding: 5px 7px; z-index: 6; }
+  .rail .seg { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; padding: 3px 8px;
+               border: 1px solid var(--line); background: transparent; color: var(--text); cursor: pointer; }
+  .rail .seg:hover { background: var(--state-hover); }
+  .rail .seg.lit { background: var(--state-hover); }
+  .rail .seg .n { font-weight: 600; }
+  .rail .seg.late .d { color: var(--due-late); } .rail .seg.today .d { color: var(--due-soon); }
+  .rail .dot { width: 7px; height: 7px; display: inline-block; }
+  .rail .vsep { width: 1px; align-self: stretch; background: var(--line); margin: 2px 2px; }
+
+  /* 镜头轮盘（D） */
+  .dialwrap { position: absolute; z-index: 9; width: 300px; height: 300px; display: none; }
+  .dialwrap.on { display: block; }
+  .dialwrap svg { width: 100%; height: 100%; }
+  .dialwrap path.sect { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+  .dialwrap path.sect:hover { fill: var(--state-hover); }
+  .dialwrap text { font: 12px var(--font-ui); fill: var(--text); pointer-events: none; }
+  .dialwrap circle.hub { fill: var(--panel); stroke: var(--line); }
+  .dialwrap circle.hub:hover { fill: var(--state-hover); }
+  .dialhint { position: absolute; left: 12px; bottom: 12px; font-size: 12px; color: var(--muted); z-index: 2; }
+</style>
+</head>
+<body>
+<main>
+  <h1>标签镜头：把逾期那套投影聚推广到 标签 / 日期 / 完成</h1>
+  <p class="lead">共同部分已经定死（沿用逾期镜头）：聚合是<b>投影</b>不是搬家，文档零改动；其余格子压暗、点空白退出；
+  空档点击不回声（11-03 定）。四格候选只比一件事——<b>几十个标签的入口长什么样、怎么触发、多了怎么办</b>。
+  每格都能真点：点触发件看聚拢，点空白退回。</p>
+
+  <table>
+    <tr><th>候选</th><th>流派 · 参照</th><th>触发成本</th><th>常驻占位</th><th>标签多了怎么办</th><th>代价</th></tr>
+    <tr><td><b>A 牌即镜头</b></td><td>直接操作 · Notion 点属性值即筛、GitHub label</td><td>一次点击（就地点）</td><td>零新增</td><td>只显示看得见的牌；看不见的标签不入门</td><td>点牌语义要重排（现＝编辑标记）</td></tr>
+    <tr><td><b>B 抽屉扩容</b></td><td>面板 · Obsidian 标签面板、Trello/Linear 过滤菜单</td><td>两次（开漏斗→点行）</td><td>零新增（漏斗已存在）</td><td>面板内按频次排、可滚动，容得下几十枚</td><td>慢一档；标签不在视线里，得先知道有</td></tr>
+    <tr><td><b>C 常用档轨道</b></td><td>动态档 · Apple Notes 最近标签、Spotify 最近播放</td><td>一次</td><td>左下角一条</td><td>只显示 top-K＋「＋N」溢出进抽屉</td><td>与 10-25「撤掉无人问也常显的摘要」那条定档相抵</td></tr>
+    <tr><td><b>D 镜头轮盘</b></td><td>空间菜单 · Blender/modo 饼菜单（实测宽度≤8 项）</td><td>一次长按/Shift点→一次划选</td><td>零常驻</td><td>轮盘只放 top-6＋三档状态，中心进全量抽屉</td><td>自绘控件（要你点头）；发现性最弱</td></tr>
+  </table>
+
+  <div class="verdict"><b>我的主推：B 为全集底座 ＋ A 为加速器</b>。B 不加任何新入口（漏斗面板本来就有全部读数），
+  只是把行点击从"压暗筛选"升级成"投影聚合"，两套镜头归一；A 解决"看见才聚"的即时性。两者共享同一条退出路。
+  C、D 各属独立流派，也各自撞一条已定档的令（C 撞常驻摘要、D 撞自绘控件须批准），列在这里由你裁决，不合并。</div>
+
+  <h2>A · 牌即镜头——点便签上的标记牌，同类立刻聚过来</h2>
+  <p class="school">直接操作派。参照：Notion 点属性值即筛、GitHub issue 标签。这一格试试点卡片左下角的「#设计」。</p>
+  <div class="mini board-a" id="boardA"></div>
+  <ul class="trade">
+    <li><b>快捷</b>：零跳转——你看见哪枚牌，哪枚就能聚；日期牌、@b 牌同样可点。</li>
+    <li><b>代价</b>：牌子现在的身职是「点＝编辑、×＝删除」（你 10-25 定的两扇门）。上镜头后要么改成「点＝聚、双击＝编辑」，要么「Shift＋点＝聚」保留旧门——这半格需要你拍。</li>
+    <li><b>盲区</b>：只救"看得见"的标签；没挂在屏上任何一格的标签无从点起（由 B/C/D 补位）。</li>
+  </ul>
+
+  <h2>B · 抽屉扩容——漏斗面板里每一行都变成一枚镜头</h2>
+  <p class="school">面板派。参照：Obsidian 标签面板、Trello filter、Linear。点右下角「筛选」开抽屉，行点击＝投影聚合。</p>
+  <div class="mini" id="boardB"></div>
+  <ul class="trade">
+    <li><b>零新增入口</b>：日期/完成/标签三组读数今天就在漏斗里；这格只把行点击的语义从压暗换成聚合，"筛选"和"镜头"不再并存两套（重复入口归一，符合你「重复入口要删」那条）。</li>
+    <li><b>容量</b>：几十个标签放得下（按频次排、可滚动；0 数的档不占行，规则沿用现状）。</li>
+    <li><b>与逾期条的关系</b>：左下角逾期状态条＝固定两档的快车道，原样保留；抽屉＝全集慢车道。两条道镜头行为完全一致。</li>
+  </ul>
+
+  <h2>C · 常用档轨道——左下角续一条动态标签档</h2>
+  <p class="school">动态档派。参照：Apple Notes「最近标签」、Spotify 最近播放。点轨道上的标签档看聚拢，「＋N」开溢出抽屉。</p>
+  <div class="mini" id="boardC"></div>
+  <ul class="trade">
+    <li><b>快捷之最</b>：和逾期条并排，一次点击、全部常用标签常驻可见。</li>
+    <li><b>硬冲突</b>：10-25 你们撤掉过左下角那排常显标签计数（"无人问也占屏的数据摘要"）。这格等于把它按 top-K＋溢出的形式请回来——值不值由你裁。</li>
+    <li><b>漂移</b>：档是动态的（按频次/最近），今天在设计那格明天可能换人，肌肉记忆不稳。</li>
+  </ul>
+
+  <h2>D · 镜头轮盘——空白处召出八格轮盘，划到即聚</h2>
+  <p class="school">空间菜单派。参照：Blender/modo 的饼菜单（CHI'88 实测 8 项时恒距指向最快最少错，宽度≤8）。Shift＋点空白召盘；或点右下「召轮盘」。</p>
+  <div class="mini" id="boardD"></div>
+  <ul class="trade">
+    <li><b>美观</b>：零常驻，版面一点不占；轮盘中心进全量抽屉（接 B）。</li>
+    <li><b>自绘控件</b>：轮盘不是系统原生件——按你的规矩要单独点头才做。</li>
+    <li><b>发现性</b>：最弱，新用法要靠首次提示；手势也得与右键平移/长按错开。</li>
+  </ul>
+
+  <p class="lead" style="margin-top:36px">拍下哪格后：数值与状态先搬进 <code>design/feel.html</code> 量实数，再 1:1 进 WinUI（原型先行规矩）；
+  亚像素不拿本页判。可组合项已按"各属不同流派"摆好——A＋B 不冲突，C、D 与 A/B 二选一即可。URL 末尾加 <code>#demo</code> 可让四格同时处于激活态。</p>
+</main>
+
+<script>
+(() => {
+  const NOTES = [
+    { id: 'n1', t: '需求清单',        x: 24,  y: 44,  w: 168, h: 84, tags: ['急事'], due: 'late' },
+    { id: 'n2', t: '封面草图',        x: 236, y: 30,  w: 172, h: 84, tags: ['设计'] },
+    { id: 'n3', t: '海报配色两版',    x: 470, y: 52,  w: 176, h: 84, tags: ['设计'] },
+    { id: 'n4', t: 'Logo 方向已定',   x: 690, y: 36,  w: 170, h: 84, tags: ['设计'], done: true },
+    { id: 'n5', t: '买猫粮',          x: 60,  y: 176, w: 158, h: 84, tags: ['买'], due: 'today' },
+    { id: 'n6', t: '论文精读第三章',  x: 260, y: 196, w: 178, h: 84, tags: ['研究'], due: 'soon' },
+    { id: 'n7', t: '周报素材归档',    x: 500, y: 182, w: 166, h: 84, tags: ['研究'] },
+    { id: 'n8', t: '浇花',            x: 706, y: 208, w: 150, h: 84, tags: [] },
+  ];
+  const TAGS = ['设计', '研究', '急事', '买'];
+  const dueLabel = { late: '逾期', today: '今天', soon: '即将' };
+
+  const state = new Map();   // boardEl -> { lens, home }
+
+  function mount(el) {
+    el.querySelectorAll('.card,.status,.ctl,.sheet,.rail,.dialwrap,.dialhint').forEach(n => n.remove());
+    const st = { lens: null }; state.set(el, st);
+    for (const n of NOTES) {
+      const c = document.createElement('div');
+      c.className = 'card'; c.dataset.id = n.id;
+      c.style.cssText = `left:${n.x}px;top:${n.y}px;width:${n.w}px;height:${n.h}px;`;
+      const chips = [];
+      if (n.due) chips.push(`<span class="chip ${n.due}" data-kind="due" data-v="${n.due}">${dueLabel[n.due]}</span>`);
+      for (const t of n.tags) chips.push(`<span class="chip" data-kind="tag" data-v="${t}">#${t}</span>`);
+      if (n.done) chips.push(`<span class="chip" data-kind="done" data-v="done">已完成</span>`);
+      c.innerHTML = `<div class="t">${n.t}</div><div class="chips">${chips.join('')}</div>`;
+      el.appendChild(c);
+    }
+    const s = document.createElement('div'); s.className = 'status'; el.appendChild(s);
+    el.addEventListener('click', e => { if (e.target === el && st.lens) exit(el); });
+    return st;
+  }
+
+  const match = lens => n =>
+    lens.kind === 'tag'  ? n.tags.includes(lens.v) :
+    lens.kind === 'due'  ? n.due === lens.v :
+    lens.kind === 'done' ? !!n.done :
+    lens.kind === 'open' ? !n.done :
+    lens.kind === 'lateset' ? n.due === 'late' :
+    lens.kind === 'soonset' ? n.due === 'soon' || n.due === 'today' : false;
+
+  function label(lens) {
+    return lens.kind === 'tag' ? '#' + lens.v
+         : lens.kind === 'due' ? dueLabel[lens.v]
+         : lens.kind === 'done' ? '已完成'
+         : lens.kind === 'open' ? '还没做完'
+         : lens.kind === 'lateset' ? '逾期' : '即将逾期';
+  }
+
+  function project(el, lens) {
+    const st = state.get(el);
+    if (st.lens && st.lens.key === lens.key) { exit(el); return; }
+    const hits = NOTES.filter(match(lens));
+    if (hits.length === 0) return;                       // 空档不回声（11-03 定档）
+    st.lens = lens;
+    const W = el.clientWidth, rows = [];
+    let row = [], rw = 0;
+    for (const n of hits) { if (row.length && rw + 20 + n.w > W - 64) { rows.push(row); row = []; rw = 0; }
+      rw += (row.length ? 20 : 0) + n.w; row.push(n); }
+    if (row.length) rows.push(row);
+    const rowH = rows.map(r => Math.max(...r.map(n => n.h)));
+    const total = rowH.reduce((a, b) => a + b, 0) + (rows.length - 1) * 20;
+    let y = Math.max(36, (el.clientHeight - total) / 2);
+    const slot = new Map();
+    for (let i = 0; i < rows.length; i++) {
+      const wsum = rows[i].reduce((a, n) => a + n.w, 0) + (rows[i].length - 1) * 20;
+      let x = Math.max(32, (W - wsum) / 2);
+      for (const n of rows[i]) { slot.set(n.id, [x, y]); x += n.w + 20; }
+      y += rowH[i] + 20;
+    }
+    const m = match(lens);
+    for (const card of el.querySelectorAll('.card')) {
+      const n = NOTES.find(k => k.id === card.dataset.id);
+      if (m(n)) { const [sx, sy] = slot.get(n.id);
+        card.style.transform = `translate(${sx - n.x}px,${sy - n.y}px)`; card.classList.remove('dimmed'); }
+      else card.classList.add('dimmed');
+    }
+    el.querySelector('.status').textContent = `聚焦「${label(lens)}」 · ${hits.length} / ${NOTES.length} · 点空白返回`;
+    el.querySelector('.status').classList.add('on');
+    syncTriggers(el);
+  }
+
+  function exit(el) {
+    const st = state.get(el); st.lens = null;
+    for (const card of el.querySelectorAll('.card')) { card.style.transform = ''; card.classList.remove('dimmed'); }
+    el.querySelector('.status').classList.remove('on');
+    syncTriggers(el);
+  }
+
+  function syncTriggers(el) { /* 各格自己刷新高亮 */ const f = el.dataset.sync; if (f && SYNC[f]) SYNC[f](el); }
+  const SYNC = {};
+
+  const mk = (id, fn) => { const el = document.getElementById(id); el.dataset.sync = id; SYNC[id] = fn && (e => fn(e)); return el; };
+
+  /* ── A：牌子点击即镜头 ─────────────────────────────────────────── */
+  {
+    const el = mk('boardA'); mount(el);
+    el.addEventListener('click', e => {
+      const chip = e.target.closest('.chip'); if (!chip) return;
+      const kind = chip.dataset.kind, v = chip.dataset.v;
+      project(el, { kind, v, key: kind + ':' + v });
+    });
+  }
+
+  /* ── B：漏斗抽屉 ─────────────────────────────────────────────── */
+  {
+    const el = mk('boardB'); const st = mount(el);
+    const btn = Object.assign(document.createElement('div'), { className: 'ctl',
+      innerHTML: '<button>筛选</button>' });
+    const sheet = Object.assign(document.createElement('div'), { className: 'sheet' });
+    el.append(btn, sheet);
+    const groups = [
+      ['日期', [ [{kind:'lateset',key:'late'},'逾期'], [{kind:'due',v:'today',key:'d:t'},'今天'],
+                 [{kind:'soonset',key:'soon'},'即将逾期'] ]],
+      ['完成', [ [{kind:'done',key:'b1'},'已完成'], [{kind:'open',key:'b0'},'还没做完'] ]],
+      ['标签', TAGS.map(t => [{kind:'tag',v:t,key:'t:'+t}, '#' + t])],
+    ];
+    const cnt = l => NOTES.filter(match(l)).length;
+    sheet.innerHTML = groups.map(([g, ls]) => `<h4>${g}</h4>` + ls.map(([l, name]) => {
+      const c = cnt(l); return c > 0 ? `<div class="row" data-key="${l.key}"><span>${name}</span><span class="n">${c}</span></div>` : '';
+    }).join('')).join('') + `<h4></h4><div class="row" data-clear="1"><span>清除镜头</span><span class="n">全部</span></div>`;
+    btn.addEventListener('click', () => sheet.classList.toggle('on'));
+    sheet.addEventListener('click', e => {
+      const r = e.target.closest('.row'); if (!r) return;
+      if (r.dataset.clear) { exit(el); sheet.classList.remove('on'); return; }
+      const all = groups.flatMap(x => x[1]).map(x => x[0]).find(l => l.key === r.dataset.key);
+      project(el, all);
+    });
+    sheet.addEventListener('mousedown', e => e.stopPropagation());
+    SYNC['boardB'] = e => { for (const r of e.querySelectorAll('.row')) r.classList.toggle('on', st.lens && r.dataset.key === st.lens.key); };
+  }
+
+  /* ── C：常用档轨道 ───────────────────────────────────────────── */
+  {
+    const el = mk('boardC'); const st = mount(el);
+    const topK = 2, tagCount = t => NOTES.filter(n => n.tags.includes(t)).length;
+    const sorted = [...TAGS].sort((a, b) => tagCount(b) - tagCount(a));
+    const shown = sorted.slice(0, topK), more = sorted.slice(topK);
+    const rail = Object.assign(document.createElement('div'), { className: 'rail' });
+    rail.innerHTML =
+      `<button class="seg late" data-key="late"><span class="dot" style="background:var(--due-late)"></span>逾期 <span class="n">1</span></button>` +
+      `<button class="seg today" data-key="soon"><span class="dot" style="background:var(--due-soon)"></span>即将 <span class="n">2</span></button>` +
+      `<span class="vsep"></span>` +
+      shown.map(t => `<button class="seg" data-key="t:${t}">#${t} <span class="n">${tagCount(t)}</span></button>`).join('') +
+      `<button class="seg" data-more="1">＋${more.length}</button>`;
+    const drawer = Object.assign(document.createElement('div'), { className: 'sheet', style: 'right:auto;left:10px;bottom:56px;' });
+    drawer.innerHTML = more.map(t => `<div class="row" data-key="t:${t}"><span>#${t}</span><span class="n">${tagCount(t)}</span></div>`).join('');
+    el.append(rail, drawer);
+    rail.addEventListener('click', e => {
+      const s = e.target.closest('.seg'); if (!s) return;
+      if (s.dataset.more) { drawer.classList.toggle('on'); return; }
+      const key = s.dataset.key;
+      project(el, key.startsWith('t:') ? { kind: 'tag', v: key.slice(2), key }
+              : key === 'late' ? { kind: 'lateset', key } : { kind: 'soonset', key });
+      drawer.classList.remove('on');
+    });
+    drawer.addEventListener('click', e => { const r = e.target.closest('.row'); if (!r) return;
+      project(el, { kind: 'tag', v: r.dataset.key.slice(2), key: r.dataset.key }); drawer.classList.remove('on'); });
+    SYNC['boardC'] = () => { for (const s of rail.querySelectorAll('.seg')) s.classList.toggle('lit', st.lens && s.dataset.key === st.lens.key); };
+  }
+
+  /* ── D：镜头轮盘 ─────────────────────────────────────────────── */
+  {
+    const el = mk('boardD'); const st = mount(el);
+    const hint = Object.assign(document.createElement('div'), { className: 'dialhint', textContent: 'Shift＋点空白召盘（示意）' });
+    const ctl = Object.assign(document.createElement('div'), { className: 'ctl', innerHTML: '<button>召轮盘</button>' });
+    const wrap = Object.assign(document.createElement('div'), { className: 'dialwrap' });
+    el.append(hint, ctl, wrap);
+    const items = [
+      [{ kind: 'lateset', key: 'late' }, '逾期'],
+      [{ kind: 'due', v: 'today', key: 'd:t' }, '今天'],
+      [{ kind: 'done', key: 'b1' }, '已完成'],
+      [{ kind: 'tag', v: '设计', key: 't:设计' }, '#设计 3'],
+      [{ kind: 'tag', v: '研究', key: 't:研究' }, '#研究 2'],
+      [{ kind: 'tag', v: '急事', key: 't:急事' }, '#急事 1'],
+      [{ kind: 'tag', v: '买', key: 't:买' }, '#买 1'],
+      [{ kind: 'open', key: 'b0' }, '还没做完'],
+    ];
+    const R = 148, r0 = 40, cx = 150, cy = 150;
+    const P = (a, r) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+    let svg = '<svg viewBox="0 0 300 300">';
+    items.forEach((it, i) => {
+      const a0 = -Math.PI / 2 + i * Math.PI / 4, a1 = a0 + Math.PI / 4;
+      const [x0, y0] = P(a0, r0), [x1, y1] = P(a0, R), [x2, y2] = P(a1, R), [x3, y3] = P(a1, r0);
+      svg += `<path class="sect" data-i="${i}" d="M${x0} ${y0} L${x1} ${y1} A${R} ${R} 0 0 1 ${x2} ${y2} L${x3} ${y3} A${r0} ${r0} 0 0 0 ${x0} ${y0} Z"></path>`;
+      const [lx, ly] = P((a0 + a1) / 2, (r0 + R) / 2 + 4);
+      svg += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle">${it[1]}</text>`;
+    });
+    svg += `<circle class="hub" data-hub="1" cx="${cx}" cy="${cy}" r="${r0 - 4}"></circle>
+            <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle">全部 ▾</text></svg>`;
+    wrap.innerHTML = svg;
+    const open = (px, py) => {
+      const w = el.clientWidth, h = el.clientHeight;
+      wrap.style.left = Math.max(4, Math.min(w - 304, px - 150)) + 'px';
+      wrap.style.top = Math.max(4, Math.min(h - 304, py - 150)) + 'px';
+      wrap.classList.add('on');
+    };
+    const close = () => wrap.classList.remove('on');
+    el.addEventListener('click', e => { if (e.shiftKey && e.target === el) { open(e.offsetX, e.offsetY); e.preventDefault(); } });
+    ctl.addEventListener('click', () => open(el.clientWidth / 2, el.clientHeight / 2 + 40));
+    wrap.addEventListener('click', e => {
+      const s = e.target.closest('path.sect');
+      if (s) { project(el, items[+s.dataset.i][0]); close(); return; }
+      if (e.target.closest('circle.hub')) {
+        const s = el.querySelector('.status');
+        s.textContent = '实版这里开全量抽屉（接 B 的面板）· 轮盘只装 top 档与状态档';
+        s.classList.add('on'); close(); return;
+      }
+    });
+  }
+
+  /* 深链：URL 末尾加 #demo＝四格同时处于激活态（截图与复现通道）。 */
+  if (location.hash.includes('demo')) {
+    const a = document.getElementById('boardA');
+    project(a, { kind: 'tag', v: '设计', key: 't:设计' });
+    const b = document.getElementById('boardB');
+    b.querySelector('.ctl button').click();
+    b.querySelector('.row[data-key="t:研究"]').click();
+    const c = document.getElementById('boardC');
+    c.querySelector('.rail .seg[data-key="t:设计"]').click();
+    document.getElementById('boardD').querySelector('.ctl button').click();
+  }
+})();
+</script>
+</body>
+</html>

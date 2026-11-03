@@ -187,4 +187,38 @@ public class ChromeTests
             Assert.True(NoteType.ChipFontPx < NoteTypography.For(size).Size, "牌子不能比正文还大声");
         }
     }
+
+    [Fact]
+    public void The_focus_spring_curve_starts_and_lands_exactly_with_only_a_hint_of_overshoot()
+    {
+        var samples = Motion.SpringSamples;
+
+        // 两端是硬边界：第一格必须正好 0（不然起手会跳），最后一格必须正好 1（不然落点差一截）。
+        Assert.Equal(0, samples[0], 6);
+        Assert.Equal(1, samples[^1], 6);
+
+        // 他 11-02 说"太快"：这一路必须比原来的 250ms 慢——落定时间按采样表算。
+        Assert.True(Motion.SpringMs >= 400, $"弹簧总时长 {Motion.SpringMs:0}ms，太短了就读不出变速");
+        Assert.True(Motion.SpringMs <= 900, $"弹簧总时长 {Motion.SpringMs:0}ms，拖成这样就不像 UI 了");
+
+        // 位移必须是"起步慢、中段快、尾巴长"的弹簧形状：100ms 时还没走完一半，
+        // 但已经在动；过冲只留一丝（<3%），且只过冲一次。
+        var at100 = samples[(int)(100 / Motion.SpringStepMs)];
+        Assert.True(at100 > 0.2 && at100 < 0.65, $"100ms 时走了 {at100:P0}，不像弹簧起步");
+
+        var max = samples.Max();
+        Assert.True(max <= 1.03, $"过冲 {max - 1:P1} 太大了，苹果那档默认是不弹");
+        Assert.True(max >= 1.0, "一次都不越过 1 的话就不是弹簧了，是缓动曲线");
+
+        var crossings = 0;
+        for (var index = 1; index < samples.Count; index++)
+        {
+            if (samples[index - 1] < 1 && samples[index] >= 1)
+            {
+                crossings++;
+            }
+        }
+
+        Assert.Equal(1, crossings);
+    }
 }

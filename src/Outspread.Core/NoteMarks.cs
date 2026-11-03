@@ -39,7 +39,25 @@ public static class NoteMarks
         Late,
     }
 
-    public static DueState StateOf(string? text, DateOnly today) => StateOf(Tags.Read(text), today);
+    public static DueState StateOf(string? text, DateOnly today) => StateOf(Tags.Read(text, today), today);
+
+    /// <summary>「即将逾期」算几天内：他 11-02 定的 3 天（含今天）。</summary>
+    public const int SoonDays = 3;
+
+    /// <summary>这格算不算"还欠着的逾期"：有读得出的过去日期，且没标完成。</summary>
+    /// <remarks>
+    /// 完成的那几格不计入计数：左下角那两个数是"还要不要管"的提醒，已完成的格子挂在那儿
+    /// 只会让数字永远降不下来。
+    /// </remarks>
+    public static bool IsOpenLate(NoteProperties marks, DateOnly today)
+        => marks.Done != true && StateOf(marks, today) == DueState.Late;
+
+    /// <summary>这格算不算"即将逾期"：今天到 today+<paramref name="days"/> 之间到期，且没标完成。</summary>
+    public static bool IsOpenSoon(NoteProperties marks, DateOnly today, int days)
+        => marks.Done != true && marks.Due is { } due && due >= today && due <= today.AddDays(days);
+
+    /// <summary>即将逾期那一枚点子的颜色（与"今天"那条蓝、逾期那条红同属一条状态色语言）。</summary>
+    public static Rgb SoonColour(bool dark) => dark ? new Rgb(255, 185, 0) : new Rgb(171, 100, 0);
 
     /// <summary>The same reading for a note whose marks were already parsed — the card re-reads its
     /// own text on every frame of a pan, so it must not pay for the parse three times.</summary>
@@ -148,7 +166,7 @@ public static class NoteMarks
 
         if (marks.Done is { } done && marks.DoneSource is { } doneSource)
         {
-            // 文案就是那两个字：牌子点下去是切换（见 NoteMarksPanel.EditMarkFrom），不是改名。
+            // 文案就是那两个字：点牌身＝聚焦完成态（他 11-03 拍的 A），切换走编辑器里改 token。
             chips.Add(new Mark(done ? "已完成" : "未完成", doneSource, false, NoteMarks.DueState.None, done));
         }
 

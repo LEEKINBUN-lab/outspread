@@ -39,7 +39,7 @@ public sealed partial class MainWindow
 
     private bool Shows(CanvasNode node)
     {
-        var marks = Tags.Read(node.Text);
+        var marks = Tags.Read(node.Text, _view.Today);
 
         return NoteMarks.Shows(NoteMarks.StateOf(marks, _view.Today), marks.Tags, marks.Done, _view.TagFilter, _view.DueFilter, _view.DoneFilter);
     }

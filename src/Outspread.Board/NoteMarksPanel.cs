@@ -58,8 +58,8 @@ public sealed partial class MainWindow
     /// was typed and shows up as a chip. Any other Enter is a normal newline and is left alone.
     /// </summary>
     /// <summary>
-    /// 编辑框里的回车。Ctrl＋Enter＝收笔；标记行＝收进隐藏块。只改牌子的那一趟收下后直接收笔，
-    /// 新建/正文编辑仍留在编辑态，方便接着补日期或序号。返回 true＝这一发被吃掉（不插换行）。
+    /// 编辑框里的回车。Ctrl＋Enter＝收笔；标记行＝收进隐藏块（收下后仍留在编辑态，方便接着补日期或序号）。
+    /// 返回 true＝这一发被吃掉（不插换行）。
     /// </summary>
     private bool HandleEditorEnter()
     {
@@ -85,11 +85,6 @@ public sealed partial class MainWindow
 
         if (AbsorbPropertyLine())
         {
-            if (_markEditOnly)
-            {
-                CloseEditor(commit: true);
-            }
-
             return true;
         }
 
@@ -319,7 +314,7 @@ public sealed partial class MainWindow
 
         var shown = notes.Count(node =>
         {
-            var marks = Tags.Read(node.Text);
+            var marks = Tags.Read(node.Text, _view.Today);
 
             return NoteMarks.Shows(NoteMarks.StateOf(marks, _view.Today), marks.Tags, marks.Done, _view.TagFilter, _view.DueFilter, _view.DoneFilter);
         });
@@ -384,63 +379,6 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// 卡片上的牌子被点了一下＝编辑这一枚标记：打开这一格的编辑器，把 token 从隐藏块挪进正文
-    /// 并选中，直接打新值就行。删除只留给牌子右侧的 ×。
-    /// </summary>
-    private void EditMarkFrom(string nodeId, string token)
-    {
-        if (NodeOf(nodeId) is not { Kind: CanvasNodeKind.Text })
-        {
-            return;
-        }
-
-        // 「@b」是一枚开关，不是一枚可改写的值：点一下就在 0↔1 之间切换，不进编辑态
-        // （他 10-25 补的 @n2：完成标签用户也要可以点，不需要像其他标签那样点击修改）。
-        if (token.StartsWith("@b", StringComparison.OrdinalIgnoreCase))
-        {
-            ToggleDoneFrom(nodeId, token);
-            return;
-        }
-
-        BeginEdit(nodeId);
-
-        // 从牌子进来的这一发是"只改这枚标记"：收下它以后回车就收笔，不再停在新便签的编辑态。
-        _markEditOnly = true;
-        BeginMarkEdit(token);
-    }
-
-    /// <summary>点「已完成／未完成」那枚牌子：把正文里的 <c>@b0</c>／<c>@b1</c> 换过来。
-    /// 走的仍是"改文档"那一扇门——一步可撤销、会存盘，不是只翻一个视图状态。</summary>
-    private void ToggleDoneFrom(string nodeId, string token)
-    {
-        if (NodeOf(nodeId) is not { } node || node.Kind != CanvasNodeKind.Text)
-        {
-            return;
-        }
-
-        var next = !(Tags.Read(node.Text).Done ?? false);
-        var written = Tags.SetDone(node.Text, next);
-
-        if (string.Equals(written, node.Text, StringComparison.Ordinal))
-        {
-            // 换不掉却说换了，比不换更糟。
-            Say($"正文中未找到“{token}”，未作修改");
-            return;
-        }
-
-        BeginGesture(next ? "标为已完成" : "标为未完成");
-
-        node.Text = written;
-        FitNoteHeight(node);
-
-        EndGesture();
-        Rebuild();
-        SaveSoon();
-
-        Say(next ? "已标为已完成 · 可按 Ctrl＋Z 撤销" : "已标为未完成 · 可按 Ctrl＋Z 撤销");
-    }
-
-    /// <summary>
     /// 把一枚标记从隐藏属性块挪进编辑器正文（单独一行）并选中它，等用户改写。
     /// 日期/标签/序号都只是 token，改法一致；提交时解析器会把它重新认成标记。
     /// </summary>
@@ -492,7 +430,7 @@ public sealed partial class MainWindow
             return;
         }
 
-        var marks = Tags.Read(_editorProps);
+        var marks = Tags.Read(_editorProps, _view.Today);
         var size = NoteType.ChipFont(_view.Zoom);
 
         _editorChips.Children.Clear();
@@ -515,26 +453,31 @@ public sealed partial class MainWindow
 
                     PaintEditorChips();
                 },
-                () => BeginMarkEdit(source)));
+                () => BeginMarkEdit(source),
+                null,
+                "点一下＝改这枚标记；点 × 去掉"));
         }
 
         _editorChips.Visibility = _editorChips.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         // 贴在编辑器左下角：与卡片上那排牌子的位置是同一个地方，看着才是同一件事。
+        // 顶边用卡片那条牌子带（ChipBand）自己的数：编辑框的正文也让出同一截，两边才咬得上；
+        // 低缩放下牌子会缩到 16 像素以下，旧写法用 max(16, …) 会把它往上顶进正文里。
         var pad = Math.Clamp(NoteTypography.For(_view.FontSizeFor(_editingId ?? string.Empty)).Padding * _view.Zoom, 0, 60);
 
         Canvas.SetLeft(_editorChips, Canvas.GetLeft(_editor) + pad);
-        Canvas.SetTop(_editorChips, Canvas.GetTop(_editor) + _editor.Height - pad - Math.Max(16, size * 1.6));
+        Canvas.SetTop(_editorChips, Canvas.GetTop(_editor) + _editor.Height - pad - NoteType.ChipBand(_view.Zoom));
     }
 
     /// <summary>
-    /// 只改牌子的那一趟：收下标记行的回车要收笔；普通/新建编辑里同样的回车仍留在编辑态。
+    /// 编辑态里的回车：收下标记行（整行只有 token）要吃掉这一发、留在编辑态。
+    /// 旧的"点牌→只改这枚标记→回车收笔"那一趟随"点牌＝编辑"一起退了（他 11-03 拍：点牌＝聚焦）。
     /// </summary>
     private void SelfTestMarkEditEnter(List<string> problems)
     {
         var target = BoardNotes()
             .Where(node => node.Kind == CanvasNodeKind.Text)
-            .Select(node => (Node: node, Chips: NoteMarks.Chips(Tags.Read(node.Text), _view.Today)))
+            .Select(node => (Node: node, Chips: NoteMarks.Chips(Tags.Read(node.Text, _view.Today), _view.Today)))
             .FirstOrDefault(pair => pair.Chips.Count > 0);
 
         if (target.Node is null)
@@ -545,38 +488,7 @@ public sealed partial class MainWindow
         }
 
         var before = _document.ToJson();
-        var token = target.Chips[0].Source;
 
-        EditMarkFrom(target.Node.Id, token);
-
-        if (_editor is null || !_markEditOnly)
-        {
-            problems.Add("自检标记回车: 从牌子进入编辑时没有记成‘只改标记’");
-
-            return;
-        }
-
-        if (!HandleEditorEnter())
-        {
-            problems.Add($"自检标记回车: 选中 {token} 按回车没有收下标记行");
-        }
-        else if (_editor is not null)
-        {
-            problems.Add("自检标记回车: 只改牌子时按回车没有退出编辑态");
-        }
-
-        if (_document.ToJson() != before)
-        {
-            Undo();
-            Rebuild();
-
-            if (_document.ToJson() != before)
-            {
-                problems.Add("自检标记回车: 收笔后的改动撤销不回去");
-            }
-        }
-
-        // 普通编辑（含新建）：同样收下标记行，但必须留在编辑态。
         BeginEdit(target.Node.Id);
         _editor!.Text = "@t自检";
         _editor.SelectionStart = _editor.Text.Length;
@@ -587,7 +499,7 @@ public sealed partial class MainWindow
         }
         else if (_editor is null)
         {
-            problems.Add("自检标记回车: 普通编辑收下标记行后也被迫收笔了");
+            problems.Add("自检标记回车: 收下标记行后也被迫收笔了");
         }
 
         CloseEditor(commit: false);
@@ -598,7 +510,7 @@ public sealed partial class MainWindow
         }
         else
         {
-            Diagnostics.Write("selftest 标记回车: 只改牌子→收笔；普通/新建编辑→留在编辑态；两者都不误写文档");
+            Diagnostics.Write("selftest 标记回车: 收下标记行仍留在编辑态、取消不写文档");
         }
     }
 
@@ -612,64 +524,77 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// 牌子的两扇门：点牌身＝编辑（token 挪进正文并选中），只有 × 才是删除。
-    /// 只打开来编辑、不提交，文档必须一个字节都不动。
+    /// 牌子的新三扇门（他 11-03 拍的 A）：点牌身＝聚焦这一类（投影，文档零改动）、
+    /// 再点同一枚＝退出、双击＝编辑便签；× 仍是删那枚 token。
     /// </summary>
     private void SelfTestMarkChipEdits(List<string> problems)
     {
-        // @b 那一枚是开关，点了不进编辑器（SelfTestDoneChip 单独量它），所以这里挑"可改写"的那几枚。
         var target = BoardNotes()
             .Where(node => node.Kind == CanvasNodeKind.Text)
-            .Select(node => (Node: node, Chips: NoteMarks.Chips(Tags.Read(node.Text), _view.Today)
-                .Where(chip => !chip.Source.StartsWith("@b", StringComparison.OrdinalIgnoreCase))
+            .Select(node => (Node: node, Chips: NoteMarks.Chips(Tags.Read(node.Text, _view.Today), _view.Today)
+                .Where(chip => chip.Done is null && ChipLensKind(chip) is not null)
                 .ToList()))
             .FirstOrDefault(pair => pair.Chips.Count > 0);
 
         if (target.Node is null)
         {
-            Diagnostics.Write("selftest 标记牌: 板上没有带标记的格子，这一发不适用");
+            Diagnostics.Write("selftest 标记牌: 板上没有可聚焦的标记牌，这一发不适用");
 
             return;
         }
 
         var before = _document.ToJson();
-        var token = target.Chips[0].Source;
+        var mark = target.Chips[0];
+        var kind = ChipLensKind(mark)!;
 
-        EditMarkFrom(target.Node.Id, token);
+        ChipLensFrom(target.Node.Id, mark);
+
+        if (LensKind != kind || !LensPlan.Ids.Contains(target.Node.Id))
+        {
+            problems.Add($"自检标记牌: 点牌身没聚焦到「{kind}」（现在是 {LensKind ?? "无"}）");
+        }
+        else if (_editor is not null)
+        {
+            problems.Add("自检标记牌: 点牌身不该再开编辑器（编辑挪到双击了）");
+        }
+        else if (_document.ToJson() != before)
+        {
+            problems.Add("自检标记牌: 聚焦改了文档（它只能是投影）");
+        }
+
+        // 再点同一枚＝退出这一档。
+        ChipLensFrom(target.Node.Id, mark);
+
+        if (LensKind is not null)
+        {
+            problems.Add("自检标记牌: 再点同一枚没有退出聚焦");
+        }
+
+        // 双击＝编辑便签。
+        ChipEditFrom(target.Node.Id, mark);
 
         if (_editor is null)
         {
-            problems.Add("自检标记牌: 点牌身没打开编辑器");
-
-            return;
-        }
-
-        if (!_editor.Text.Contains(token, StringComparison.Ordinal) || _editor.SelectionLength != token.Length)
-        {
-            problems.Add(
-                $"自检标记牌: 点牌身没把 {token} 挪进正文并选中（框里『{_editor.Text}』，选中 {_editor.SelectionLength} 字）");
-        }
-
-        if (Tags.Read(_editorProps).Props.Contains(token, StringComparison.Ordinal))
-        {
-            problems.Add("自检标记牌: 编辑时 token 还留在隐藏块里，提交会多出一枚");
-        }
-
-        CloseEditor(commit: false);
-
-        if (_document.ToJson() != before)
-        {
-            problems.Add("自检标记牌: 只是打开来编辑，取消却改了文档");
+            problems.Add("自检标记牌: 双击牌身没打开编辑器");
         }
         else
         {
-            Diagnostics.Write($"selftest 标记牌: 点牌身打开编辑器、{token} 已选中且隐藏块不重复；取消不写文档");
+            CloseEditor(commit: false);
+        }
+
+        if (_document.ToJson() == before)
+        {
+            Diagnostics.Write($"selftest 标记牌: 点牌聚焦「{kind}」、再点退出、双击进编辑；一圈下来文档零改动");
+        }
+        else
+        {
+            problems.Add("自检标记牌: 一圈点下来改了文档");
         }
     }
 
     /// <summary>
-    /// @n2 那一发：「已完成／未完成」的牌子点一下是**切换**，不进编辑态；× 仍是把那段拿掉。
-    /// 量的顺序就是它落进文件的顺序——牌子画出来、点下去换了字、再点 × 删掉，一步一撤销。
+    /// @b 那枚牌的新门规（他 11-03 拍 A 时把"点牌＝切换"一并归进镜头）：点＝聚焦完成态、
+    /// 双击＝进编辑器改 token、×＝删段。这一发钉：聚焦不碰文档、退出干净、× 仍一步可撤销地拿掉整段。
     /// </summary>
     private void SelfTestDoneChip(List<string> problems)
     {
@@ -703,43 +628,54 @@ public sealed partial class MainWindow
                 problems.Add(
                     $"自检完成标记: 牌子那一排没画出来（Core 侧 {chips.Count} 枚、正文「{node.Text}」、框 {node.Width:0}×{node.Height:0}）");
             }
-            else if (!chips.Any(chip => chip.Label == "已完成"))
+            else if (chips.FirstOrDefault(chip => chip.Label == "已完成") is var found && found.Label != "已完成")
             {
                 problems.Add($"自检完成标记: 牌子上读不到「已完成」（牌子 {chips.Count} 枚、正文「{node.Text}」）");
             }
             else
             {
-                EditMarkFrom(node.Id, "@b1");
+                var mark = chips.First(chip => chip.Label == "已完成");
+                var before = _document.ToJson();
 
-                if (_editor is not null)
+                ChipLensFrom(node.Id, mark);
+
+                if (LensKind != "done:1" || !LensPlan.Ids.Contains(node.Id))
                 {
-                    CloseEditor(commit: false);
-                    problems.Add("自检完成标记: 点牌子进了编辑态——它是一枚开关，不是可改写的值");
+                    problems.Add($"自检完成标记: 点已完成牌没聚焦 done:1（现在是 {LensKind ?? "无"}）");
                 }
 
-                if (!node.Text.Contains("@b0", StringComparison.Ordinal) || Tags.Read(node.Text).Done != false)
+                if (_document.ToJson() != before)
                 {
-                    problems.Add($"自检完成标记: 点一下没换成 @b0（正文「{node.Text}」）");
+                    problems.Add("自检完成标记: 点牌改了文档——聚焦只能是投影，切换 @b 走编辑器");
+                }
+
+                ChipLensFrom(node.Id, mark);
+
+                if (LensKind is not null)
+                {
+                    problems.Add("自检完成标记: 再点同一枚没有退出聚焦");
+                }
+
+                ChipEditFrom(node.Id, mark);
+
+                if (_editor is null)
+                {
+                    problems.Add("自检完成标记: 双击牌身没打开编辑器");
                 }
                 else
                 {
-                    EditMarkFrom(node.Id, "@b0");
+                    CloseEditor(commit: false);
+                }
 
-                    if (!node.Text.Contains("@b1", StringComparison.Ordinal) || Tags.Read(node.Text).Done != true)
-                    {
-                        problems.Add($"自检完成标记: 再点一下没换回 @b1（正文「{node.Text}」）");
-                    }
+                RemoveMarkFrom(node.Id, mark.Source);
 
-                    RemoveMarkFrom(node.Id, "@b1");
-
-                    if (Tags.Read(node.Text).Done is not null || node.Text.Contains("@b", StringComparison.Ordinal))
-                    {
-                        problems.Add($"自检完成标记: 点 × 没把这段拿掉（正文「{node.Text}」）");
-                    }
-                    else
-                    {
-                        Diagnostics.Write("selftest 完成标记: 点牌子在 @b0↔@b1 之间切换且不进编辑态、点 × 拿掉整段，三步各过一发");
-                    }
+                if (Tags.Read(node.Text).Done is not null || node.Text.Contains("@b", StringComparison.Ordinal))
+                {
+                    problems.Add($"自检完成标记: 点 × 没把这段拿掉（正文「{node.Text}」）");
+                }
+                else
+                {
+                    Diagnostics.Write("selftest 完成标记: 点牌聚焦 done:1、再点退出、双击进编辑、× 拿掉整段；四步文档各归各");
                 }
             }
         }

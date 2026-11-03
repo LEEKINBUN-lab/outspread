@@ -145,6 +145,10 @@
 
             <Rectangle x:Name="VignetteLayer" IsHitTestVisible="False" />
 
+            <!-- 聚焦（点左下角那两档之一）时压暗板面：必须排在 PanLayer **之前**，它只压背景；
+                 聚起来的那几格在它上面，不受影响（原型里那层"压暗"就是这一枚）。 -->
+            <Rectangle x:Name="LensDim" IsHitTestVisible="False" Opacity="0" Fill="#FF12151A" />
+
             <!-- 平移期间整层走一枚 TranslateTransform：逐格重排一次要 20–50ms（日志里那行
                  "arrange took … ms"），右键平移就会变成 20fps 的顿挫。松手时再走一次真正的
                  逐格排布并把这枚变换归零。位移不改缩放，所以字形不会因为走变换而变糊——
@@ -322,6 +326,39 @@
                 HorizontalAlignment="Center"
                 VerticalAlignment="Top"
                 Margin="0,12,0,0" />
+
+            <!-- 左下角：逾期／即将逾期两档计数。只在非零时出现；点一档＝把那几格临时聚到中间
+                 （只改投影不改文档，点空白／Esc 退回）。外壳与右下角那一组同一套令牌。 -->
+            <Border
+                x:Name="DueStrip"
+                Visibility="Collapsed"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Bottom"
+                Margin="12,0,0,12">
+                <StackPanel Orientation="Horizontal" Spacing="2">
+                    <Button
+                        x:Name="DueLateButton"
+                        Click="OnDueLateClick"
+                        ToolTipService.ToolTip="把逾期的那几格聚到中间">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Ellipse x:Name="DueLateDot" Width="6" Height="6" />
+                            <TextBlock x:Name="DueLateCount" Text="0" />
+                            <TextBlock x:Name="DueLateLabel" Text="逾期" />
+                        </StackPanel>
+                    </Button>
+                    <Rectangle x:Name="DueSep" Width="1" />
+                    <Button
+                        x:Name="DueSoonButton"
+                        Click="OnDueSoonClick"
+                        ToolTipService.ToolTip="把三天内到期的那几格聚到中间">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Ellipse x:Name="DueSoonDot" Width="6" Height="6" />
+                            <TextBlock x:Name="DueSoonCount" Text="0" />
+                            <TextBlock x:Name="DueSoonLabel" Text="即将逾期" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Border>
 
             <!-- 右下角那一组：一枚发丝边的容器，里面是无边框的成员（漏斗｜↶ ↷｜− 100% ＋）。
                  形状/尺寸/颜色全部读 Core 的 Badge 令牌，而令牌是 2026-10-11 从 feel.html#badge

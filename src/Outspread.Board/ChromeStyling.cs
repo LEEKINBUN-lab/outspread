@@ -164,13 +164,14 @@ internal static class ChromeStyling
     /// </para>
     /// </summary>
     /// <summary>
-    /// 卡片/编辑器上的一枚标记牌。点牌身＝编辑这枚标记，只有右侧的 × 才删它——他不是要
-    /// "点哪儿都删"：× 显示出来却点不到，等于没有。
+    /// 卡片/编辑器上的一枚标记牌。卡片那一排（他 11-03 拍的 A）：点牌身＝聚焦这一类、
+    /// 双击＝编辑便签、只有 × 才删它；编辑器那一排：点牌身仍是改这枚标记（<paramref name="onDouble"/> 给 null）。
+    /// 他不是要"点哪儿都删"：× 显示出来却点不到，等于没有。
     /// <para>
     /// 牌宽＝那几个字的自然宽，× 不占位（<paramref name="surface"/> 只用来给 × 算一块盖得住字的底）。
     /// </para>
     /// </summary>
-    public static Border Chip(NoteMarks.Mark mark, double size, Color ink, Color surface, Action onDelete, Action onEdit)
+    public static Border Chip(NoteMarks.Mark mark, double size, Color ink, Color surface, Action onDelete, Action onPress, Action? onDouble, string tip)
     {
         var scale = size / NoteType.ChipFontPx;
         var self = new Rgb(ink.R, ink.G, ink.B);
@@ -223,9 +224,11 @@ internal static class ChromeStyling
 
         var tinted = mark.Done is not null || gateColour is not null;
 
-        // × 压在牌尾的那块底：悬停底色压在卡面**之后**的实色。用实色而不是半透明，是因为它的活
-        // 就是把底下那几个字盖掉——半压上去只会变成"× 叠在字上"糊成一团。
-        var crossShroud = OpaqueOver(surface, NoteStyling.ToColor(stateFill), tinted ? 1 : NoteType.ChipHoverAlpha);
+        // × 那枚圆钮的底色：压在同一张卡面上的一档实色，比悬停的牌底再深一点。用实色而不是
+        // 半透明，是因为底下还有牌尾那几个字——半压上去会透出字影；满色牌则从它自己的底色再压深一档。
+        var knobFill = tinted
+            ? OpaqueOver(NoteStyling.ToColor(stateFill), NoteStyling.ToColor(stateColour), 0.14)
+            : OpaqueOver(surface, NoteStyling.ToColor(stateColour), Math.Min(1, NoteType.ChipHoverAlpha + 0.12));
 
         var body = tinted ? NoteStyling.ToColor(stateColour) : NoteStyling.WithAlpha(self, NoteType.ChipInkAlpha);
         var rest = tinted
@@ -284,24 +287,45 @@ internal static class ChromeStyling
             FontFamily = NoteStyling.NoteFont,
             FontSize = size,
             Foreground = new SolidColorBrush(body),
+            HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
         };
 
-        // × 自己一块命中区：点它才删，点牌身是编辑。
-        // 它**不占牌宽**（10-26 他点的第二格）：牌子宽度只有那几个字，× 悬停时压在牌子右端
-        // 那一小块上——不常驻，所以不挡正常浏览；不占位，所以一排牌子没有空档。
-        // 它不"长出来"：占位与不占位之间不切换宽度，切的只有透明度。
-        var crossHost = new Border
+        // × 是一枚**圆钮**扣在牌尾，不是把牌尾一整条盖掉（他 11-02 的截图：那一条把日期后两位
+        // 都吞了）。钮比牌子那条带小一圈，悬停才出现：淡入＋由 0.85 长到 1。
+        var crossSize = NoteType.ChipCrossHitPx * scale;
+
+        var knob = new Border
         {
             Child = cross,
-            Background = new SolidColorBrush(crossShroud),
-            CornerRadius = new CornerRadius(0, NoteType.ChipRadiusPx * scale, NoteType.ChipRadiusPx * scale, 0),
-            Padding = new Thickness(5 * scale, 0, 4 * scale, 0),
+            Width = crossSize,
+            Height = crossSize,
+            CornerRadius = new CornerRadius(crossSize / 2),
+            Background = new SolidColorBrush(knobFill),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        // × 自己一块命中区：点它才删，点牌身是聚焦/编辑，两件事不许串。
+        // 它**不占牌宽**（10-26 他点的第二格）：牌子宽度只有那几个字，× 悬停时压在牌子右端
+        // 那一小块上——不常驻，所以不挡正常浏览；不占位，所以一排牌子没有空档。
+        // 它不"长出来"：占位与不占位之间不切换宽度，切的只有透明度与大小。
+        var crossLayer = new Grid
+        {
+            Width = crossSize,
+            Height = crossSize,
             HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 3 * scale, 0),
             Opacity = 0,
             IsHitTestVisible = false,
+            RenderTransform = new ScaleTransform { ScaleX = 0.85, ScaleY = 0.85 },
+            RenderTransformOrigin = new Windows.Foundation.Point(0.5, 0.5),
         };
+
+        // 只有一枚圆钮：之前垫的那圈"影"在这个尺寸上看着就是一块方形衬底（他 11-02 的截图），
+        // 删掉——牌尾只留一个圆，靠淡入＋缩放说它是按钮。
+        crossLayer.Children.Add(knob);
 
         inner.Children.Add(label);
 
@@ -334,31 +358,45 @@ internal static class ChromeStyling
             return border;
         }
 
-        face.Children.Add(crossHost);
+        face.Children.Add(crossLayer);
 
-        ToolTipService.SetToolTip(border, mark.IsDate ? "点一下＝改这个日期；点 × 去掉" : "点一下＝改这个标签；点 × 去掉");
+        ToolTipService.SetToolTip(border, tip);
 
         border.PointerEntered += (_, _) =>
         {
             border.Background = new SolidColorBrush(hover);
-            crossHost.Opacity = 1;
-            crossHost.IsHitTestVisible = true;
+            ShowChipCross(crossLayer, true);
         };
         border.PointerExited += (_, _) =>
         {
             border.Background = new SolidColorBrush(rest);
-            crossHost.Opacity = 0;
-            crossHost.IsHitTestVisible = false;
+            ShowChipCross(crossLayer, false);
         };
+
+        // 双击判定自己数两下：500ms 内同一枚的第二发算双击。窗口取平台 DoubleTapped 的量级，
+        // 但不用 DoubleTapped——第一发的 PointerPressed 已 Handled，卡片收不到那一下。
+        DateTime? lastPressAt = null;
+
         border.PointerPressed += (_, args) =>
         {
             // 这一发不归拖动：牌子是卡片上的控件，按到它就是要点它。
             args.Handled = true;
 
-            onEdit();
+            var now = DateTime.UtcNow;
+            var doubled = onDouble is not null && lastPressAt is { } prev && (now - prev).TotalMilliseconds <= 500;
+            lastPressAt = doubled ? null : now;
+
+            if (doubled)
+            {
+                onDouble!();
+            }
+            else
+            {
+                onPress();
+            }
         };
 
-        crossHost.PointerPressed += (_, args) =>
+        crossLayer.PointerPressed += (_, args) =>
         {
             // 吃掉这一发，牌身那一层不能再收到：点 × 只删，不进编辑。
             args.Handled = true;
@@ -367,6 +405,75 @@ internal static class ChromeStyling
         };
 
         return border;
+    }
+
+    /// <summary>× 那枚圆钮的出现与退场：淡入（淡出）＋由 0.85 长到 1（缩回去），时长取悬停那一档。</summary>
+    /// <remarks>
+    /// 基值先写成落点（1／0、1／0.85），关键帧从对面播过来：<see cref="FillBehavior.Stop"/> 播完
+    /// 就回到基值，于是淡出能看完，停下来也是对的。自检读落点那两枚——它不读播放中的值。
+    /// </remarks>
+    internal static void ShowChipCross(Grid layer, bool show)
+    {
+        layer.IsHitTestVisible = show;
+        layer.Opacity = show ? 1 : 0;
+
+        if (layer.RenderTransform is not ScaleTransform scale)
+        {
+            return;
+        }
+
+        scale.ScaleX = show ? 1 : 0.85;
+        scale.ScaleY = show ? 1 : 0.85;
+
+        var duration = TimeSpan.FromMilliseconds(Motion.HoverMs);
+        var easing = new Microsoft.UI.Xaml.Media.Animation.CubicEase
+        {
+            EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut,
+        };
+
+        var fade = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+        {
+            From = show ? 0 : 1,
+            To = show ? 1 : 0,
+            Duration = duration,
+            EnableDependentAnimation = true,
+            EasingFunction = easing,
+        };
+
+        var grow = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+        {
+            From = show ? 0.85 : 1,
+            To = show ? 1 : 0.85,
+            Duration = duration,
+            EnableDependentAnimation = true,
+            EasingFunction = easing,
+        };
+
+        var growY = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+        {
+            From = grow.From,
+            To = grow.To,
+            Duration = duration,
+            EnableDependentAnimation = true,
+            EasingFunction = easing,
+        };
+
+        var board = new Microsoft.UI.Xaml.Media.Animation.Storyboard
+        {
+            FillBehavior = Microsoft.UI.Xaml.Media.Animation.FillBehavior.Stop,
+        };
+
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(fade, layer);
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(fade, "Opacity");
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(grow, scale);
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(grow, "ScaleX");
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(growY, scale);
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(growY, "ScaleY");
+
+        board.Children.Add(fade);
+        board.Children.Add(grow);
+        board.Children.Add(growY);
+        board.Begin();
     }
 
     /// <summary>半透明色压在实色面上以后的实色。× 那一小块要有块盖得住字的底，而这底必须仍是

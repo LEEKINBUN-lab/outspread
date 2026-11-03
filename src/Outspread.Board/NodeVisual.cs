@@ -115,6 +115,10 @@ public sealed class NodeVisual : ContentControl
 
     private string? _groupAlert;
 
+    /// <summary>正在播的那支警示环淡入淡出，以及它的落点（null＝没有动画在跑）。</summary>
+    private Microsoft.UI.Xaml.Media.Animation.Storyboard? _haloFade;
+    private double? _haloFadeTo;
+
     /// <summary>
     /// 组的名牌：画在框顶边<b>上方</b>，压着边线一角。画在框内就会和成员便签的字重合
     /// （他 10-22 报的第二条），而"点名字＝选中组里所有便签"需要一个货真价实的可点区。
@@ -278,8 +282,11 @@ public sealed class NodeVisual : ContentControl
     /// <summary>Set by the window: (node id, the exact span in the text) → remove it, undoably.</summary>
     internal Action<string, string>? RemoveMark;
 
-    /// <summary>Set by the window: (node id, the exact span) → open the editor with that mark selected.</summary>
-    internal Action<string, string>? EditMark;
+    /// <summary>点牌身＝聚焦这一类标记（投影镜头，他 11-03 拍的 A）。</summary>
+    internal Action<string, NoteMarks.Mark>? ChipPressed;
+
+    /// <summary>双击牌身＝编辑便签。</summary>
+    internal Action<string, NoteMarks.Mark>? ChipDoublePressed;
 
     /// <summary>Set by the window: the card header's open button asks the host where this entity lives.</summary>
     internal Action<string>? OpenEntity;
@@ -581,6 +588,17 @@ public sealed class NodeVisual : ContentControl
     internal (bool SurfaceHittable, Visibility Grab, Visibility Plate, double PlateLift, string? Alert) GroupChrome()
         => (_surface.IsHitTestVisible, _grab.Visibility, _namePlate.Visibility, _nameLift.Y, _groupAlert);
 
+    /// <summary>自检读的框线：警示态把它改成实线＋加粗，收手以后必须回到虚线与 1px。</summary>
+    internal (bool Dashed, double Thickness) GroupFrameLine()
+        => (_frame.StrokeDashArray is { Count: > 0 }, _frame.StrokeThickness);
+
+    /// <summary>
+    /// 自检读的警示环：基值、以及"此刻还在往哪儿淡"（null＝没有动画在跑）。
+    /// 11-02 那个"另一个框一直亮"的根子就在这第二个数：清警示态时若只写基值、不停掉正在
+    /// 播的淡入，HoldEnd 会把它自己拉到 1 并停在那儿——状态已是 null，画面却是亮的。
+    /// </summary>
+    internal (double Halo, double? FadeTo) GroupHaloState() => (_groupHalo.Opacity, _haloFadeTo);
+
     /// <summary>组钮拖便签那一拍的反馈：in＝将进这一框（蓝）、out＝将离开这一框（红）、null＝回到虚线。</summary>
     internal void SetGroupAlert(string? kind)
     {
@@ -601,12 +619,16 @@ public sealed class NodeVisual : ContentControl
             _frame.StrokeDashArray = [4, 3];
             _frame.StrokeThickness = 1;
 
-            if (fade && _groupHalo.Opacity > 0)
+            if (fade)
             {
+                // 无条件换一支往 0 的动画：淡入才刚起（读到的透明度还是 0）时若只看读数就走
+                // "只写基值"那一支，那支 HoldEnd 的淡入会继续把环拉到 1 并停在那儿——状态已是
+                // null、画面却一直亮着（11-02 他截的"另一个分组的入组状态边框还在"）。
                 FadeHalo(0);
             }
             else
             {
+                StopHaloFade();
                 _groupHalo.Opacity = 0;
             }
 
@@ -629,14 +651,22 @@ public sealed class NodeVisual : ContentControl
         }
         else
         {
+            // 同上反过来：淡出还在播时直接写基值 1，HoldEnd 的淡出会赢，环就"亮着却看不见"。
+            StopHaloFade();
             _groupHalo.Opacity = 1;
         }
     }
 
     private void FadeHalo(double to)
     {
+        // 先把屏上那个值取下来：Stop 会把属性交回基值，淡出若从基值起步就看不见过程。
+        var from = _groupHalo.Opacity;
+
+        StopHaloFade();
+
         var animation = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
         {
+            From = from,
             To = to,
             Duration = TimeSpan.FromMilliseconds(Motion.BaseMs),
         };
@@ -646,7 +676,20 @@ public sealed class NodeVisual : ContentControl
         Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(animation, _groupHalo);
         Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(animation, "Opacity");
         board.Children.Add(animation);
+
+        // HoldEnd 会一直按这个目标值出图，所以这支动画的引用要留着——下一次改方向前先 Stop 掉它，
+        // 光写基值是压不过一条还在播的动画的。
+        _haloFade = board;
+        _haloFadeTo = to;
         board.Begin();
+    }
+
+    /// <summary>把正在播的那支警示环动画摘掉（属性回到基值）。</summary>
+    private void StopHaloFade()
+    {
+        _haloFade?.Stop();
+        _haloFade = null;
+        _haloFadeTo = null;
     }
 
     /// <summary>
@@ -757,8 +800,11 @@ public sealed class NodeVisual : ContentControl
                     .SelectMany(row => row.Children)
                     .OfType<TextBlock>()
                     .Count(text => text.Text == "×");
-                overlay += face.Children.OfType<Border>()
-                    .Select(cap => cap.Child)
+                // 11-02 起 × 是一枚圆钮（Grid 那一层里的 Border），不再是一块贴边的 Border：
+                // 从牌面层的非横排子层里找，横排那一支一个都不许有。
+                overlay += face.Children.OfType<Grid>()
+                    .SelectMany(layer => layer.Children)
+                    .Select(child => child is Border knob ? knob.Child : child)
                     .OfType<TextBlock>()
                     .Count(text => text.Text == "×");
             }
@@ -832,7 +878,9 @@ public sealed class NodeVisual : ContentControl
         bool FoldedAway,
         Grouping.Rect? ShownFrame,
         string? Suffix,
-        bool Revealed = false)
+        bool Revealed = false,
+        bool LensFocus = false,
+        bool LensDimmed = false)
     {
         public static readonly Display None = new(null, null, false, null, null);
     }
@@ -892,6 +940,8 @@ public sealed class NodeVisual : ContentControl
         bool Filtering,
         bool Revealed,
         bool FoldedAway,
+        bool LensFocus,
+        bool LensDimmed,
         string? Suffix,
         Grouping.Rect? Shown,
         double? FoldDX,
@@ -979,6 +1029,88 @@ public sealed class NodeVisual : ContentControl
 
     /// <summary>折叠位移的读写口（屏幕像素）：GroupFold 的 Storyboard Target 走这一枚，不认变换组。</summary>
     internal TranslateTransform FoldShift => _fold;
+
+    /// <summary>自检读回：位移的落点（屏幕像素）；null＝这一格没被搬过。</summary>
+    internal (double X, double Y)? FoldTarget => _foldPlacedValid ? (_foldPlacedX, _foldPlacedY) : null;
+
+    /// <summary>
+    /// 把不透明度从 <paramref name="from"/> 播到 <paramref name="to"/>（基值先写成落点）。
+    /// 聚焦换档时用：上一档一边飞回家一边退成灰、新的一档一边飞出来一边亮起来——两边同一拍起步。
+    /// </summary>
+    internal void FadeTo(double from, double to)
+    {
+        Opacity = to;
+
+        var fade = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+        {
+            From = from,
+            To = to,
+            Duration = TimeSpan.FromMilliseconds(Motion.BaseMs),
+            EasingFunction = new Microsoft.UI.Xaml.Media.Animation.CubicEase
+            {
+                EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut,
+            },
+        };
+
+        var board = new Microsoft.UI.Xaml.Media.Animation.Storyboard
+        {
+            FillBehavior = Microsoft.UI.Xaml.Media.Animation.FillBehavior.Stop,
+        };
+
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(fade, this);
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(fade, "Opacity");
+        board.Children.Add(fade);
+        board.Begin();
+    }
+
+    /// <summary>
+    /// 从 (fromX, fromY) 弹到 (toX, toY)：位移的落点先写成基值，关键帧按
+    /// <see cref="Motion.SpringSamples"/> 打——0→1 的弹簧形状乘上两点之间的距离。
+    /// 播完 <see cref="Microsoft.UI.Xaml.Media.Animation.FillBehavior.Stop"/> 回到基值，正好是落点。
+    /// </summary>
+    internal void SlideSpring(double fromX, double fromY, double toX, double toY)
+    {
+        _foldPlacedX = toX;
+        _foldPlacedY = toY;
+        _foldPlacedValid = true;
+        _fold.X = toX;
+        _fold.Y = toY;
+
+        var board = new Microsoft.UI.Xaml.Media.Animation.Storyboard
+        {
+            FillBehavior = Microsoft.UI.Xaml.Media.Animation.FillBehavior.Stop,
+        };
+
+        AddSpring(board, "X", fromX, toX);
+        AddSpring(board, "Y", fromY, toY);
+        board.Begin();
+    }
+
+    private void AddSpring(Microsoft.UI.Xaml.Media.Animation.Storyboard board, string path, double from, double to)
+    {
+        var animation = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimationUsingKeyFrames
+        {
+            Duration = TimeSpan.FromMilliseconds(Motion.SpringMs),
+            EnableDependentAnimation = true,
+        };
+
+        var samples = Motion.SpringSamples;
+        var span = to - from;
+
+        for (var index = 0; index < samples.Count; index++)
+        {
+            animation.KeyFrames.Add(new Microsoft.UI.Xaml.Media.Animation.LinearDoubleKeyFrame
+            {
+                KeyTime = Microsoft.UI.Xaml.Media.Animation.KeyTime.FromTimeSpan(
+                    TimeSpan.FromMilliseconds(index * Motion.SpringStepMs)),
+                Value = from + (span * samples[index]),
+            });
+        }
+
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(animation, _fold);
+        Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(animation, path);
+        board.Children.Add(animation);
+    }
 
     /// <summary>自检读回：内容层（纸、字、牌子、渐隐、阴影）当前的可见态——缩放四档必须一格不差。</summary>
     internal (bool Above, bool Below, bool Chips, bool Markdown, bool Body) OverflowChromeVisible
@@ -1252,7 +1384,8 @@ public sealed class NodeVisual : ContentControl
         }
 
         // 折进去的那一格不能点：它不在那儿，只是滑过去的那一下让人看见了。
-        var wantsHit = !display.FoldedAway;
+        // 聚焦时退成灰的那几格也不接鼠标：视角已经点名了目标，点灰的要算"点空白"。
+        var wantsHit = !display.FoldedAway && !display.LensDimmed;
 
         if (!_hitTestValid || _hitTestPlaced != wantsHit)
         {
@@ -1282,6 +1415,8 @@ public sealed class NodeVisual : ContentControl
             view.Filtering,
             display.Revealed,
             display.FoldedAway,
+            display.LensFocus,
+            display.LensDimmed,
             display.Suffix,
             display.ShownFrame,
             display.FoldDX,
@@ -1349,14 +1484,19 @@ public sealed class NodeVisual : ContentControl
         // Once per node per frame: the bar, the readout and the filter all read this same result,
         // and a pan re-runs it for every note on the board.
         // 表格卡的标记读的是卡下面那几行字，不是表格自己那份 markdown——否则一格"@d"能把整张表读成日期。
-        var marks = Tags.Read(_entity?.Table is not null ? EntityCards.NoteOf(node) : node.Text);
+        var marks = Tags.Read(_entity?.Table is not null ? EntityCards.NoteOf(node) : node.Text, view.Today);
         var due = NoteMarks.StateOf(marks, view.Today);
 
         // 筛选是视图层的事：被滤掉的格子压暗但仍在原处，绝不移动、也不改文档（所以不进撤销栈）。
         // 组里那些没命中的是唯一的例外——它们被**折进**命中的那一格背后，但那也只是这一枚变换。
         var shows = display.Revealed || !view.Filtering || NoteMarks.Shows(due, marks.Tags, marks.Done, view.TagFilter, view.DueFilter, view.DoneFilter);
 
-        Opacity = display.FoldedAway ? 0d : shows ? 1d : 0.22d;
+        // 聚焦（点左下角那两档之一）：聚起来的那几格全亮、其余退成灰。
+        // 它压过筛选那一档——用户是点名要看这几格，不该再被他开着的筛选压暗。
+        Opacity = display.FoldedAway ? 0d
+            : display.LensFocus ? 1d
+            : display.LensDimmed ? 0.22d
+            : shows ? 1d : 0.22d;
         _label.Foreground = new SolidColorBrush(isGroup ? NoteStyling.InkFor(null, NoteStyling.SurfaceFor(null)) : ink);
 
         // 色条的高度必须取**这一帧**的 Height。原来它排在 Width/Height 之前，缩放后拿到的是上一帧的
@@ -2312,8 +2452,31 @@ public sealed class NodeVisual : ContentControl
                 ink,
                 surface,
                 () => RemoveMark?.Invoke(NodeId, source),
-                () => EditMark?.Invoke(NodeId, source)));
+                () => ChipPressed?.Invoke(NodeId, chip),
+                () => ChipDoublePressed?.Invoke(NodeId, chip),
+                ChipTip(chip)));
         }
+    }
+
+    /// <summary>牌身的悬停说明跟着新三扇门写（他 11-03 拍：点＝聚焦、双击＝编辑、×＝删）。</summary>
+    private static string ChipTip(NoteMarks.Mark chip)
+    {
+        if (chip.Done is not null)
+        {
+            return "点一下＝聚焦完成态 · 双击＝编辑便签 · 点 × 去掉";
+        }
+
+        if (chip.IsDate)
+        {
+            return "点一下＝聚焦这个日期 · 双击＝编辑便签 · 点 × 去掉";
+        }
+
+        if (chip.Label.StartsWith("NO.", StringComparison.Ordinal))
+        {
+            return "双击＝编辑便签 · 点 × 去掉";
+        }
+
+        return "点一下＝聚焦这个标签 · 双击＝编辑便签 · 点 × 去掉";
     }
 
     private static string DisplayText(CanvasNode node) => node.Kind switch

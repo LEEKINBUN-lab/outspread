@@ -127,7 +127,10 @@ public static class Tags
     /// <summary>
     /// Reads the marks out of one note's text and returns the body that is left to paint.
     /// </summary>
-    public static NoteProperties Read(string? text)
+    /// <param name="today">Which year a month-day without a year belongs to (<c>@d12-04</c>).
+    /// The card passes the view's frozen today, so a board and its chips cannot disagree about the
+    /// year when the clock crosses midnight.</param>
+    public static NoteProperties Read(string? text, DateOnly? today = null)
     {
         var raw = text ?? string.Empty;
 
@@ -137,6 +140,8 @@ public static class Tags
         {
             return new NoteProperties(null, null, [], raw);
         }
+
+        var calendar = today ?? DateOnly.FromDateTime(DateTime.Now);
 
         DateOnly? due = null;
         string? malformed = null;
@@ -212,7 +217,7 @@ public static class Tags
                     }
 
                     // Both separators are the same date: he writes 2019/3/3 as fast as 2019-3-3.
-                    if (TryDate(value.Replace('/', '-'), out var parsed))
+                    if (TryDate(value.Replace('/', '-'), calendar, out var parsed))
                     {
                         due = parsed;
                     }
@@ -270,9 +275,9 @@ public static class Tags
     public static IReadOnlyList<string> Of(string? text) => Read(text).Tags;
 
     /// <summary>True when the text carries a well-formed, real date.</summary>
-    public static bool TryDue(string? text, out DateOnly due)
+    public static bool TryDue(string? text, out DateOnly due, DateOnly? today = null)
     {
-        if (Read(text).Due is { } value)
+        if (Read(text, today).Due is { } value)
         {
             due = value;
 
@@ -288,7 +293,7 @@ public static class Tags
     /// The <c>@d…</c> span that looks like a due marker but is not a real date.
     /// Null when there is no marker at all.
     /// </summary>
-    public static string? MalformedDue(string? text) => Read(text).MalformedDue;
+    public static string? MalformedDue(string? text, DateOnly? today = null) => Read(text, today).MalformedDue;
 
     /// <summary>Whether a line is nothing but mark tokens — the editor asks this when Enter is pressed
     /// with the caret on that line, and absorbs the line into the hidden property block.</summary>
@@ -442,17 +447,50 @@ public static class Tags
     /// Parse, then refuse anything the calendar did not have. <c>TryParseExact</c> <b>adjusts</b>
     /// 2026-02-30 into 2026-03-02 and calls that a success, which is precisely the silent yes this
     /// must not give: a note scheduled on a date that does not exist.
+    /// <para>
+    /// Three shapes are one date: <c>2026-12-04</c>, <c>27-1-1</c> (a one- or two-digit year is
+    /// 20xx — 2027, not year 27) and <c>12-04</c> (no year: the year of <paramref name="today"/>).
+    /// The short shapes are his 11-02 ask; reading <c>@d27-1-1</c> as year 27 is how a real
+    /// deadline came out overdue by two thousand years.
+    /// </para>
     /// </summary>
-    private static bool TryDate(string raw, out DateOnly due)
+    private static bool TryDate(string raw, DateOnly today, out DateOnly due)
     {
         due = default;
 
         var parts = raw.Split('-');
 
-        if (parts.Length != 3
-            || !int.TryParse(parts[0], out var year)
-            || !int.TryParse(parts[1], out var month)
-            || !int.TryParse(parts[2], out var day))
+        int year;
+        int month;
+        int day;
+
+        if (parts.Length == 2)
+        {
+            // @d12-04：没写年份＝今年。他 11-02 要的第二种写法。
+            if (!int.TryParse(parts[0], out month) || !int.TryParse(parts[1], out day))
+            {
+                return false;
+            }
+
+            year = today.Year;
+        }
+        else if (parts.Length == 3)
+        {
+            if (!int.TryParse(parts[0], out year)
+                || !int.TryParse(parts[1], out month)
+                || !int.TryParse(parts[2], out day))
+            {
+                return false;
+            }
+
+            // 一到两位年份是 20xx：@d27-1-1 就是 2027，不是公元 27 年（他 11-02 报的"0027 年、
+            // 逾期或干脆读不出"）。四位照旧是它自己。
+            if (parts[0].Length is >= 1 and <= 2 && year is >= 0 and <= 99)
+            {
+                year += 2000;
+            }
+        }
+        else
         {
             return false;
         }

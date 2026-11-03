@@ -461,9 +461,10 @@ public readonly record struct NoteType(double Size, double Leading, double Paddi
     public const double ChipHoverAlpha = 0.16;
     public const double ChipInkAlpha = 0.82;
 
-    /// <summary>× 那一小块命中的宽（含它自己的左右内距）。它**不参与牌宽**：牌子宽度＝字的自然宽，
-    /// 悬停时这块压在牌尾上（他 10-26 的第二条：占位让每枚都比字宽，一排全是空档）。</summary>
-    public const double ChipCrossHitPx = 16;
+    /// <summary>× 那枚圆钮的直径（也就是它的命中区）。它**不参与牌宽**：牌子宽度＝字的自然宽，
+    /// 悬停时这枚钮扣在牌尾上（他 10-26 的第二条：占位让每枚都比字宽，一排全是空档）。
+    /// 11-02：先改成圆钮、再按他的眼睛收到 14（16 那档偏大，牌尾被吞掉一截）。</summary>
+    public const double ChipCrossHitPx = 14;
 
     /// <summary>胶囊：半径＝带高的一半（Primer 的 2em、Carbon 的 16px 都是这个意思）。</summary>
     public static double ChipRadiusPx => ChipBandPx / 2;

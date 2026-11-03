@@ -63,6 +63,55 @@ public static class Motion
     public const double HoverMs = 120;
 
     /// <summary>
+    /// 聚焦（点左下角那两档）那一路的弹簧。归一化位移 0→1 的采样表，供界面侧打成关键帧。
+    /// </summary>
+    /// <remarks>
+    /// 出处：微软 Composition 弹簧指南给"位移"的档是阻尼 0.8／周期 50ms；苹果的搬家档是
+    /// response 0.4s、阻尼 1.0 起（不弹跳）。他 11-02 说"太快、没有变速"——所以周期取到
+    /// 460ms（比 50ms 长一个量级），阻尼 0.82：只留约 1.5% 的过冲，落定时多一条尾巴，
+    /// 但不会来回弹。算式是阻尼谐振子的单位阶跃响应，采样 8ms 一格，够关键帧用。
+    /// </remarks>
+    public const double SpringPeriodMs = 420;
+
+    public const double SpringDamping = 0.85;
+
+    /// <summary>采样间隔：8ms 一格（120Hz），比 60Hz 屏的帧还密，缩放到任何帧率都不打格。</summary>
+    public const double SpringStepMs = 8;
+
+    /// <summary>归一化位移的采样表：第一格 0、最后一格 1。</summary>
+    public static readonly IReadOnlyList<double> SpringSamples = BuildSpring(SpringPeriodMs, SpringDamping, SpringStepMs);
+
+    /// <summary>这一路的时长＝采样表覆盖的时间。</summary>
+    public static double SpringMs => (SpringSamples.Count - 1) * SpringStepMs;
+
+    private static double[] BuildSpring(double periodMs, double damping, double stepMs)
+    {
+        // 周期是毫秒：角频率要按秒算，不然弹簧会停在起点一动不动（这一发 11-02 踩过）。
+        var omega = 2 * Math.PI / Math.Max(0.001, periodMs / 1000);
+        var damped = omega * Math.Sqrt(Math.Max(1e-6, 1 - (damping * damping)));
+        var decay = damping * omega;
+        var samples = new List<double> { 0 };
+
+        for (var ms = stepMs; ms <= 1400; ms += stepMs)
+        {
+            var t = ms / 1000.0;
+            var value = 1 - (Math.Exp(-decay * t) * (Math.Cos(damped * t) + ((decay / damped) * Math.Sin(damped * t))));
+
+            samples.Add(value);
+
+            // 离落点不到 0.2% 且速度也小了就收：再往后肉眼看不见，白留关键帧。
+            if (ms >= periodMs && Math.Abs(1 - value) < 0.002)
+            {
+                break;
+            }
+        }
+
+        samples[^1] = 1;
+
+        return [.. samples];
+    }
+
+    /// <summary>
     /// 查找跳到那一格时"到了"的那一手：阻尼抖动，240ms 内左右各摆两下、幅度 4→1px，首尾都回 0。
     /// 他 10-24 在两种做法里选了这一档（另一种是扩开一圈环）。数字在这里写一次，界面侧照着打关键帧。
     /// </summary>

@@ -41,6 +41,7 @@ partial class MainWindow
     /// <summary>当前这张点阵位图是按哪一档缩放画的（0＝还没有）。缩放中途靠它算 drift。</summary>
     private double _gridPaintZoom;
 
+
     /// <summary>点阵真正重画了多少发、其中多少发是"换了尺寸所以重新 new 一张位图＋一块缓冲"。
     /// 那两个数由缩放探针报出来：LOH 上反复 new 5MB 就是几十毫秒那一抖的候选。</summary>
     internal int _gridRepaints;
@@ -137,6 +138,8 @@ partial class MainWindow
         // （那一档 GPU 17.3% 就是这么来的），而其中绝大多数帧的缩放只差百分之几，重画不值。
         var drift = _gridPaintZoom > 0 ? zoom / _gridPaintZoom : 0.0;
 
+        // 两头都判：漂移超过预算就重画。11-02 试过"放大不重画、只拉大位图"——1px 的点被拉大
+        // 以后每帧的子像素相位不同，整片点阵在闪，比原来的 2–5ms 重画还难看，当场撤回。
         if (key != _gridKey || Math.Abs(drift - 1) > GridDriftLimit)
         {
             _gridKey = key;

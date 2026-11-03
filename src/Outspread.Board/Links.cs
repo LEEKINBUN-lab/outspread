@@ -472,6 +472,12 @@ public sealed partial class MainWindow
         LinkLayer.Children.Clear();
         LinkHandleLayer.Children.Clear();
 
+        // 聚焦里不画连线（他 11-02：聚合时不带连线）。
+        if (_lensKind is not null)
+        {
+            return;
+        }
+
         var dark = NoteStyling.IsDark;
 
         // 三枚刷子只随主题翻：连线一块板就那几种颜色，每拍 new 三枚是白花（10-29 夜刀三），

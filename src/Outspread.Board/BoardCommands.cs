@@ -547,6 +547,10 @@ public sealed partial class MainWindow
 
         // 线是另一种选中物，但同一时刻只选一样：清格子也清线。
         ClearEdgeSelection();
+
+        // 选择框/手柄/操作条画的是文档位置上的独立一层，不跟着格子走：只清集合不重投影，
+        // 那一层就留在原处（他 11-03 报的"进镜头后原本的选择框没清理掉"）。
+        ProjectSelection();
     }
 
     private void GroupSelection()
@@ -937,7 +941,7 @@ public sealed partial class MainWindow
     private const int DuePriorityOfNone = 4;
 
     /// <summary>到期优先级：逾期 → 今天 → 将来 → 日期读不出 → 无日期。</summary>
-    private int DuePriority(CanvasNode note) => NoteMarks.StateOf(Tags.Read(note.Text), _view.Today) switch
+    private int DuePriority(CanvasNode note) => NoteMarks.StateOf(Tags.Read(note.Text, _view.Today), _view.Today) switch
     {
         NoteMarks.DueState.Late => 0,
         NoteMarks.DueState.Today => 1,

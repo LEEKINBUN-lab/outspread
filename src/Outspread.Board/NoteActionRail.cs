@@ -2302,6 +2302,133 @@ public sealed partial class MainWindow
     /// 原来那一档叫 <c>KeepDraggedMemberInFrame</c>：它靠"把框拉长去接那一格"做到不脱组，
     /// 代价就是框长到吞掉路上别人、虚线边拉到屏幕外看着像组消失了。两格 bug 同一个因。
     /// </remarks>
+    /// <summary>
+    /// 组钮拖那一拍的警示态：路上最多亮一个框，松手后所有框都回到虚线。11-02 他报的是
+    /// "拖过两个组时两个框都触发入组，只放进其中一个，另一个框一直亮着"。
+    /// </summary>
+    /// <remarks>
+    /// 这一发自己造两组一格，走真的 Begin/Move/End 那条路（不是直接调 SetGroupAlert），
+    /// 判据只读画面：框上的 Alert 状态与那枚矩形的虚线。造的形状放在当前相机中心，免得
+    /// 被剔除出画面（那会让断言在没画出来的东西上"通过"）。
+    /// </remarks>
+    private void SelfTestGroupDragAlerts(List<string> problems)
+    {
+        var originX = Math.Round(_view.ToWorldX(420));
+        var originY = Math.Round(_view.ToWorldY(320));
+
+        var first = _document.Add(CanvasNodeKind.Text, originX, originY, 200, 100);
+        var second = _document.Add(CanvasNodeKind.Text, originX + 300, originY, 200, 100);
+        var loose = _document.Add(CanvasNodeKind.Text, originX, originY + 300, 200, 100);
+
+        var frameA = _document.Add(CanvasNodeKind.Group, originX - 10, originY - 10, 220, 120);
+        frameA.Label = "自检组拖·甲";
+        frameA.SetGroupMembers([first.Id]);
+
+        var frameB = _document.Add(CanvasNodeKind.Group, originX + 290, originY - 10, 220, 120);
+        frameB.Label = "自检组拖·乙";
+        frameB.SetGroupMembers([second.Id]);
+
+        Rebuild();
+
+        var state = new RailDrag
+        {
+            NodeId = loose.Id,
+            StartPointer = new Point(_view.ToScreenX(loose.X + (loose.Width / 2)), _view.ToScreenY(loose.Y + (loose.Height / 2))),
+            StartX = loose.X,
+            StartY = loose.Y,
+            StartPositions = new Dictionary<string, (double X, double Y)>(StringComparer.Ordinal) { [loose.Id] = (loose.X, loose.Y) },
+            StartGroupId = null,
+            StartRosters = RosterSnapshot(),
+        };
+
+        BeginGroupDrag(state, state.StartPointer);
+        state.Started = true;
+
+        // 落点在两框之间那道缝上：横跨 200 宽的格子同时与甲、乙相交。
+        var landing = new Point(
+            _view.ToScreenX(originX + 250),
+            _view.ToScreenY(originY + 50));
+
+        MoveGroupDrag(state, landing);
+
+        var alertA = FrameAlert(frameA.Id);
+        var alertB = FrameAlert(frameB.Id);
+
+        Diagnostics.Write($"selftest 组拖警示: 横跨两框时 甲={alertA ?? "虚线"} 乙={alertB ?? "虚线"}");
+
+        if (alertA is "?" || alertB is "?")
+        {
+            problems.Add("selftest 组拖警示: 自检造的框没有画面（被剔除或没造出来），这一发不算过");
+        }
+        else if (alertA is not null && alertB is not null)
+        {
+            problems.Add($"selftest 组拖警示: 横跨两框时两个框同时亮（甲={alertA}、乙={alertB}）——同时只能有一个入组目标");
+        }
+
+        // 他 11-02 那一次的实际顺序：拖动被打断（捕获丢失）先清一次，随后 Released 仍然把这一发
+        // 结算掉。两条出口叠在一起不许留下任何一格亮着的框。
+        AbortGroupDrag();
+
+        var abortA = FrameAlert(frameA.Id);
+        var abortB = FrameAlert(frameB.Id);
+
+        if (abortA is not null || abortB is not null)
+        {
+            problems.Add($"selftest 组拖警示: 拖动被打断以后还有框亮着（甲={abortA ?? "无"}、乙={abortB ?? "无"}）");
+        }
+
+        EndGroupDrag(state);
+
+        var (alertAfterA, dashedA) = FrameLine(frameA.Id);
+        var (alertAfterB, dashedB) = FrameLine(frameB.Id);
+        var (haloA, fadeToA) = FrameHalo(frameA.Id);
+        var (haloB, fadeToB) = FrameHalo(frameB.Id);
+
+        if (alertAfterA is not null || alertAfterB is not null)
+        {
+            problems.Add(
+                $"selftest 组拖警示: 松手后还有框亮着（甲={alertAfterA ?? "无"}、乙={alertAfterB ?? "无"}）" +
+                "——就是「另一个分组的入组状态边框一直存在」");
+        }
+        else if (!dashedA || !dashedB)
+        {
+            problems.Add("selftest 组拖警示: 松手后框线没回到虚线（状态清了、线还亮着）");
+        }
+        else if (fadeToA is 1 || fadeToB is 1)
+        {
+            // 状态与虚线都对、环却还在往 1 淡：这就是 11-02 那格——清警示态时没停掉刚起步的
+            // 淡入，HoldEnd 把它自己拉到 1 并停住，画面一直亮着。
+            problems.Add(
+                $"selftest 组拖警示: 松手后警示环还在往 1 淡（甲 基值 {haloA:0.##}/目标 {fadeToA}、" +
+                $"乙 基值 {haloB:0.##}/目标 {fadeToB}）——那支淡入没被停掉");
+        }
+        else
+        {
+            Diagnostics.Write("selftest 组拖警示: 拖过两框只亮一个、松手后状态/虚线/警示环三样都收回");
+        }
+
+        foreach (var temp in new[] { frameA, frameB, loose, second, first })
+        {
+            _document.Remove(temp.Id);
+        }
+
+        Rebuild();
+    }
+
+    /// <summary>画面上那枚框的警示态；没画出来的读 "?"，别把"没画"当成"已清"。</summary>
+    private string? FrameAlert(string id)
+        => _realized.TryGetValue(id, out var visual) ? visual.GroupChrome().Alert : "?";
+
+    /// <summary>画面上那枚框的警示态与虚线（同上，没画出来读 "?"）。</summary>
+    private (string? Alert, bool Dashed) FrameLine(string id)
+        => _realized.TryGetValue(id, out var visual)
+            ? (visual.GroupChrome().Alert, visual.GroupFrameLine().Dashed)
+            : ("?", false);
+
+    /// <summary>画面上那枚框的警示环：基值与此刻还在往哪儿淡（1＝还在亮、0/null＝已收回）。</summary>
+    private (double Halo, double? FadeTo) FrameHalo(string id)
+        => _realized.TryGetValue(id, out var visual) ? visual.GroupHaloState() : (0, 1);
+
     private void WriteRostersAfterGroupDrag(RailDrag state)
     {
         var frames = GroupRects();

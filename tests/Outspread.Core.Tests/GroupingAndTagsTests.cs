@@ -135,6 +135,25 @@ public class GroupingAndTagsTests
     }
 
     [Fact]
+    public void A_month_day_without_a_year_is_this_year_and_a_two_digit_year_is_20xx()
+    {
+        // 他 11-02 要的两种短写法：@d12-04＝今年的 12 月 4 日；@d27-1-1＝2027-01-01，
+        // 不是公元 27 年（那会显示成 0027、一落地就逾期）。
+        var today = new DateOnly(2026, 11, 2);
+
+        Assert.Equal(new DateOnly(2026, 12, 4), Tags.Read("@d12-04", today).Due);
+        Assert.Equal(new DateOnly(2026, 12, 4), Tags.Read("@d12/4", today).Due);
+        Assert.Equal(new DateOnly(2027, 1, 1), Tags.Read("@d27-1-1", today).Due);
+
+        // 四位年份照旧是它自己；只有一到两位才展开。
+        Assert.Equal(new DateOnly(2026, 12, 4), Tags.Read("@d2026-12-4", today).Due);
+        Assert.Equal(new DateOnly(2026, 12, 4), Tags.Read("@d2026-12-04", today).Due);
+
+        // 短写法也过同一个日历校验：2 月 30 日仍然读不出。
+        Assert.Equal("@d2-30", Tags.MalformedDue("@d2-30", today));
+    }
+
+    [Fact]
     public void A_property_line_is_read_and_taken_off_the_card()
     {
         var marks = Tags.Read("@d2026-10-09 @t周会\n\n交周报");

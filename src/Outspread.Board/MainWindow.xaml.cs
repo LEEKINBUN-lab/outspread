@@ -148,9 +148,6 @@ public sealed partial class MainWindow : Window
     /// <summary>那一格在世界坐标里的方框：跟着相机走，所以编辑中缩放/平移不会把框挪偏。</summary>
     private Windows.Foundation.Rect _editorCellWorld;
 
-    /// <summary>这一次编辑是从牌子点进来的"只改这枚标记"：收下标记行的回车应当直接收笔。</summary>
-    private bool _markEditOnly;
-
     // 组改名那枚就地小编辑器（组没有正文，改的是 label）——和便签正文编辑器分开，各管各的。
     private TextBox? _groupRenameBox;
     private string? _groupRenameId;
@@ -491,6 +488,9 @@ public sealed partial class MainWindow : Window
             var text = CanvasStore.ReadAllText(path);
             var document = CanvasDocument.Parse(text, path);
 
+            // 换板＝旧板上的聚焦作废（槽位是屏幕坐标，换一块板就没有意义了）。
+            ResetDueLens();
+
             // 到这一行之前一个字段都没动：一块读不懂的板子不该把窗口切过去——那等于让人以为
             // 自己在改这块板，而屏幕上还是上一块。
             _boardPath = path;
@@ -820,6 +820,9 @@ public sealed partial class MainWindow : Window
             _selectedEdgeId = keptEdge;
         }
 
+        // 左下角那两个数只跟文档走（改日期、增删格、换板），所以在这一拍算一次就够。
+        RefreshDueStrip();
+
         ArrangeAll();
         ProjectSelection();
 
@@ -968,10 +971,10 @@ public sealed partial class MainWindow : Window
         visual.PointerEntered += OnVisualEntered;
         visual.PointerExited += OnVisualExited;
 
-        // 卡片左下角那排牌子的删除路径走这里：它删的是正文里那一枚 token，所以是一步可撤销的文档改动，
-        // 不是视图状态。
+        // 卡片左下角那排牌子的三扇新门（他 11-03 拍的 A）：点＝聚焦、双击＝编辑便签、×＝删 token。
         visual.RemoveMark = RemoveMarkFrom;
-        visual.EditMark = EditMarkFrom;
+        visual.ChipPressed = ChipLensFrom;
+        visual.ChipDoublePressed = ChipEditFrom;
         visual.OpenEntity = OpenEntity;
         visual.RevealEntity = RevealEntity;
 
@@ -1015,6 +1018,7 @@ public sealed partial class MainWindow : Window
         ChromeStyling.Ensure(NoteStyling.IsDark);
         RefreshZoomLabel();
         StyleBadge();
+        StyleDueStrip();
 
         var chromeAt = Stopwatch.GetTimestamp();
 
@@ -1061,7 +1065,7 @@ public sealed partial class MainWindow : Window
 
         // 筛选折起来的那几格：它们画在锚点上，所以剔除要按"画在哪儿"判，不按文档里的真位置判——
         // 否则锚点在屏内、真位置在屏外的那一格会在摊开时是空的。
-        var displays = BuildDisplays();
+        var displays = MergeLensDisplays(BuildDisplays());
         var emptyGroups = EmptyGroupIds();
 
         // 这一拍的节点表只取一次：每取一次都会把整份 JSON 重新包成 330 个视图对象。
@@ -1098,6 +1102,19 @@ public sealed partial class MainWindow : Window
 
             if (!_realized.TryGetValue(id, out var visual))
             {
+                continue;
+            }
+
+            // 聚焦里不画分组：他 11-02 定的是"不带连线、不带分组"——组框与名牌一律收起来。
+            if (_lensKind is not null && visual.Kind == CanvasNodeKind.Group)
+            {
+                visual.Collapse();
+
+                if (timing)
+                {
+                    introTicks += Stopwatch.GetTimestamp() - introAt;
+                }
+
                 continue;
             }
 
@@ -1211,7 +1228,8 @@ public sealed partial class MainWindow : Window
         var cullAt = timing ? Stopwatch.GetTimestamp() : 0;
         var culledCount = 0;
 
-        IReadOnlyList<string>? culledIds = _occlusionCells.Count > 1
+        // 聚焦时不摘格：聚起来的几格本来就压在灰格子上面，摘掉哪一格都会让镜头闪一下。
+        IReadOnlyList<string>? culledIds = _lensKind is null && _occlusionCells.Count > 1
             ? Occlusion.CulledCells(_occlusionCells)
             : null;
 
@@ -1428,6 +1446,15 @@ public sealed partial class MainWindow : Window
         CloseChordPage();
         ClearGroupHint();
         CloseColorPopover();
+
+        // 聚焦里按到空白＝看完了：退回正常布局（这一发不再去起框选/平移）。
+        if (_lensKind is not null)
+        {
+            ExitDueLens();
+            e.Handled = true;
+
+            return;
+        }
 
         var point = e.GetCurrentPoint(BoardArea);
 
@@ -1928,6 +1955,28 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // 聚焦里相机不动：槽位是屏幕坐标，缩一下整排就散了——所以普通滚轮改成"翻这一摞槽位"
+        // （超过一屏时上下看得到底，他 11-03 报的溢出），Ctrl＋滚轮才缩放且限死在镜头带内（他补的限幅令）。
+        // 编辑框开着时两样都不做：框的落位是开框那一拍算的，槽位走了它会和格子脱开。
+        if (_lensKind is not null)
+        {
+            e.Handled = true;
+
+            if (_editingId is null)
+            {
+                if (KeyDownIs(Windows.System.VirtualKey.Control))
+                {
+                    LensZoomStep(point.Position, delta);
+                }
+                else
+                {
+                    ScrollLens(-delta / 120.0 * 72.0);
+                }
+            }
+
+            return;
+        }
+
         // 演示滑页途中他动了滚轮：弃飞，相机归 interactive（Miro 同款——演的人随时能上手）。
         StopPresentGlide();
 
@@ -2021,6 +2070,7 @@ public sealed partial class MainWindow : Window
     /// </remarks>
     private bool _wheelPreview;
     private Point _wheelAnchor;
+
     private double _wheelStartZoom;
     private double _wheelTargetZoom;
     private ScaleTransform? _wheelPanScale;
@@ -2055,6 +2105,7 @@ public sealed partial class MainWindow : Window
             _wheelPreview = true;
             _wheelAnchor = position;
             _wheelStartZoom = _view.Zoom;
+
             _wheelTargetZoom = _view.Zoom;
             _wheelShownZoom = _view.Zoom;
             _wheelGridZoom = _view.Zoom;
@@ -2088,7 +2139,12 @@ public sealed partial class MainWindow : Window
         }
 
         _wheelSettle = DispatcherQueue.CreateTimer();
-        _wheelSettle.Interval = TimeSpan.FromMilliseconds(120);
+
+        // 停手多久才落一次真布局。原来是 120ms——人手滚动时两发之间常隔 150–250ms，
+        // 计量过：8 发、每发 200ms 的滚动，中间插进去 5 次全量重排（72/44/121/17ms…），
+        // 每插一次就是一下顿。他 11-02 的判据是"画面真稳定下来才算停"，所以拉到 320ms：
+        // 只要还在滚就一直不提交，画面始终走预览那一层（每帧 <5ms）。
+        _wheelSettle.Interval = TimeSpan.FromMilliseconds(320);
         _wheelSettle.IsRepeating = false;
         _wheelSettle.Tick += (_, _) => CommitWheelPreview();
     }
@@ -2322,6 +2378,15 @@ public sealed partial class MainWindow : Window
         CloseRestorePanel();
         CloseChordPage();
         ClearGroupHint();
+
+        // 聚焦里点卡片不选、不拖：选中框与手柄画的是文档里的位置，会和聚起来的位置对不上。
+        // 双击改字仍走 OnSurfaceDoubleTapped——那一条是另一个手势，不吃这一发。
+        if (_lensKind is not null)
+        {
+            e.Handled = true;
+
+            return;
+        }
 
         var pointOnSurface = e.GetCurrentPoint(BoardArea).Position;
 
@@ -4242,8 +4307,6 @@ public sealed partial class MainWindow : Window
     {
         CloseEditor(commit: true);
 
-        _markEditOnly = false;
-
         if (NodeOf(id) is not { } node)
         {
             return;
@@ -4346,8 +4409,6 @@ public sealed partial class MainWindow : Window
     {
         CloseEditor(commit: true);
 
-        _markEditOnly = false;
-
         if (NodeOf(id) is not { } node
             || TableGrid.FromJson(node.Json[EntityCards.TableField]) is not { } grid
             || grid.CellAt(row, column) is not { } cell)
@@ -4431,13 +4492,16 @@ public sealed partial class MainWindow : Window
         var inset = Math.Clamp(editorType.Padding * _view.Zoom, 0, 60);
         var header = _editorHeaderWorld * _view.Zoom;
 
+        // 聚焦里那一格画在投影来的槽位上：编辑框要跟着它走，否则字会在别处出现。
+        var (lensDX, lensDY) = LensOffsetFor(node.Id);
+
         if (_editingCell is not null)
         {
             // 改表格的一格：框就盖在那一格上，不改整格大小、也不长高——盖住邻格会让人改错一格。
             var cell = _editorCellWorld;
 
-            Canvas.SetLeft(_editor, _view.ToScreenX(cell.X));
-            Canvas.SetTop(_editor, _view.ToScreenY(cell.Y));
+            Canvas.SetLeft(_editor, _view.ToScreenX(cell.X) + lensDX);
+            Canvas.SetTop(_editor, _view.ToScreenY(cell.Y) + lensDY);
             // 框就是那一格那么大：宽出一像素、高出一像素都会盖住邻格，而"改错了哪一格"是这张卡最贵的错。
             _editor.Width = Math.Max(1, cell.Width * _view.Zoom);
             _editor.Height = Math.Max(1, cell.Height * _view.Zoom);
@@ -4450,27 +4514,34 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // 牌子那条带是卡片自己留出来的：正文只到「卡高 - 内距 - 牌子带」，牌子带画在下面。
+        // 编辑框盖在同一张卡上，就得留同一截；不留，最后一行会落到「#项目地址」上面
+        // （11-02 他发来的截图：压短过的格子，第四行字正好压在牌子上）。
+        var chipBand = NoteMarks.Chips(Tags.Read(_editorProps, _view.Today), _view.Today).Count > 0
+            ? NoteType.ChipBand(_view.Zoom)
+            : 0;
+
         if (header > 0)
         {
             // 实体卡的编辑框只盖正文那一块：上面那排名字、大小和「打开」还在，用户不会
             // 误以为自己在改文件名。
-            Canvas.SetLeft(_editor, _view.ToScreenX(node.X) + inset);
-            Canvas.SetTop(_editor, _view.ToScreenY(node.Y) + inset + header);
+            Canvas.SetLeft(_editor, _view.ToScreenX(node.X) + inset + lensDX);
+            Canvas.SetTop(_editor, _view.ToScreenY(node.Y) + inset + header + lensDY);
             _editor.Width = Math.Max(20, (node.Width * _view.Zoom) - (inset * 2));
 
             // 输入框的高度是**正文那一块**的高度：原来这里给的是整张卡的高度，于是底部比卡底多出
             // 一条卡头加一圈内距（他 10-25 那句"太大了，而且超出了卡片本身的大小"）。
             _editor.Height = Math.Max(1, (Math.Max(node.Height, _editorGrownWorld) * _view.Zoom) - inset - header);
-            _editor.Padding = new Thickness(0, 0, 0, inset);
+            _editor.Padding = new Thickness(0, 0, 0, inset + chipBand);
             _editor.BorderThickness = new Thickness(0);
         }
         else
         {
-            Canvas.SetLeft(_editor, _view.ToScreenX(node.X));
-            Canvas.SetTop(_editor, _view.ToScreenY(node.Y));
+            Canvas.SetLeft(_editor, _view.ToScreenX(node.X) + lensDX);
+            Canvas.SetTop(_editor, _view.ToScreenY(node.Y) + lensDY);
             _editor.Width = node.Width * _view.Zoom;
             _editor.Height = Math.Max(node.Height, _editorGrownWorld) * _view.Zoom;
-            _editor.Padding = new Thickness(inset);
+            _editor.Padding = new Thickness(inset, inset, inset, inset + chipBand);
             _editor.BorderThickness = new Thickness(1);
         }
 
@@ -4547,7 +4618,6 @@ public sealed partial class MainWindow : Window
 
         _editor = null;
         _editingId = null;
-        _markEditOnly = false;
         _editorHeaderWorld = 0;
         _editingCell = null;
         _editorCellWorld = default;
@@ -5701,6 +5771,74 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// × 从"把牌尾整条盖掉"改成"扣一枚圆钮"（他 11-02 的截图：那条底把日期后两位吞了）。
+    /// 这一发钉三件：正圆（宽＝高＝直径、圆角＝半圆）、不纵向拉伸、静止时藏着；钮底下还得有那圈影。
+    /// 动效本身要眼睛判，这里只钉落点与悬停能点。
+    /// </summary>
+    private void SelfTestChipCrossKnob(List<string> problems)
+    {
+        var size = NoteType.ChipFont(1);
+        var surface = NoteStyling.SurfaceFor(null);
+        var chip = ChromeStyling.Chip(
+            new NoteMarks.Mark("12-04", "@d12-04", true, NoteMarks.DueState.Upcoming),
+            size,
+            NoteStyling.InkFor(null, surface),
+            surface,
+            () => { },
+            () => { },
+            null,
+            "点一下＝聚焦这个日期 · 双击＝编辑便签 · 点 × 去掉");
+
+        var layer = (chip.Child as Grid)?.Children.OfType<Grid>().FirstOrDefault();
+        var knob = layer?.Children.OfType<Border>().FirstOrDefault();
+
+        if (layer is null || knob is null)
+        {
+            problems.Add("selftest 牌子 × 钮: 牌面层上找不到那枚 × 圆钮");
+
+            return;
+        }
+
+        var scale = size / NoteType.ChipFontPx;
+        var expected = NoteType.ChipCrossHitPx * scale;
+
+        if (Math.Abs(knob.Width - expected) > 0.01 || Math.Abs(knob.Height - expected) > 0.01)
+        {
+            problems.Add($"selftest 牌子 × 钮: 钮是 {knob.Width:0.#}×{knob.Height:0.#}，应为正圆 {expected:0.#}×{expected:0.#}");
+        }
+        else if (knob.VerticalAlignment == VerticalAlignment.Stretch)
+        {
+            problems.Add("selftest 牌子 × 钮: 钮还在纵向拉伸——那就是把牌尾整条盖掉");
+        }
+        else if (Math.Abs(knob.CornerRadius.TopLeft - (expected / 2)) > 0.01)
+        {
+            problems.Add($"selftest 牌子 × 钮: 圆角 {knob.CornerRadius.TopLeft:0.#}，应为半圆 {expected / 2:0.#}");
+        }
+        else if (layer.Opacity != 0 || layer.IsHitTestVisible)
+        {
+            problems.Add("selftest 牌子 × 钮: 没悬停时 × 该藏着（不透明或能点到都算漏）");
+        }
+        else if (layer.Children.Count != 1)
+        {
+            problems.Add($"selftest 牌子 × 钮: 钮这一层有 {layer.Children.Count} 件——多出来的那层就是那块方形衬底（他 11-02 的截图）");
+        }
+        else
+        {
+            ChromeStyling.ShowChipCross(layer, true);
+
+            if (!layer.IsHitTestVisible)
+            {
+                problems.Add("selftest 牌子 × 钮: 悬停那一发没把钮叫出来（点不到 × 就删不掉）");
+            }
+            else
+            {
+                ChromeStyling.ShowChipCross(layer, false);
+                Diagnostics.Write($"selftest 牌子 × 钮: 正圆 {expected:0.#}px、半圆角、静止时藏着、只有一枚，悬停可点");
+            }
+        }
+    }
+
+    /// <summary>
     /// 对齐基准的候选集必须与"把整张表扫一遍"逐格相同（2026-10-29 上区间索引时的那把尺）。
     /// </summary>
     /// <remarks>
@@ -5804,7 +5942,7 @@ public sealed partial class MainWindow : Window
             {
                 var text = node.Text ?? string.Empty;
 
-                if (NoteMarks.Chips(Tags.Read(text), _view.Today).Count > 0 || text.Contains('\n'))
+                if (NoteMarks.Chips(Tags.Read(text, _view.Today), _view.Today).Count > 0 || text.Contains('\n'))
                 {
                     return true;
                 }
@@ -6025,6 +6163,9 @@ public sealed partial class MainWindow : Window
         // 组框与空组的读数要取在这一拍：后面的排布/拖拽会真的改动成员。
         SelfTestChipScalesWithZoom(problems);
 
+        // × 是一枚圆钮，不是贴边的一条（11-02 他发来的截图）。
+        SelfTestChipCrossKnob(problems);
+
         // 验收①（他 10-27 的工单）：同一格在 30%/50%/100%/200% 四档下，可见行数、牌子、
         // 渐隐开关必须一字不差——缩放是变换，不是重排。放在最前面：后面的每一发都会改板面。
         SelfTestCardContentZoomInvariant(problems);
@@ -6034,6 +6175,12 @@ public sealed partial class MainWindow : Window
 
         SelfTestIconsUseDesignGrid(problems);
         SelfTestGroups(problems);
+
+        // 组钮拖过两个框：同时只能亮一个，松手都回虚线（11-02 他报的"另一个框一直亮"）。
+        SelfTestGroupDragAlerts(problems);
+
+        // 左下角两档计数 + 点一档把符合的那几格临时聚到中间（11-02 定档的 B＋聚合）。
+        SelfTestDueLens(problems);
         SelfTestMarkChipEdits(problems);
         SelfTestMarkEditEnter(problems);
         SelfTestDoneChip(problems);
@@ -8138,6 +8285,9 @@ public sealed partial class MainWindow : Window
         // 编辑中那一发滚轮走的是"滚这一格"，不是"缩放整块板子"（10-24 他点的）。
         SelfTestEditingWheel(problems);
 
+        // 编辑框要给牌子那条带让位（11-02 他发来的截图：最后一行压在「#项目地址」上）。
+        SelfTestEditorClearsChips(problems);
+
         // 单击选中不许把格子挪走：没过 4 像素的那一发是手抖（10-24 他报的第三格）。
         SelfTestClickDoesNotNudge(problems);
 
@@ -8988,6 +9138,65 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 编辑时正文不许压到那排牌子上：卡片给牌子留了「卡高 − 内距 − 牌子带」那么多行位（见
+    /// NodeVisual 的 showChips），编辑框盖在同一张卡上就得让出同一截。11-02 他发来的截图：
+    /// 手动压短过的格子里，第四行字正好压在「#项目地址」上面。
+    /// </summary>
+    /// <remarks>
+    /// 两档都量：100% 是他发截图的那一档；50% 是牌子带缩到 11 像素、旧写法那块 16 像素的地板
+    /// 会把牌子往上顶进正文的那一档。判据是屏幕上的几何——正文下沿不低过牌子顶。
+    /// </remarks>
+    private void SelfTestEditorClearsChips(List<string> problems)
+    {
+        var target = BoardNotes()
+            .Where(node => node.Kind == CanvasNodeKind.Text && !EntityCards.IsTable(node))
+            .FirstOrDefault(node => NoteMarks.Chips(Tags.Read(node.Text, _view.Today), _view.Today).Count > 0);
+
+        if (target is null)
+        {
+            problems.Add("selftest 编辑框让牌: 这块板上没有带标记的便签，这一发不适用");
+
+            return;
+        }
+
+        var savedZoom = _view.Zoom;
+
+        BeginEdit(target.Id);
+
+        if (_editor is null || _editorChips is null || _editorChips.Visibility != Visibility.Visible)
+        {
+            problems.Add("selftest 编辑框让牌: 带标记的格子开编辑器后没有看到那排牌子");
+
+            CloseEditor(commit: false);
+            _view.Zoom = savedZoom;
+
+            return;
+        }
+
+        foreach (var zoom in new[] { 1.0, 0.5 })
+        {
+            _view.Zoom = zoom;
+            PlaceEditor();
+            PaintEditorChips();
+
+            var textBottom = Canvas.GetTop(_editor) + _editor.Height - _editor.Padding.Bottom;
+            var chipsTop = Canvas.GetTop(_editorChips);
+            var clearance = chipsTop - textBottom;
+
+            if (clearance < -0.5)
+            {
+                problems.Add(
+                    $"selftest 编辑框让牌（{zoom:P0}）: 正文下沿 {textBottom:0.#} 压进牌子带，牌子顶 {chipsTop:0.#}");
+            }
+
+            Diagnostics.Write($"selftest 编辑框让牌: {target.Id} 在 {zoom:P0} 下正文离牌子顶 {clearance:0.#}px");
+        }
+
+        CloseEditor(commit: false);
+        _view.Zoom = savedZoom;
+    }
+
+    /// <summary>
     /// 单击选中不许把格子挪走：没过 4 像素的那一发位移必须是 0，过了的那一发必须整段跟上。
     /// </summary>
     /// <remarks>
@@ -9225,7 +9434,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void SelfTestDueBarFollowsZoom(List<string> problems)
     {
-        var target = BoardNotes().FirstOrDefault(node => NoteMarks.StateOf(Tags.Read(node.Text), _view.Today) != NoteMarks.DueState.None);
+        var target = BoardNotes().FirstOrDefault(node => NoteMarks.StateOf(Tags.Read(node.Text, _view.Today), _view.Today) != NoteMarks.DueState.None);
 
         if (target is null || !_realized.TryGetValue(target.Id, out var visual))
         {
@@ -10865,6 +11074,14 @@ public sealed partial class MainWindow : Window
         switch (e.Key)
         {
             case Windows.System.VirtualKey.Escape:
+                // 聚焦算一层：正在看那几格时，Esc 先把镜头退回正常布局，再轮到下面的面板与选中。
+                if (_lensKind is not null && _editingId is null)
+                {
+                    ExitDueLens();
+                    e.Handled = true;
+                    break;
+                }
+
                 if (Pulling)
                 {
                     // 一按退一层：正在拉的那根线先断掉，板子上什么都没留下。

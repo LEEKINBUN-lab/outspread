@@ -205,4 +205,26 @@ public class NoteMarksTests
         Assert.Empty(marks.Tags);
         Assert.Equal(text, marks.Body);
     }
+
+    [Fact]
+    public void Open_due_counts_skip_finished_cards_and_respect_the_soon_window()
+    {
+        var today = new DateOnly(2026, 11, 2);
+
+        // 逾期：读得出的过去日期、没标完成；今天那一档不算逾期。
+        Assert.True(NoteMarks.IsOpenLate(Tags.Read("@d2026-10-31\n交周报", today), today));
+        Assert.False(NoteMarks.IsOpenLate(Tags.Read("@d2026-10-31\n@b1\n交周报", today), today));
+        Assert.False(NoteMarks.IsOpenLate(Tags.Read("@d2026-11-02\n交周报", today), today));
+
+        // 即将：今天到 +3 天（两头都算）；+4 天不算；完成了不算；逾期不重复算；读不出的不算。
+        Assert.True(NoteMarks.IsOpenSoon(Tags.Read("@d2026-11-02", today), today, NoteMarks.SoonDays));
+        Assert.True(NoteMarks.IsOpenSoon(Tags.Read("@d2026-11-05", today), today, NoteMarks.SoonDays));
+        Assert.False(NoteMarks.IsOpenSoon(Tags.Read("@d2026-11-06", today), today, NoteMarks.SoonDays));
+        Assert.False(NoteMarks.IsOpenSoon(Tags.Read("@d2026-11-05\n@b1", today), today, NoteMarks.SoonDays));
+        Assert.False(NoteMarks.IsOpenSoon(Tags.Read("@d2026-10-31", today), today, NoteMarks.SoonDays));
+        Assert.False(NoteMarks.IsOpenSoon(Tags.Read("@d2-30", today), today, NoteMarks.SoonDays));
+
+        // 短写法也走同一条：@d11-04 就是今天 +2 天。
+        Assert.True(NoteMarks.IsOpenSoon(Tags.Read("@d11-04", today), today, NoteMarks.SoonDays));
+    }
 }

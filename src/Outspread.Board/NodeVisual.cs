@@ -910,7 +910,7 @@ public sealed class NodeVisual : ContentControl
         return next;
     }
 
-    /// <summary>这一档该不该画正文（屏幕字高低于不可辨那一档就不画，见 <see cref="NoteSurface.TextLod"/>）。</summary>
+    /// <summary>这一档该不该画正文（屏幕字高并进一像素以下才不画，见 <see cref="NoteSurface.TextLod"/>）。</summary>
     private bool? _textLod;
 
     private bool TextLod(double zoom, double scale)
@@ -1717,8 +1717,9 @@ public sealed class NodeVisual : ContentControl
             _hasMore = HiddenBelow(_label.Text, innerWidth, _label.FontSize, leading)
                        || _totalLines - _firstLine > _visibleLines;
 
-            // 看不清那一档不画正文（地图与设计工具都不在不可辨的字号上画标签）。纸面、色条、
-            // 牌子照旧——牌子是 chrome，本来就不随缩放缩。回到可读档位由视野戳里那一笔账唤回。
+            // 字并进一像素那一档以下不画正文（画了是灰噪，不是字）。11-03 起地板从"可辨线"降到"亚像素线"：
+            // 他日常那一档（23%，字高 3.4 像素）整板没字，报「不显示有些影响观感」，而藏字每帧只省 11~12ms，
+            // 比牌子那层（~50ms）小一个数量级。纸面、色条、牌子照旧——牌子是 chrome，本来就不随缩放缩。
             _label.Visibility = blocks || !text ? Visibility.Collapsed : Visibility.Visible;
             if (blocks && !_textHost.Children.Contains(_md))
             {

@@ -141,37 +141,45 @@ public static class NoteSurface
     public static bool DrawsShadow(double zoom) => zoom >= ShadowMinZoom;
 
     /// <summary>
-    /// 汉字在屏幕上低到这一像素高度就不再用正文——地图与设计工具都不在看不清的档位画标签
-    /// （ArcGIS 的缩尺基准字号、Mapbox 的 <c>minzoom</c>／<c>text-size</c> stops 是同一件事）。
-    /// 这一档以下纸面、色条、牌子照旧：牌子是 chrome，本来就不随缩放缩（见 <see cref="NoteType"/> 那条注释）。
+    /// 汉字在屏幕上高到这一像素就一律画正文。<b>这一档是"噪声地板"，不是"可辨线"</b>：
+    /// 11-03 之前它叫 <c>TextLegiblePx = 7</c>，按"看不清就别画"办事，结果他日常那一档（23%，字高 3.4 像素）
+    /// 整板卡面只剩色条与牌子，他报「不显示有些影响观感」。
     /// </summary>
     /// <remarks>
-    /// 判据是<b>屏幕字高</b>（<c>zoom × scale × 字号</c>），不是缩放数：同一档 25% 在 1.0 缩放的屏上是
-    /// 3.75 像素（不可辨），在 2.0 缩放的屏上是 7.5 像素（勉强可读）。拿缩放数当尺会在高分屏上提前把字藏掉。
-    /// 7px 这一档不是量到刚好过门：15px 的雅黑字面缩到 7px 时横画已经开始并笔，行业里 CJK 的可用下限也压在 6–8px。
-    /// 要挪这个数就一起挪下面那条带宽，并把"并笔"的截图附在提交里。
+    /// <para>
+    /// 改判据的账（11-03 现测，同一把尺两臂背靠背各两遍，临时构建跑副本，产品板没动）：永久画字相对藏字，
+    /// 他那块板每帧 82→93ms（+14%），300 格整屏那种 24→40ms（+66%），停手那一发 heavy 544→632ms；
+    /// 而牌子那一层摘掉能省 ~50ms、跨档整格重跑那一发是 518ms——都比文字层大一到两个数量级。
+    /// 所以观感优先，只把"笔画并进一个像素、画了只剩灰噪"那一档留着不画。
+    /// </para>
+    /// <para>
+    /// 判据仍是<b>屏幕字高</b>（<c>zoom × scale × 字号</c>），不是缩放数：同一档 8% 在 1.0 缩放的屏上是
+    /// 1.2 像素（噪声），在 2.0 缩放的屏上是 2.4 像素（画）。拿缩放数当尺会在高分屏上提前把字藏掉。
+    /// 8% 那一档画出来是什么样子看过图（均匀灰带、不闪、无摩尔纹），仍判为不值得画，故地板留在 2 像素。
+    /// 要挪这个数就一起挪下面那条带宽，并把那一档的截图附在提交里。
+    /// </para>
     /// </remarks>
-    public const double TextLegiblePx = 7;
+    public const double TextDrawAtOrAbovePx = 2;
 
     /// <summary>
-    /// 迟滞带的下沿（屏幕像素）：<b>7 以上一定画、6 以下一定不画、6–7 之间看上一拍</b>。
-    /// 带宽放在阈值<b>下面</b>而不是两边对称，是为了让 50%（15×0.5＝7.5 像素）落在确定的一档：
-    /// 对称带会把 47%–53% 全变成"看你怎么进来的"，而 50% 是标签栏上按得到的那一档。
+    /// 迟滞带的下沿（屏幕像素）：<b>2 以上一定画、1.6 以下一定不画、1.6–2 之间看上一拍</b>。
+    /// 带宽放在阈值<b>下面</b>而不是两边对称，是为了让常用档（50% 是 7.5 像素、他日常的 23% 是 3.4 像素）
+    /// 都落在"一定画"那一侧；对称带会把阈值上下各半档变成"看你怎么进来的"。
     /// </summary>
-    public const double TextHideBelowPx = 6;
+    public const double TextHideBelowPx = 1.6;
 
-    /// <summary>这一档屏幕上还有没有看得清的字。</summary>
-    public static bool DrawsText(double zoom, double scale) => ScreenTextPx(zoom, scale) >= TextLegiblePx;
+    /// <summary>这一档屏幕上画的还是不是字（而不是并进一像素的噪声）。</summary>
+    public static bool DrawsText(double zoom, double scale) => ScreenTextPx(zoom, scale) >= TextDrawAtOrAbovePx;
 
     /// <summary>
-    /// 文字 LOD 的<b>下一状态</b>——带一像素带宽，所以它要看上一拍是什么，与 <see cref="ShadowLod"/> 同一形状。
+    /// 文字 LOD 的<b>下一状态</b>——带 0.4 像素带宽，所以它要看上一拍是什么，与 <see cref="ShadowLod"/> 同一形状。
     /// </summary>
     public static bool TextLod(double zoom, double scale, bool wasOn)
     {
         var px = ScreenTextPx(zoom, scale);
 
         return px < TextHideBelowPx ? false
-            : px >= TextLegiblePx ? true
+            : px >= TextDrawAtOrAbovePx ? true
             : wasOn;
     }
 

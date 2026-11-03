@@ -5738,17 +5738,28 @@ public sealed partial class MainWindow : Window
                 $"selftest 牌子缩放: 牌子按世界 {actual:0.##} 排版、屏幕 {actual * _view.Zoom:0.##} 由变换 {card.PaintZoomScale:0.####} 带出（缩放 {Percent()}）");
         }
 
-        // 牌宽＝字的自然宽（× 不占位，只在悬停时压在牌尾）。这一发钉住两半：
-        // × 回到横排里 → 牌子比字宽一截；× 不在树上 → 悬停点不到，删不掉。
-        // 宽度量的是世界版式（变换不改 ActualWidth），所以内距的尺也用世界档。
+        // 牌宽＝字的自然宽（× 不占位）。11-03 起 × 那三个零件是悬停才建的，所以这一发钉三半：
+        // 静止时不许在树上（在＝又常驻，每次提交都点一遍名）；催一次悬停后每枚都要长出来
+        // （长不出＝点不到删不掉）；长出来之后牌宽仍＝字宽＋内距（× 一占位牌就比字宽一截）。
+        BoardArea.UpdateLayout();
+
+        var (inFlowAtRest, overlayAtRest) = card.PaintedChipCrossPlacement;
+        var chipCount = card.PaintedChipCount;
+
+        if (inFlowAtRest != 0 || overlayAtRest != 0)
+        {
+            problems.Add($"自检牌子宽度: 没悬停 × 就在树上了（横排 {inFlowAtRest}／牌面层 {overlayAtRest}）——那三个零件又常驻了");
+        }
+
+        var revealed = card.RevealChipCrosses();
+
         BoardArea.UpdateLayout();
 
         var (inFlow, overlay) = card.PaintedChipCrossPlacement;
-        var chipCount = card.PaintedChipCount;
 
-        if (inFlow != 0 || overlay != chipCount)
+        if (revealed != chipCount || inFlow != 0 || overlay != chipCount)
         {
-            problems.Add($"自检牌子宽度: {chipCount} 枚牌子里 × 在横排里 {inFlow} 处、在牌面层上 {overlay} 处——应 0/{chipCount}");
+            problems.Add($"自检牌子宽度: {chipCount} 枚牌子里催出 {revealed} 枚 ×、在横排 {inFlow} 处、在牌面层 {overlay} 处——应 {chipCount}/0/{chipCount}");
         }
         else
         {
@@ -5789,12 +5800,23 @@ public sealed partial class MainWindow : Window
             null,
             "点一下＝聚焦这个日期 · 双击＝编辑便签 · 点 × 去掉");
 
-        var layer = (chip.Child as Grid)?.Children.OfType<Grid>().FirstOrDefault();
+        var face = chip.Child as Grid;
+
+        // 静止时那三个零件不在树上（11-03 减元素：满屏 384 枚牌子＝1152 个"永远不画却被点一遍名"的零件）。
+        if (face?.Children.OfType<Grid>().Any() == true)
+        {
+            problems.Add("selftest 牌子 × 钮: 没悬停牌面上就多一层 Grid——那枚钮又常驻了");
+        }
+
+        // 量它之前先"悬停一次"：这枚钮是第一次悬停才建的。
+        (chip.Tag as Action)?.Invoke();
+
+        var layer = face?.Children.OfType<Grid>().FirstOrDefault();
         var knob = layer?.Children.OfType<Border>().FirstOrDefault();
 
         if (layer is null || knob is null)
         {
-            problems.Add("selftest 牌子 × 钮: 牌面层上找不到那枚 × 圆钮");
+            problems.Add("selftest 牌子 × 钮: 悬停一次后牌面层上仍找不到那枚 × 圆钮——点不到就删不掉");
 
             return;
         }

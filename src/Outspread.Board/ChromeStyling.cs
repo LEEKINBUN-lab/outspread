@@ -281,52 +281,8 @@ internal static class ChromeStyling
 
         // 原型写了 font-variant-numeric: tabular-nums；WinUI 3 的 TextBlock 没有这一面（Typography 类不在投影里），
 
-        var cross = new TextBlock
-        {
-            Text = "×",
-            FontFamily = NoteStyling.NoteFont,
-            FontSize = size,
-            Foreground = new SolidColorBrush(body),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-
-        // × 是一枚**圆钮**扣在牌尾，不是把牌尾一整条盖掉（他 11-02 的截图：那一条把日期后两位
-        // 都吞了）。钮比牌子那条带小一圈，悬停才出现：淡入＋由 0.85 长到 1。
-        var crossSize = NoteType.ChipCrossHitPx * scale;
-
-        var knob = new Border
-        {
-            Child = cross,
-            Width = crossSize,
-            Height = crossSize,
-            CornerRadius = new CornerRadius(crossSize / 2),
-            Background = new SolidColorBrush(knobFill),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-
-        // × 自己一块命中区：点它才删，点牌身是聚焦/编辑，两件事不许串。
-        // 它**不占牌宽**（10-26 他点的第二格）：牌子宽度只有那几个字，× 悬停时压在牌子右端
-        // 那一小块上——不常驻，所以不挡正常浏览；不占位，所以一排牌子没有空档。
-        // 它不"长出来"：占位与不占位之间不切换宽度，切的只有透明度与大小。
-        var crossLayer = new Grid
-        {
-            Width = crossSize,
-            Height = crossSize,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 3 * scale, 0),
-            Opacity = 0,
-            IsHitTestVisible = false,
-            RenderTransform = new ScaleTransform { ScaleX = 0.85, ScaleY = 0.85 },
-            RenderTransformOrigin = new Windows.Foundation.Point(0.5, 0.5),
-        };
-
-        // 只有一枚圆钮：之前垫的那圈"影"在这个尺寸上看着就是一块方形衬底（他 11-02 的截图），
-        // 删掉——牌尾只留一个圆，靠淡入＋缩放说它是按钮。
-        crossLayer.Children.Add(knob);
-
+        // × 那一枚圆钮不在这里建：它悬停才长（见下面 EnsureCross）。静止时它是三个永远不画、
+        // 却在每次提交时被系统点一遍名的零件——满屏 384 枚牌子就是 1152 个（11-03 减元素）。
         inner.Children.Add(label);
 
         // 闸门牌是记账方的投影：删除线给"已放弃"，其余原样。它不吃编辑、不吃 ×——
@@ -358,19 +314,49 @@ internal static class ChromeStyling
             return border;
         }
 
-        face.Children.Add(crossLayer);
+        // 悬停才长那枚圆钮：第一次悬停建好就留在树上，之后只切透明度与缩放——
+        // 与改之前逐帧一致，只是"从没悬停过的牌子"不再占那三个零件。
+        Grid? crossLayer = null;
+
+        void EnsureCross()
+        {
+            if (crossLayer is not null)
+            {
+                return;
+            }
+
+            crossLayer = ChipCrossLayer(size, scale, knobFill, body);
+
+            crossLayer.PointerPressed += (_, args) =>
+            {
+                // 吃掉这一发，牌身那一层不能再收到：点 × 只删，不进编辑。
+                args.Handled = true;
+
+                onDelete();
+            };
+
+            face.Children.Add(crossLayer);
+        }
+
+        // 自检那把尺要能"悬停一次"再量这枚钮（NodeVisual.RevealChipCrosses 走的就是这一格）。
+        border.Tag = (Action)EnsureCross;
 
         ToolTipService.SetToolTip(border, tip);
 
         border.PointerEntered += (_, _) =>
         {
             border.Background = new SolidColorBrush(hover);
-            ShowChipCross(crossLayer, true);
+            EnsureCross();
+            ShowChipCross(crossLayer!, true);
         };
         border.PointerExited += (_, _) =>
         {
             border.Background = new SolidColorBrush(rest);
-            ShowChipCross(crossLayer, false);
+
+            if (crossLayer is not null)
+            {
+                ShowChipCross(crossLayer, false);
+            }
         };
 
         // 双击判定自己数两下：500ms 内同一枚的第二发算双击。窗口取平台 DoubleTapped 的量级，
@@ -396,14 +382,6 @@ internal static class ChromeStyling
             }
         };
 
-        crossLayer.PointerPressed += (_, args) =>
-        {
-            // 吃掉这一发，牌身那一层不能再收到：点 × 只删，不进编辑。
-            args.Handled = true;
-
-            onDelete();
-        };
-
         return border;
     }
 
@@ -412,6 +390,56 @@ internal static class ChromeStyling
     /// 基值先写成落点（1／0、1／0.85），关键帧从对面播过来：<see cref="FillBehavior.Stop"/> 播完
     /// 就回到基值，于是淡出能看完，停下来也是对的。自检读落点那两枚——它不读播放中的值。
     /// </remarks>
+    /// <summary>
+    /// 牌尾那枚 × 圆钮（含它自己的命中层）。悬停第一次才建，见 <c>Chip</c> 里的 <c>EnsureCross</c>。
+    /// </summary>
+    /// <remarks>
+    /// 它是一枚<b>圆钮</b>扣在牌尾，不是把牌尾一整条盖掉（他 11-02 的截图：那一条把日期后两位都吞了）。
+    /// 钮比牌子那条带小一圈，出现靠淡入＋由 0.85 长到 1。它<b>不占牌宽</b>（10-26 他点的第二格）：
+    /// 牌子宽度只有那几个字，× 压在牌子右端那一小块上——不常驻所以不挡浏览，不占位所以一排没有空档。
+    /// 只此一枚钮：之前垫的那圈"影"在这个尺寸上看着就是块方形衬底（他 11-02 的截图），删掉了。
+    /// </remarks>
+    private static Grid ChipCrossLayer(double size, double scale, Color knobFill, Color body)
+    {
+        var cross = new TextBlock
+        {
+            Text = "×",
+            FontFamily = NoteStyling.NoteFont,
+            FontSize = size,
+            Foreground = new SolidColorBrush(body),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var crossSize = NoteType.ChipCrossHitPx * scale;
+
+        var knob = new Border
+        {
+            Child = cross,
+            Width = crossSize,
+            Height = crossSize,
+            CornerRadius = new CornerRadius(crossSize / 2),
+            Background = new SolidColorBrush(knobFill),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        // × 自己一块命中区：点它才删，点牌身是聚焦/编辑，两件事不许串。
+        return new Grid
+        {
+            Width = crossSize,
+            Height = crossSize,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 3 * scale, 0),
+            Opacity = 0,
+            IsHitTestVisible = false,
+            RenderTransform = new ScaleTransform { ScaleX = 0.85, ScaleY = 0.85 },
+            RenderTransformOrigin = new Windows.Foundation.Point(0.5, 0.5),
+            Children = { knob },
+        };
+    }
+
     internal static void ShowChipCross(Grid layer, bool show)
     {
         layer.IsHitTestVisible = show;

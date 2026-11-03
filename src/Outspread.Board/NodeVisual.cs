@@ -815,6 +815,25 @@ public sealed class NodeVisual : ContentControl
 
     internal int PaintedChipCount => _chips.Children.Count;
 
+    /// <summary>自检那把尺：把这一格所有牌子的 × 圆钮"悬停一次"长出来，返回长了几枚。
+    /// 11-03 起那枚钮是悬停才建的（静止时不占元素），所以量它之前必须先催一次；
+    /// 数返回值是为了钉"每枚牌子都长得出来"，不是数到一个 0 就当通过。</summary>
+    internal int RevealChipCrosses()
+    {
+        var revealed = 0;
+
+        foreach (var chip in _chips.Children.OfType<Border>())
+        {
+            if (chip.Tag is Action reveal)
+            {
+                reveal();
+                revealed++;
+            }
+        }
+
+        return revealed;
+    }
+
     /// <summary>自检那把尺之一：牌子宽 − 字宽 ≈ 左右内距。多出一格就是 × 还在占位。
     /// 取字最长的那枚：短牌的宽度由 MinWidth 兜底，量不出这条关系。</summary>
     internal (double ChipWidth, double LabelWidth) PaintedChipWidths

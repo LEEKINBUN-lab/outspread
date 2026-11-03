@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Outspread.Core;
 using Outspread.Mcp;
@@ -14,6 +15,10 @@ public sealed class BoardToolsWriteTests : IDisposable
     private readonly string _root = Path.Combine(
         Path.GetTempPath(),
         "outspread-mcp-tests-" + Guid.NewGuid().ToString("N")[..8]);
+
+    /// <summary>连接器那一侧按 camelCase 绑参数。默认的 JsonSerializer 大小写敏感，
+    /// 拿它反序列化 <c>{"kind":…,"text":…}</c> 会把两个键全当成未知键，测到的就不是同一件事。</summary>
+    private static readonly JsonSerializerOptions Camelize = new() { PropertyNameCaseInsensitive = true };
 
     public BoardToolsWriteTests() => Directory.CreateDirectory(_root);
 
@@ -385,6 +390,60 @@ public sealed class BoardToolsWriteTests : IDisposable
         Assert.NotNull(landed);
         Assert.Contains("@b0", landed!, StringComparison.Ordinal);
         Assert.Contains("要你：拍要不要收", landed!, StringComparison.Ordinal);
+    }
+
+    /// <summary>把字段名写成 <c>type</c>（11-03 一晚踩两次的那一发）必须当场拒，不许静默降级成 note。</summary>
+    /// <remarks>
+    /// 降级的后果不是"颜色不对"，是<b>这格从他的待办里消失</b>：note 不挂 @b0，"还欠几格"看不见它，
+    /// 而回执照样报"已落板"——我以为让他拍的事他永远不会知道。所以第二次踩同一类错就交给闸。
+    /// </remarks>
+    [Fact]
+    public void A_card_naming_the_wrong_field_is_refused_by_that_name_and_writes_nothing()
+    {
+        var board = SeededBoard(ordinal: 0);
+        var before = CanvasStore.Load(board).Nodes.Count;
+
+        // 走真反序列化那一条路：只有这样才能重现"未知键被丢掉"这件事（手 new 一个 BoardCard 测不到）。
+        // 大小写不敏感那一项是连接器那一侧的行为（它按 camelCase 绑 kind/text），默认选项会把
+        // "text" 也当成未知键，测出来的就不是同一件事。
+        var mistyped = JsonSerializer.Deserialize<BoardCard>(
+            """{"type":"decision","text":"低缩放档那一排牌子怎么办\n要你：拍 A／B／C"}""",
+            Camelize)!;
+
+        var receipt = BoardTools.BoardPost("写错字段的一发", [mistyped], round: "闸", board: board);
+
+        Assert.Contains("没落板", receipt, StringComparison.Ordinal);
+        Assert.Contains("type", receipt, StringComparison.Ordinal);     // 要点名那个键，不能只说"字段不对"
+        Assert.Contains("kind", receipt, StringComparison.Ordinal);     // 并告诉他该写什么
+        Assert.Equal(before, CanvasStore.Load(board).Nodes.Count);
+    }
+
+    [Fact]
+    public void An_unknown_kind_value_is_refused_rather_than_landing_as_a_note()
+    {
+        var board = SeededBoard(ordinal: 0);
+
+        var typo = JsonSerializer.Deserialize<BoardCard>(
+            """{"kind":"decisiom","text":"这一格该是红的\n要你：拍要不要"}""",
+            Camelize)!;
+
+        var receipt = BoardTools.BoardPost("kind 拼错的一发", [typo], round: "闸", board: board);
+
+        Assert.Contains("没落板", receipt, StringComparison.Ordinal);
+        Assert.Contains("decisiom", receipt, StringComparison.Ordinal);
+
+        // 正对照：同一句话、字段写对，就该红着落进他的待办。
+        BoardTools.BoardPost(
+            "kind 写对的一发",
+            [new BoardCard { Kind = "decision", Text = "这一格该是红的\n要你：拍要不要" }],
+            round: "闸",
+            board: board);
+
+        var landed = CanvasStore.Load(board).Nodes
+            .First(node => (node.Text ?? string.Empty).Contains("这一格该是红的", StringComparison.Ordinal));
+
+        Assert.Contains("@b0", landed.Text, StringComparison.Ordinal);
+        Assert.False(string.IsNullOrWhiteSpace(landed.Color));   // 红（decision）不是灰（note）
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using ModelContextProtocol.Server;
 using Outspread.Core;
 
@@ -89,10 +90,36 @@ public sealed class BoardTools
         var prepared = new List<(string Id, string Kind, string Text, string Label, double Height)>();
         var mute = new List<string>();
         var tooLong = new List<string>();
+        var badShape = new List<string>();
 
         foreach (var entry in ordered)
         {
+            /* 字段写错以前会静默降级：把 kind 写成 type，这一格就落到默认 note——decision 落成 note
+               不挂 @b0，他的"还欠几格"里根本不会出现，等于我以为自己让他拍的事被他永远看不见。
+               11-03 一晚踩两次，所以这一发改成整发拒绝并点名那个键（同一类错误第二次出现就该交给闸）。 */
+            var strangers = entry.Unrecognized is null
+                ? Array.Empty<string>()
+                : entry.Unrecognized.Keys.ToArray();
+
             var kind = KindOf(entry.Kind);
+
+            if (kind is null || strangers.Length > 0)
+            {
+                var why = kind is null
+                    ? $"kind 收到『{entry.Kind}』——只认 decision／risk／task／note"
+                    : string.Empty;
+
+                if (strangers.Length > 0)
+                {
+                    why += (why.Length > 0 ? "；" : string.Empty)
+                        + $"不认识的字段 {string.Join("、", strangers)}——一枚卡只有 kind 与 text 两个键（把 type 改成 kind）";
+                }
+
+                badShape.Add($"「{FirstLine(entry.Text)}」：{why}");
+
+                continue;
+            }
+
             var body = entry.Text.Trim();
 
             /* 判据只有一句："不需要他做什么、也不需要他知道，就别上板"。这句写在 AGENTS.md 与 skill 里
@@ -143,9 +170,16 @@ public sealed class BoardTools
                 Math.Max(CardHeight, 44 + (22 * (wrapped + 2)))));
         }
 
-        if (mute.Count + tooLong.Count > 0)
+        if (mute.Count + tooLong.Count + badShape.Count > 0)
         {
             var lines = new List<string>();
+
+            if (badShape.Count > 0)
+            {
+                lines.Add(
+                    $"这一发没落板：{badShape.Count} 格的字段不对——{string.Join("、", badShape)}。\n"
+                    + "写错的 kind 会被当成 note（不挂 @b0、不进他的待办），静默降级比报错更坏：整发一个字都不写。");
+            }
 
             if (mute.Count > 0)
             {
@@ -1354,14 +1388,28 @@ public sealed class BoardTools
         return new AddedNode { Id = id, Json = json };
     }
 
-    /// <summary>kind 只认那四种；写错的一律按 note 落（灰、不占序号），不猜他想表达什么。</summary>
-    private static string KindOf(string? kind) => kind?.Trim().ToLowerInvariant() switch
+    /// <summary>kind 只认那四种（外加几个同义词）；<b>写错的返回 null 让调用方整发拒掉</b>，
+    /// 不再静默降级成 note——降级会把 decision 变成不挂 @b0 的灰卡，从他的待办里凭空消失。</summary>
+    private static string? KindOf(string? kind)
     {
-        "decision" or "decide" or "拍板" => "decision",
-        "risk" or "defect" or "风险" => "risk",
-        "task" or "todo" or "待办" => "task",
-        _ => "note",
-    };
+        var key = kind?.Trim();
+
+        if (key is null || key.Length == 0)
+        {
+            return "note";      // 不填＝结论，这是工具描述里写明的默认
+        }
+
+        key = key.ToLowerInvariant();
+
+        return key switch
+        {
+            "decision" or "decide" or "拍板" => "decision",
+            "risk" or "defect" or "风险" => "risk",
+            "task" or "todo" or "待办" => "task",
+            "note" or "结论" => "note",
+            _ => null,
+        };
+    }
 
     /// <summary>带的顺序：要他拍的在最上面。</summary>
     private static int BandOrder(string kind) => kind switch
@@ -1577,4 +1625,12 @@ public sealed class BoardCard
 
     [Description("卡片正文：只写这一件事，需要他知道的判据、选项、复现通道都写在这一条里")]
     public string Text { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 没认出来的键收在这儿，供整发拒绝用（11-03 一晚踩两次：把字段写成 <c>type</c>，
+    /// kind 就落到默认 note——decision 落成 note 不挂 @b0，他的"还欠几格"里根本不会出现，
+    /// 而工具一个错都不报）。宁可当场说清，不静默降级。
+    /// </summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? Unrecognized { get; set; }
 }

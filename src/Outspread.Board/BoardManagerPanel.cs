@@ -78,7 +78,7 @@ public sealed partial class MainWindow
             if (open)
             {
                 _managerPanel.UpdateLayout();
-                _managerShadow.Margin = new Thickness(0, _managerPanel.ActualHeight, 0, 0);
+                PlaceManagerShadow();
             }
         }
 
@@ -211,7 +211,13 @@ public sealed partial class MainWindow
         _managerPanel.RenderTransform = _managerSlide;
 
         // 面板本身铺满整行，内容是里面那层 body：宽度按窗口重算，宽窗最多 1200 并居中。
-        _managerPanel.SizeChanged += (_, _) => SizeBoardManagerBody();
+        // 高度一变（删板、重填行）影就跟着下沿走——只在打开那一拍摆一次的话，删掉几块板之后
+        // 影会留在原来那摞行的下沿（他 11-03 报的"阴影留在原地"）。
+        _managerPanel.SizeChanged += (_, _) =>
+        {
+            SizeBoardManagerBody();
+            PlaceManagerShadow();
+        };
 
         // 挂回 Root 那一行：BoardArea 里层层都是带变换的板面件，垫在里面量出来只有一个矮壳。
         // 取证走 `--mode chrome`（拍 Root），照样拍得到。
@@ -357,6 +363,17 @@ public sealed partial class MainWindow
         }
     }
 
+    /// <summary>底下那条软影贴在面板下沿：面板矮了影就跟着上移（删板之后行少了，影不许留在原地）。</summary>
+    private void PlaceManagerShadow()
+    {
+        if (_managerShadow is null || _managerPanel is null)
+        {
+            return;
+        }
+
+        _managerShadow.Margin = new Thickness(0, _managerPanel.ActualHeight, 0, 0);
+    }
+
     /// <summary>把盘上现有的板读成一行行；读不懂的那块照样列出来，只是格数写"读不出"。</summary>
     private void FillBoardManager()
     {
@@ -413,6 +430,96 @@ public sealed partial class MainWindow
             _managerRows.Children.Add(row);
         }
 
+    }
+
+    /// <summary>
+    /// 画板表的影跟着面板下沿走（他 11-03 报的"删掉几块板以后阴影留在原地"）。
+    /// 不碰磁盘：往行容器里加一截假行把面板撑高，影必须跟着下移；收回后跟回来。
+    /// </summary>
+    private void SelfTestManagerShadow(List<string> problems)
+    {
+        var wasOpen = _boardManagerOpen;
+        Border? fake = null;
+
+        try
+        {
+            SetBoardManager(true);
+
+            if (_managerPanel is null || _managerShadow is null || _managerRows is null)
+            {
+                problems.Add("自检画板表: 面板/影子/行容器没建出来");
+
+                return;
+            }
+
+            Root.UpdateLayout();
+            _managerPanel.UpdateLayout();
+
+            var panelHeight = _managerPanel.ActualHeight;
+
+            if (panelHeight <= 0)
+            {
+                problems.Add($"自检画板表: 面板没展开（高 {panelHeight:0.#}）——前置没立起来");
+
+                return;
+            }
+
+            if (Math.Abs(_managerShadow.Margin.Top - panelHeight) > 0.6)
+            {
+                problems.Add($"自检画板表: 一打开影就没贴到下沿（影 {_managerShadow.Margin.Top:0.#}、板 {panelHeight:0.#}）");
+            }
+
+            // 一截假行把面板撑高 40：影必须跟着走（删板走的是同一条 SizeChanged）。
+            _managerRows.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            fake = new Border { Height = 40 };
+            Grid.SetRow(fake, _managerRows.RowDefinitions.Count - 1);
+            _managerRows.Children.Add(fake);
+            _managerPanel.InvalidateMeasure();
+            Root.UpdateLayout();
+
+            var grown = _managerPanel.ActualHeight;
+
+            if (Math.Abs(_managerShadow.Margin.Top - grown) > 0.6)
+            {
+                problems.Add($"自检画板表: 面板长高后影没跟上（影 {_managerShadow.Margin.Top:0.#}、板 {grown:0.#}）");
+            }
+            else if (Math.Abs(grown - panelHeight - 40) > 0.6)
+            {
+                problems.Add($"自检画板表: 假行没把面板撑高（{panelHeight:0.#}→{grown:0.#}）");
+            }
+            else
+            {
+                // 收回假行＝删板后的形状：影跟着收回去。
+                _managerRows.Children.Remove(fake);
+                _managerRows.RowDefinitions.RemoveAt(_managerRows.RowDefinitions.Count - 1);
+                fake = null;
+                _managerPanel.InvalidateMeasure();
+                Root.UpdateLayout();
+
+                if (Math.Abs(_managerShadow.Margin.Top - _managerPanel.ActualHeight) > 0.6)
+                {
+                    problems.Add($"自检画板表: 收回行以后影没跟回来（影 {_managerShadow.Margin.Top:0.#}、板 {_managerPanel.ActualHeight:0.#}）");
+                }
+                else
+                {
+                    Diagnostics.Write($"selftest 画板表: 影随面板下沿（{panelHeight:0.#}→{grown:0.#}→{_managerPanel.ActualHeight:0.#}）");
+                }
+            }
+        }
+        finally
+        {
+            if (fake is not null && _managerRows is not null && _managerRows.Children.Contains(fake))
+            {
+                _managerRows.Children.Remove(fake);
+
+                if (_managerRows.RowDefinitions.Count > 0)
+                {
+                    _managerRows.RowDefinitions.RemoveAt(_managerRows.RowDefinitions.Count - 1);
+                }
+            }
+
+            SetBoardManager(wasOpen);
+        }
     }
 
     private Border ManagerRow(BoardLine line, bool isLast)

@@ -51,6 +51,9 @@ public sealed partial class MainWindow
     private const double LensZoomMin = 0.6;
     private const double LensZoomMax = 2.0;
 
+    /// <summary>镜头里让开的常驻浮件（右下按钮组、左上小地图）及各自进镜头前的可见性。</summary>
+    private readonly List<(FrameworkElement Element, Visibility Was)> _lensChromeHidden = [];
+
     private bool? _dueStripDark;
     private string? _dueStripLit;
 
@@ -236,6 +239,10 @@ public sealed partial class MainWindow
         _lensScrollY = 0;
         _lensMaxScroll = 0;
 
+        // 镜头是临时看板态：右下按钮组与左上小地图会被聚起来的格子压住（他 11-03 报的重叠），
+        // 照演示那套"让开再按原样还"。左下状态条不让——它就是换档的入口。
+        HideLensChrome();
+
         // 先排一拍把落点算出来（这一拍卡片的 FoldShift 已经是槽位），再从原位播过去——
         // 同一帧里排完就起动画，屏幕上看不到"先跳一下"。
         ArrangeAll();
@@ -303,6 +310,7 @@ public sealed partial class MainWindow
 
         Say("");
         StyleDueStrip();
+        RestoreLensChrome();
     }
 
     /// <summary>清掉聚焦态但不播动画、不重排（换板/关板时用：文档与画面都要从零开始）。</summary>
@@ -316,6 +324,33 @@ public sealed partial class MainWindow
         _lensMaxScroll = 0;
         LensDim.Opacity = 0;
         _dueStripLit = null;
+        RestoreLensChrome();
+    }
+
+    /// <summary>进镜头让开常驻浮件；已经让开的不重复记（换档时会再叫一次）。</summary>
+    private void HideLensChrome()
+    {
+        foreach (var element in new FrameworkElement[] { BadgeHost, _miniMap.Root })
+        {
+            if (_lensChromeHidden.Exists(entry => ReferenceEquals(entry.Element, element)))
+            {
+                continue;
+            }
+
+            _lensChromeHidden.Add((element, element.Visibility));
+            element.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    /// <summary>退出镜头按进镜头前的可见性还——本来就该藏着的，还回去也还是藏着。</summary>
+    private void RestoreLensChrome()
+    {
+        foreach (var (element, was) in _lensChromeHidden)
+        {
+            element.Visibility = was;
+        }
+
+        _lensChromeHidden.Clear();
     }
 
     private void AnimateDim(double to)
@@ -706,6 +741,10 @@ public sealed partial class MainWindow
             problems.Add("selftest 聚焦: 有逾期/即将逾期时状态条没出现");
         }
 
+        // 镜头里右下按钮组与左上小地图要让开（他 11-03 报的重叠）：先记下进镜头前的样子，退出后要对上。
+        var badgeBefore = BadgeHost.Visibility;
+        var mapBefore = _miniMap.Root.Visibility;
+
         EnterDueLens(LensLate);
 
         if (LensKind != LensLate)
@@ -715,6 +754,11 @@ public sealed partial class MainWindow
             Cleanup();
 
             return;
+        }
+
+        if (BadgeHost.Visibility != Visibility.Collapsed || _miniMap.Root.Visibility != Visibility.Collapsed)
+        {
+            problems.Add($"selftest 聚焦: 进镜头后右下按钮/小地图没让开（{BadgeHost.Visibility}/{_miniMap.Root.Visibility}）");
         }
 
         var (ids, offsets) = LensPlan;
@@ -825,6 +869,11 @@ public sealed partial class MainWindow
         }
 
         ExitDueLens();
+
+        if (BadgeHost.Visibility != badgeBefore || _miniMap.Root.Visibility != mapBefore)
+        {
+            problems.Add($"selftest 聚焦: 退出后右下按钮/小地图没按原样还回（{BadgeHost.Visibility}/{_miniMap.Root.Visibility}）");
+        }
 
         var resetOk = LensKind is null
             && Math.Abs(LensDimOpacity) < 0.01

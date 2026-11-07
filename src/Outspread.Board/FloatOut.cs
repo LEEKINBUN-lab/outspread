@@ -14,12 +14,13 @@ using WinRT.Interop;
 namespace Outspread.Board;
 
 /// <summary>
-/// 只读浮牌（他 11-04 拍的 A 档，11-07 按他的反馈改成同款渲染）：borderless 置顶窗，
-/// 里面装的是 MainWindow 铸的一枚<b>真 NodeVisual</b>——纸面、字排、标签牌与画板上那格
-/// 完全同一条渲染管线（Update 一发带上 zoom 与光栅档），不再是自造的简化文本版。
-/// A 档是<b>快照不是搬运</b>——原件留在画板上（降透明作"浮出中"标记），浮牌不跟画板实时走；
-/// 「回板」＝关浮牌、把格子透明度复原。拖动走 WM_NCLBUTTONDOWN + HTCAPTION 交给系统挪窗，
-/// P/Invoke 的路子和 <see cref="WindowShadow"/> 是同一套。任务栏不占位：WS_EX_TOOLWINDOW。
+/// 浮牌窗（他 11-04 拍 A 档、11-07 拍 B 档编辑）：borderless 置顶窗，里面装 MainWindow 铸的
+/// 一枚<b>真 NodeVisual</b>——纸面、字排、标签牌与画板上那格同一条渲染管线。窗自己不再
+/// 画第二层皮（底色＝纸面色只为窗角不露黑，无边框线）：看见的应当是一格便签浮在顶层，
+/// 不是套娃。
+/// 拖动＝<b>按住并移动</b>：按下先捕获、挪过死区（6px）才交系统拖动循环（WM_NCLBUTTONDOWN +
+/// HTCAPTION）——早发的那版轻点一下就黏住鼠标跟着跑，因为进入循环前的松开被吞了。
+/// 双击＝就地编辑（B 档）：编辑框与画板同一套外皮，提交走同一把撤销账。
 /// </summary>
 internal sealed class FloatingNoteWindow : Window
 {
@@ -28,14 +29,29 @@ internal sealed class FloatingNoteWindow : Window
     private const int WM_NCLBUTTONDOWN = 0x00A1;
     private const int HTCAPTION = 0x0002;
 
+    /// <summary>按住挪过这条死区才算"要拖"：轻点、双击都不惊动拖动循环。</summary>
+    private const double DragDeadZonePx = 6;
+
     private readonly IntPtr _hwnd;
+    private readonly Grid _root;
+    private TextBox? _editorBox;
     private bool _returnFired;
+    private Point? _dragStart;
 
     /// <summary>浮牌以任何途径收掉（回板钮、Esc、Close）都发一次；MainWindow 据此复原格子。只发一次。</summary>
     public event Action? ReturnRequested;
 
+    /// <summary>双击正文＝想就地编辑（B 档）。MainWindow 接住后调 <see cref="ShowEditor"/>。</summary>
+    public event Action? EditRequested;
+
+    /// <summary>编辑框提交（Ctrl＋Enter／失焦）。带的是正文原文，标记那几行由 MainWindow 保管接回。</summary>
+    public event Action<string>? EditCommitted;
+
+    /// <summary>正在编辑：拖动与 Esc-回板都要让位。</summary>
+    public bool Editing => _editorBox is not null;
+
     /// <param name="note">MainWindow 铸好的格子宿主（Canvas 里装着 Update 过的 NodeVisual）。</param>
-    /// <param name="paper">纸面色＝便签自己的表面色，窗缘露出的呼吸边与纸面同色才不突兀。</param>
+    /// <param name="paper">纸面色＝便签自己的表面色，窗角与格子圆角之间才不露第二层皮。</param>
     public FloatingNoteWindow(UIElement note, Color paper, PointInt32 screenPx, SizeInt32 sizePx)
     {
         _hwnd = WindowNative.GetWindowHandle(this);
@@ -57,7 +73,91 @@ internal sealed class FloatingNoteWindow : Window
         var style = GetWindowLongPtr(_hwnd, GWL_EXSTYLE);
         SetWindowLongPtr(_hwnd, GWL_EXSTYLE, new IntPtr(style.ToInt64() | WS_EX_TOOLWINDOW));
 
-        Content = BuildSurface(note, paper);
+        _root = new Grid { Background = new SolidColorBrush(paper) };
+
+        // Esc：编辑中＝收编辑框；否则＝回板。（快捷键挂在根元素，Window 没有 KeyboardAccelerators。）
+        var esc = new KeyboardAccelerator { Key = Windows.System.VirtualKey.Escape };
+        esc.Invoked += (_, _) =>
+        {
+            if (_editorBox is not null)
+            {
+                CloseEditor();
+            }
+            else
+            {
+                Close();
+            }
+        };
+        _root.KeyboardAccelerators.Add(esc);
+
+        // 拖动手感（他 11-07 的"点一下就自动跟随"）：按下只记起点并捕获，挪过死区才把窗口交给
+        // 系统拖动循环——那一拍按钮还按着，循环能等到松开，按住拖＝按住拖，轻点＝轻点。
+        _root.AddHandler(
+            UIElement.PointerPressedEvent,
+            new PointerEventHandler((_, e) =>
+            {
+                if (Editing || IsInside(e.OriginalSource as DependencyObject, static el => el is Button or TextBox))
+                {
+                    return;
+                }
+
+                if (!e.GetCurrentPoint(_root).Properties.IsLeftButtonPressed)
+                {
+                    return;
+                }
+
+                _dragStart = e.GetCurrentPoint(_root).Position;
+                _root.CapturePointer(e.Pointer);
+                e.Handled = true;
+            }),
+            handledEventsToo: true);
+
+        _root.PointerMoved += (_, e) =>
+        {
+            if (_dragStart is not { } start)
+            {
+                return;
+            }
+
+            var at = e.GetCurrentPoint(_root).Position;
+
+            if (Math.Abs(at.X - start.X) + Math.Abs(at.Y - start.Y) <= DragDeadZonePx)
+            {
+                return;
+            }
+
+            _dragStart = null;
+            _root.ReleasePointerCapture(e.Pointer);
+            ReleaseCapture();
+            _ = SendMessage(_hwnd, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+        };
+
+        _root.PointerReleased += (_, e) =>
+        {
+            _dragStart = null;
+            _root.ReleasePointerCapture(e.Pointer);
+        };
+
+        _root.PointerCanceled += (_, e) =>
+        {
+            _dragStart = null;
+            _root.ReleasePointerCapture(e.Pointer);
+        };
+
+        // 双击正文＝编辑。回板钮自己吃事件，不会漏到这里。
+        _root.DoubleTapped += (_, e) =>
+        {
+            if (!Editing && !IsInside(e.OriginalSource as DependencyObject, static el => el is Button))
+            {
+                EditRequested?.Invoke();
+                e.Handled = true;
+            }
+        };
+
+        _root.Children.Add(note);
+        _root.Children.Add(BuildBackButton());
+
+        Content = _root;
 
         Closed += (_, _) =>
         {
@@ -71,84 +171,127 @@ internal sealed class FloatingNoteWindow : Window
         };
     }
 
-    /// <summary>纸面铺满、格子居中。回板缩成右上角一枚小圆钮（纸面墨色，20% 底），
-    /// 不再占一条标题——内容本身就该是全部。Win10 没有系统圆角，方角＋1px 线读边界。</summary>
-    private UIElement BuildSurface(UIElement note, Color paper)
+    private Button BuildBackButton()
     {
-        var ink = NoteStyling.InkFor(paper);
+        var ink = NoteStyling.InkFor(((SolidColorBrush)_root.Background).Color);
 
-        // NoteStyling 公开的 WithAlpha 吃的是 Rgb＋0..1 浮点；这里全在 Windows.UI.Color 域里走，自己折一层省心。
         static Color Fade(Color c, double a) => Color.FromArgb((byte)Math.Round(Math.Clamp(a, 0, 1) * 255), c.R, c.G, c.B);
-
-        var root = new Grid { Background = new SolidColorBrush(paper) };
-
-        // Esc ＝ 回板。浮牌没有标题栏，键盘得有一条出口（快捷键挂在根元素，Window 没有 KeyboardAccelerators）。
-        var esc = new KeyboardAccelerator { Key = Windows.System.VirtualKey.Escape };
-        esc.Invoked += (_, _) => Close();
-        root.KeyboardAccelerators.Add(esc);
-
-        // 按住任意处＝系统拖窗。handledEventsToo：格子内部吃掉按压的件（牌子、文本）也要能起拖；
-        // 回板钮那一路在 handler 里按 OriginalSource 排除。
-        root.AddHandler(
-            UIElement.PointerPressedEvent,
-            new PointerEventHandler((_, e) =>
-            {
-                if (!e.GetCurrentPoint(root).Properties.IsLeftButtonPressed || IsInsideButton(e.OriginalSource as DependencyObject))
-                {
-                    return;
-                }
-
-                ReleaseCapture();
-                _ = SendMessage(_hwnd, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
-                e.Handled = true;
-            }),
-            handledEventsToo: true);
-
-        root.Children.Add(note);
 
         var back = new Button
         {
             Name = "FloaterBackButton",
-            Width = 26,
-            Height = 26,
+            Width = 24,
+            Height = 24,
             MinWidth = 0,
             MinHeight = 0,
             Padding = new Thickness(0),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(13),
-            Background = new SolidColorBrush(Fade(ink, 0.10)),
-            BorderBrush = new SolidColorBrush(Fade(ink, 0.30)),
-            Foreground = new SolidColorBrush(Fade(ink, 0.75)),
+            CornerRadius = new CornerRadius(12),
+            Background = new SolidColorBrush(Fade(ink, 0.08)),
+            BorderBrush = new SolidColorBrush(Fade(ink, 0.25)),
+            Foreground = new SolidColorBrush(Fade(ink, 0.70)),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(0, 6, 6, 0),
+            Margin = new Thickness(0, 5, 5, 0),
             Content = new TextBlock
             {
                 Text = "回",
                 FontFamily = NoteStyling.NoteFont,
-                FontSize = 12,
+                FontSize = 11,
             },
             TabNavigation = KeyboardNavigationMode.Once,
         };
         ToolTipService.SetToolTip(back, "回板（Esc）");
-        back.Click += (_, _) => Close();
-        root.Children.Add(back);
-
-        var outline = new Border
+        back.Click += (_, _) =>
         {
-            BorderBrush = new SolidColorBrush(Fade(ink, 0.20)),
-            BorderThickness = new Thickness(1),
-            Child = root,
+            // 编辑没提交就点回板：先落账再走，别把刚打的字丢了。
+            CommitEditor();
+            Close();
         };
 
-        return outline;
+        return back;
     }
 
-    private static bool IsInsideButton(DependencyObject? source)
+    /// <summary>就地编辑（B 档）：编辑框盖在格子正文的位上，外皮与画板编辑器同一套。
+    /// 由 MainWindow 在 <see cref="EditRequested"/> 里调，色号字号都按那一格算好。</summary>
+    public void ShowEditor(string body, double fontPx, Color ink, Color surface, Color line, Thickness padding, double widthDip, double heightDip)
+    {
+        CloseEditor();
+
+        _editorBox = new TextBox
+        {
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            FontFamily = NoteStyling.NoteFont,
+            FontSize = fontPx,
+            Foreground = new SolidColorBrush(ink),
+            Background = new SolidColorBrush(surface),
+            BorderBrush = new SolidColorBrush(line),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(0),
+            Padding = padding,
+            IsSpellCheckEnabled = false,
+            UseLayoutRounding = false,
+            Text = body,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0),
+            Width = widthDip,
+            Height = heightDip,
+        };
+
+        _editorBox.KeyDown += (_, e) =>
+        {
+            if (e.Key is Windows.System.VirtualKey.Enter
+                && Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
+            {
+                e.Handled = true;
+                CommitEditor();
+            }
+            else if (e.Key is Windows.System.VirtualKey.Escape)
+            {
+                e.Handled = true;
+                CloseEditor();
+            }
+        };
+
+        _editorBox.LostFocus += (_, _) => CommitEditor();
+
+        _root.Children.Add(_editorBox);
+        _editorBox.Focus(FocusState.Programmatic);
+        _editorBox.Select(_editorBox.Text.Length, 0);
+    }
+
+    /// <summary>收编辑框。有改动经 <see cref="EditCommitted"/> 交 MainWindow 落账（撤销与保存走画板同一把）。</summary>
+    public void CommitEditor()
+    {
+        if (_editorBox is not { } box)
+        {
+            return;
+        }
+
+        _editorBox = null;
+        var text = box.Text;
+        _root.Children.Remove(box);
+        EditCommitted?.Invoke(text);
+    }
+
+    private void CloseEditor()
+    {
+        if (_editorBox is not { } box)
+        {
+            return;
+        }
+
+        _editorBox = null;
+        _root.Children.Remove(box);
+    }
+
+    private static bool IsInside(DependencyObject? source, Func<DependencyObject, bool> match)
     {
         while (source is not null)
         {
-            if (source is Button)
+            if (match(source))
             {
                 return true;
             }
@@ -173,7 +316,9 @@ internal sealed class FloatingNoteWindow : Window
 }
 
 /// <summary>
-/// 浮牌的登记与收放（MainWindow 那一半）。一个格子同时只有一枚浮牌；删除、切板、关主窗都收。
+/// 浮牌的登记、铸格与收放（MainWindow 那一半）。一个格子同时只有一枚浮牌；删除、切板、关主窗都收。
+/// B 档编辑的落账在这边：<see cref="CommitFloatNoteText"/> 与画板编辑器走同一条
+/// BeginGesture → 写回 → FitNoteHeight → EndGesture → Rebuild → SaveSoon 链，撤销与自动保存天然跟随。
 /// </summary>
 public sealed partial class MainWindow
 {
@@ -183,8 +328,8 @@ public sealed partial class MainWindow
     /// <summary>格子 → 浮牌；Opacity 记的是浮出前的原值，回板时照原样还。</summary>
     private readonly Dictionary<string, (FloatingNoteWindow Window, double PreviousOpacity)> _floaters = new(StringComparer.Ordinal);
 
-    /// <summary>浮牌纸面外留的呼吸边（DIP）：格子的合成阴影/发丝不贴着窗框裁。</summary>
-    private const double FloaterPadPx = 10;
+    /// <summary>浮牌纸面外留的呼吸边（DIP）：格子的圆角与影不贴着窗框裁。</summary>
+    private const double FloaterPadPx = 4;
 
     /// <summary>rail「浮」钮：把选中的文字便签映到屏幕顶层。File/Link 没有正文，跳过；已浮出的不重复开。
     /// 源格未实格化（视口外被折叠）也照浮——弹出位从世界坐标算，不依赖源格的布局盒。</summary>
@@ -217,9 +362,6 @@ public sealed partial class MainWindow
         var visual = new NodeVisual(node, (relative) => AssetForNode(node, relative), DescribeEntity(node));
         visual.GateMark = source?.GateMark;
 
-        var screenX = _view.ToScreenX(node.X);
-        var screenY = _view.ToScreenY(node.Y);
-
         var host = new Canvas
         {
             Width = Math.Max(2, node.Width) * zoom + FloaterPadPx * 2,
@@ -228,7 +370,7 @@ public sealed partial class MainWindow
         host.Children.Add(visual);
         visual.Update(node, _view, scale);
 
-        // Update 自己会把格子钉在它画板上的屏幕位；这里改写成相对浮窗的位（左上留呼吸边）。
+        // Update 自己会把格子钉在它画板上的屏幕位；浮窗的画布就是这一格的盒子，钉在呼吸边内侧。
         Place(visual);
 
         // Update 首发时格子还没进任何窗的树（XamlRoot 为 null），内容账的印章里记着"没根"，
@@ -249,15 +391,14 @@ public sealed partial class MainWindow
         };
         repaint.Start();
 
-        var width = (int)Math.Clamp(host.Width * scale, 200, 1100);
-        var height = (int)Math.Clamp(host.Height * scale, 150, 1500);
+        var width = (int)Math.Clamp(host.Width * scale, 160, 1100);
+        var height = (int)Math.Clamp(host.Height * scale, 120, 1500);
 
-        // 格子在客户区的 DIP 位 → 物理 px → 屏幕坐标。客户区原点用 ClientToScreen 拿，
-        // 不去猜无框窗的非客户区还剩多少——量出来是多少就是多少。
+        // 格子在画板上的屏幕位（物理 px）→ 浮窗就开在那儿。
         var point = new NativePoint
         {
-            X = (int)Math.Round(screenX * scale),
-            Y = (int)Math.Round(screenY * scale),
+            X = (int)Math.Round(_view.ToScreenX(node.X) * scale),
+            Y = (int)Math.Round(_view.ToScreenY(node.Y) * scale),
         };
         _ = ClientToScreen(WindowNative.GetWindowHandle(this), ref point);
         var (x, y) = ClampedToWorkArea(point.X - (int)Math.Round(FloaterPadPx * scale), point.Y - (int)Math.Round(FloaterPadPx * scale), width, height);
@@ -271,6 +412,15 @@ public sealed partial class MainWindow
             new PointInt32 { X = x, Y = y },
             new SizeInt32 { Width = width, Height = height });
 
+        window.EditRequested += () => OpenFloatEditor(id);
+        window.EditCommitted += body =>
+        {
+            if (CommitFloatNoteText(id, body))
+            {
+                RefitFloater(id, scale);
+            }
+        };
+
         _floaters[id] = (window, previous);
         window.ReturnRequested += () => ReturnNote(id);
         window.Activate();
@@ -281,6 +431,103 @@ public sealed partial class MainWindow
             Canvas.SetLeft(visual, FloaterPadPx);
             Canvas.SetTop(visual, FloaterPadPx);
         }
+    }
+
+    /// <summary>双击浮牌＝就地编辑（B 档）：正文种进编辑框（标记那几行留在账上，提交时原样接回）。</summary>
+    private void OpenFloatEditor(string id)
+    {
+        if (!_floaters.TryGetValue(id, out var entry)
+            || NodeOf(id) is not { } node
+            || !EntityCards.CanEditBody(node))
+        {
+            return;
+        }
+
+        var zoom = _view.Zoom;
+        var surface = NoteStyling.SurfaceFor(node.Color);
+        var seeded = Tags.Read(node.Text);
+
+        entry.Window.ShowEditor(
+            seeded.Body,
+            _view.FontSizeFor(id) * zoom,
+            NoteStyling.InkFor(node.Color, surface),
+            surface,
+            NoteStyling.LineFor(node.Color, surface),
+            new Thickness(NoteTypography.For(_view.FontSizeFor(id)).Padding * zoom),
+            Math.Max(2, node.Width) * zoom + FloaterPadPx,
+            Math.Max(2, node.Height) * zoom + FloaterPadPx);
+    }
+
+    /// <summary>浮牌编辑的落账：与画板编辑器同一条链（标记接回 → BeginGesture → 写回 →
+    /// FitNoteHeight → EndGesture → Rebuild → SaveSoon），撤销与自动保存天然跟随。有真改动才返回 true。</summary>
+    private bool CommitFloatNoteText(string id, string body)
+    {
+        if (NodeOf(id) is not { } node || !EntityCards.CanEditBody(node))
+        {
+            return false;
+        }
+
+        // 编辑框里看到的只是正文；标记那几行由账面原样接回（与画板编辑器同规矩）。
+        var props = Tags.Read(node.Text).Props;
+        var text = NoteProperties.WithProps(props, JsonText.NormalizeTextNewlines(body));
+
+        if (string.Equals(text, node.Text, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        BeginGesture("改了一格文字（浮牌）");
+        node.Text = text;
+        FitNoteHeight(node);
+        EndGesture();
+        Rebuild();
+        SaveSoon();
+        DrainPendingReload();
+
+        // Rebuild 重铸了画板那格，"浮出中"的降透明标记跟着丢了——补回去，浮牌没收前画板上仍是那格半透明的。
+        if (_realized.TryGetValue(id, out var redimmed))
+        {
+            redimmed.Opacity = FloaterSourceOpacity;
+        }
+
+        return true;
+    }
+
+    /// <summary>落账后格子可能长高/变矮：画布、浮窗与格子的布局盒一起跟上，弹窗位置不跑出屏幕。</summary>
+    private void RefitFloater(string id, double scale)
+    {
+        if (!_floaters.TryGetValue(id, out var entry)
+            || NodeOf(id) is not { } node
+            || entry.Window.Content is not Grid root
+            || root.Children.FirstOrDefault() is not Canvas host)
+        {
+            return;
+        }
+
+        var zoom = _view.Zoom;
+        host.Width = Math.Max(2, node.Width) * zoom + FloaterPadPx * 2;
+        host.Height = Math.Max(2, node.Height) * zoom + FloaterPadPx * 2;
+
+        if (_realized.TryGetValue(id, out var visual))
+        {
+            visual.Update(node, _view, scale);
+            Canvas.SetLeft(visual, FloaterPadPx);
+            Canvas.SetTop(visual, FloaterPadPx);
+        }
+
+        var width = (int)Math.Clamp(host.Width * scale, 160, 1100);
+        var height = (int)Math.Clamp(host.Height * scale, 120, 1500);
+
+        var point = new NativePoint
+        {
+            X = (int)Math.Round(_view.ToScreenX(node.X) * scale),
+            Y = (int)Math.Round(_view.ToScreenY(node.Y) * scale),
+        };
+        _ = ClientToScreen(WindowNative.GetWindowHandle(this), ref point);
+        var (x, y) = ClampedToWorkArea(point.X - (int)Math.Round(FloaterPadPx * scale), point.Y - (int)Math.Round(FloaterPadPx * scale), width, height);
+
+        entry.Window.AppWindow.Resize(new SizeInt32 { Width = width, Height = height });
+        entry.Window.AppWindow.Move(new PointInt32 { X = x, Y = y });
     }
 
     /// <summary>收一枚浮牌并复原格子。浮牌的 Closed 也会走到这（同一把字典守着，重复进不来）。</summary>
@@ -307,7 +554,7 @@ public sealed partial class MainWindow
         }
     }
 
-    /// <summary>切板、关主窗用的总收：浮牌是某块板的快照，板走了它没有单独存在的理由（A 档不跨板跟人）。</summary>
+    /// <summary>切板、关主窗用的总收：浮牌是某块板的快照，板走了它没有单独存在的理由（不跨板跟人）。</summary>
     private void CloseAllFloaters()
     {
         CloseFloaters(_floaters.Keys.ToArray());
@@ -323,9 +570,9 @@ public sealed partial class MainWindow
             Math.Clamp(y, area.Y, Math.Max(area.Y, area.Y + area.Height - height)));
     }
 
-    /// <summary>浮牌的自检：选中一格→浮出→登记在案、原件降透明→已浮出的不重复开→回板→透明度复原、字典清空。
-    /// 锁的是弹出／回板这条核心链路。浮牌的窗会真的开一瞬间（自检本来就开着真窗）；
-    /// 拖动手感、置顶层级、Esc 这些只有真机看得见，不在这条尺的管里。</summary>
+    /// <summary>浮牌的自检：选中一格→浮出→登记在案、原件降透明、浮窗里同款格子量得出尺寸→
+    /// 已浮出的不重复开→回板→透明度复原、字典清空。锁的是弹出／回板这条核心链路。
+    /// 拖动手感、置顶层级、就地编辑这些只有真机看得见，不在这条尺的管里。</summary>
     private void SelfTestFloatOut(List<string> problems)
     {
         var probe = _realized.Keys
@@ -391,13 +638,6 @@ public sealed partial class MainWindow
         }
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NativePoint
-    {
-        public int X;
-        public int Y;
-    }
-
     /// <summary>浮窗内容树里找那枚铸出来的格子（FindDescendant 的 name 是必填参，这里按类型走）。</summary>
     private static NodeVisual? FindNodeVisualIn(DependencyObject root)
     {
@@ -417,6 +657,13 @@ public sealed partial class MainWindow
         }
 
         return null;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
     }
 
     [DllImport("user32.dll")]

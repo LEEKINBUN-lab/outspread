@@ -16,27 +16,29 @@ namespace Outspread.Board;
 /// <summary>
 /// 浮牌窗（他 11-04 拍 A 档、11-07 拍 B 档编辑）：borderless 置顶窗，里面装 MainWindow 铸的
 /// 一枚<b>真 NodeVisual</b>——纸面、字排、标签牌与画板上那格同一条渲染管线。窗自己不再
-/// 画第二层皮（底色＝纸面色只为窗角不露黑，无边框线）：看见的应当是一格便签浮在顶层，
-/// 不是套娃。
-/// 拖动＝<b>按住并移动</b>：按下先捕获、挪过死区（6px）才交系统拖动循环（WM_NCLBUTTONDOWN +
-/// HTCAPTION）——早发的那版轻点一下就黏住鼠标跟着跑，因为进入循环前的松开被吞了。
+/// 画第二层皮：底色＝纸面色只为窗角不露黑，呼吸边为 0，窗缘那条发丝线就是格子自己的——
+/// 看见的应当是一格便签浮在顶层，不是套娃。
+/// 拖动＝<b>按住并移动</b>：按下捕获指针、之后每一拍 GetCursorPos − 起点算增量挪窗。
+/// 之前两版都走 WM_NCLBUTTONDOWN 的模态拖动循环，这投影里循环会吞掉松开——轻点一下
+/// 窗口就黏着鼠标跟到天荒地老（他连报两次）。手动挪窗没有循环：松手即停，跟手 1:1。
 /// 双击＝就地编辑（B 档）：编辑框与画板同一套外皮，提交走同一把撤销账。
 /// </summary>
 internal sealed class FloatingNoteWindow : Window
 {
     private const int GWL_EXSTYLE = -20;
     private const long WS_EX_TOOLWINDOW = 0x0000_0080;
-    private const int WM_NCLBUTTONDOWN = 0x00A1;
-    private const int HTCAPTION = 0x0002;
 
-    /// <summary>按住挪过这条死区才算"要拖"：轻点、双击都不惊动拖动循环。</summary>
-    private const double DragDeadZonePx = 6;
+    /// <summary>按住挪过这条死区才算"要拖"：轻点、双击都不惊动。</summary>
+    private const double DragDeadZonePx = 3;
 
     private readonly IntPtr _hwnd;
     private readonly Grid _root;
     private TextBox? _editorBox;
     private bool _returnFired;
-    private Point? _dragStart;
+    private bool _dragging;
+    private bool _dragEngaged;
+    private Windows.Foundation.Point _dragCursor0;
+    private PointInt32 _dragWindow0;
 
     /// <summary>浮牌以任何途径收掉（回板钮、Esc、Close）都发一次；MainWindow 据此复原格子。只发一次。</summary>
     public event Action? ReturnRequested;
@@ -90,13 +92,14 @@ internal sealed class FloatingNoteWindow : Window
         };
         _root.KeyboardAccelerators.Add(esc);
 
-        // 拖动手感（他 11-07 的"点一下就自动跟随"）：按下只记起点并捕获，挪过死区才把窗口交给
-        // 系统拖动循环——那一拍按钮还按着，循环能等到松开，按住拖＝按住拖，轻点＝轻点。
+        // 拖动手感（他 11-07 连报两版的"点一下就黏着鼠标"）：彻底不走 WM_NCLBUTTONDOWN 的
+        // 模态循环。按下记鼠标与窗的基线并捕获指针，之后每一拍按 GetCursorPos 的增量挪窗；
+        // 指针被捕获，鼠标跑出窗外事件也不断，松手即停，跟手 1:1。
         _root.AddHandler(
             UIElement.PointerPressedEvent,
             new PointerEventHandler((_, e) =>
             {
-                if (Editing || IsInside(e.OriginalSource as DependencyObject, static el => el is Button or TextBox))
+                if (Editing || _dragging || IsInside(e.OriginalSource as DependencyObject, static el => el is Button or TextBox))
                 {
                     return;
                 }
@@ -106,7 +109,9 @@ internal sealed class FloatingNoteWindow : Window
                     return;
                 }
 
-                _dragStart = e.GetCurrentPoint(_root).Position;
+                _dragCursor0 = CursorPos();
+                _dragWindow0 = AppWindow.Position;
+                _dragging = true;
                 _root.CapturePointer(e.Pointer);
                 e.Handled = true;
             }),
@@ -114,33 +119,41 @@ internal sealed class FloatingNoteWindow : Window
 
         _root.PointerMoved += (_, e) =>
         {
-            if (_dragStart is not { } start)
+            if (!_dragging)
             {
                 return;
             }
 
-            var at = e.GetCurrentPoint(_root).Position;
+            var at = CursorPos();
 
-            if (Math.Abs(at.X - start.X) + Math.Abs(at.Y - start.Y) <= DragDeadZonePx)
+            if (!_dragEngaged)
             {
-                return;
+                if (Math.Abs(at.X - _dragCursor0.X) + Math.Abs(at.Y - _dragCursor0.Y) <= DragDeadZonePx)
+                {
+                    return;
+                }
+
+                _dragEngaged = true;
             }
 
-            _dragStart = null;
-            _root.ReleasePointerCapture(e.Pointer);
-            ReleaseCapture();
-            _ = SendMessage(_hwnd, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+            AppWindow.Move(new PointInt32
+            {
+                X = _dragWindow0.X + (int)Math.Round(at.X - _dragCursor0.X),
+                Y = _dragWindow0.Y + (int)Math.Round(at.Y - _dragCursor0.Y),
+            });
         };
 
         _root.PointerReleased += (_, e) =>
         {
-            _dragStart = null;
+            _dragging = false;
+            _dragEngaged = false;
             _root.ReleasePointerCapture(e.Pointer);
         };
 
         _root.PointerCanceled += (_, e) =>
         {
-            _dragStart = null;
+            _dragging = false;
+            _dragEngaged = false;
             _root.ReleasePointerCapture(e.Pointer);
         };
 
@@ -303,10 +316,21 @@ internal sealed class FloatingNoteWindow : Window
     }
 
     [DllImport("user32.dll")]
-    private static extern bool ReleaseCapture();
+    private static extern bool GetCursorPos(out NativePoint point);
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+    private static Windows.Foundation.Point CursorPos()
+    {
+        GetCursorPos(out var p);
+
+        return new Windows.Foundation.Point(p.X, p.Y);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     private static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int index);
@@ -328,8 +352,9 @@ public sealed partial class MainWindow
     /// <summary>格子 → 浮牌；Opacity 记的是浮出前的原值，回板时照原样还。</summary>
     private readonly Dictionary<string, (FloatingNoteWindow Window, double PreviousOpacity)> _floaters = new(StringComparer.Ordinal);
 
-    /// <summary>浮牌纸面外留的呼吸边（DIP）：格子的圆角与影不贴着窗框裁。</summary>
-    private const double FloaterPadPx = 4;
+    /// <summary>浮牌纸面外的呼吸边（DIP）：0——窗就是纸面，窗缘那条发丝线＝格子自己的边，
+    /// 不给他再数出一层框（他 11-07 连报两版的"两层边框"）。</summary>
+    private const double FloaterPadPx = 0;
 
     /// <summary>rail「浮」钮：把选中的文字便签映到屏幕顶层。File/Link 没有正文，跳过；已浮出的不重复开。
     /// 源格未实格化（视口外被折叠）也照浮——弹出位从世界坐标算，不依赖源格的布局盒。</summary>

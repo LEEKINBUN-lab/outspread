@@ -12,8 +12,8 @@ using Windows.UI;
 namespace Outspread.Board;
 
 /// <summary>
-/// 便签的操作条（10-22 他点了形的 v3 原型 1:1）：选中恰好一枚时，它左侧浮出三枚圆钮——
-/// 组 / 换色 / 删。分组这件事从"拖便签"里摘出来，只归组钮：
+/// 便签的操作条（10-22 他点了形的 v3 原型 1:1）：选中恰好一枚时，它左侧浮出四枚圆钮——
+/// 组 / 换色 / 浮 / 删。分组这件事从"拖便签"里摘出来，只归组钮：
 /// <list type="bullet">
 /// <item>轻点组钮＝菜单（创建分组 / 移出分组，不可用的灰着）。点便签不再被塞进某个已有组——
 /// 那正是 10-22「莫名其妙分到已有分组」的错；要并进一个具体的框，走组钮<b>按住拖</b>那一条。</item>
@@ -37,6 +37,7 @@ public sealed partial class MainWindow
     private Border? _railColor;
     private Border? _railArrange;
     private Border? _railTag;
+    private Border? _railFloat;
     private Border? _railDelete;
     private Grid? _railStack;
     private Canvas? _railHaloCanvas;
@@ -229,6 +230,10 @@ public sealed partial class MainWindow
         _railArrange = RoundButton("NoteRailArrange", ArrangeIcon(), "排列（按颜色或标签；排选中的，没选中＝整板）");
         _railTag = RoundButton("NoteRailTag", TagIcon(), "批量加标签（选中的便签；可新增标签）");
 
+        // 浮钮（他 11-04 拍的 A 档）：把选中的文字便签映到屏幕顶层当只读浮牌。只对 Text 格有意义，
+        // 点在 File/Link 上静默跳过；不进设置里那排"左侧按钮"隐藏名单（名单只有组/色/删三枚）。
+        _railFloat = RoundButton("NoteRailFloat", FloatOutIcon(), "浮出到屏幕顶层（只读快照；Esc 或回板即收）");
+
         _railGroup.Visibility = _view.IsRailButtonHidden("group") ? Visibility.Collapsed : Visibility.Visible;
         _railColor.Visibility = _view.IsRailButtonHidden("color") ? Visibility.Collapsed : Visibility.Visible;
 
@@ -238,30 +243,34 @@ public sealed partial class MainWindow
 
         host.Children.Add(_railGroup);
         host.Children.Add(_railColor);
+        host.Children.Add(_railFloat);
         host.Children.Add(_railDelete);
 
         WireRailButtons();
 
         // 晕影单独一层垫在钮下面，而不是塞进每一枚的格子里：塞进格子就得把格子撑到 58，
-        // 钮与钮的净空会从 10 变成 30（布局被影改了）。这一层正好是三枚的外接盒，
+        // 钮与钮的净空会从 10 变成 30（布局被影改了）。这一层正好是静态钮那列的外接盒，
         // 也不存在"58 的影被 38 的格子裁掉"——10-24 第一发右下角那块直边灰楔就是这么来的。
+        // 起手高度按静态钮数（组/色/浮/删＝4）算：RelayoutRail 只在排列/标签增减时跑，
+        // 静态数变了它不会来——11-05 删钮凭空消失就是外壳还停在三枚的高度（又是写死名单这一类）。
         var halos = new Canvas
         {
             Width = RailShellWidthPx,
-            Height = RailShellHeight(3),
+            Height = RailShellHeight(RailStaticCells),
             IsHitTestVisible = false,
         };
 
         _railHaloCanvas = halos;
         _railHalos.Clear();
 
-        // 四圈影先建好，用哪几圈由钮数决定（排列钮是后插进来的，不能等到那时再补影）。
+        // 影先按上限建好，用哪几圈由钮数决定（排列/标签是后插进来的，不能等到那时再补影）。
+        // 起手四枚静态钮（组/色/浮/删），RelayoutRail 每拍按实际钮数重摆。
         for (var i = 0; i < RailMaxCells; i++)
         {
             var halo = Vignette();
             Canvas.SetLeft(halo, 0);
             Canvas.SetTop(halo, i * RailPitchPx);
-            halo.Visibility = i < 3 ? Visibility.Visible : Visibility.Collapsed;
+            halo.Visibility = i < 4 ? Visibility.Visible : Visibility.Collapsed;
             _railHalos.Add(halo);
             halos.Children.Add(halo);
         }
@@ -269,7 +278,7 @@ public sealed partial class MainWindow
         var stack = new Grid
         {
             Width = RailShellWidthPx,
-            Height = RailShellHeight(3),
+            Height = RailShellHeight(RailStaticCells),
         };
 
         _railStack = stack;
@@ -280,7 +289,7 @@ public sealed partial class MainWindow
         {
             Name = "NoteRail",
             Width = RailShellWidthPx,
-            Height = RailShellHeight(3),
+            Height = RailShellHeight(RailStaticCells),
             Child = stack,
             Visibility = Visibility.Collapsed,
             IsHitTestVisible = true,
@@ -303,8 +312,11 @@ public sealed partial class MainWindow
 
     private const double RailPitchPx = RailButtonPx + RailGapPx;
 
-    /// <summary>最多五枚：组、色、排列、批量标签、删。排列/标签只在选中 ≥2 时插进来。</summary>
-    private const int RailMaxCells = 5;
+    /// <summary>最多六枚：组、色、浮、排列、批量标签、删。排列/标签只在选中 ≥2 时插进来。</summary>
+    private const int RailMaxCells = 6;
+
+    /// <summary>常驻钮：组、色、浮、删。外壳起手高度按它算——RelayoutRail 只在排列/标签增减时被叫，静态数变了它不知道。</summary>
+    private const int RailStaticCells = 4;
 
     /// <summary>外壳：晕影那一圈在左右各扩 10；高度按此刻的钮数算（上下各扩 10）。</summary>
     private const double RailShellWidthPx = RailButtonPx + (2 * ControlKit.VignetteSpreadPx);
@@ -789,6 +801,25 @@ public sealed partial class MainWindow
         return canvas;
     }
 
+    /// <summary>浮钮：一方框＋斜出右上的一箭，读作"离开这层到顶上去"。墨色跟组钮同一条（随明暗档）。</summary>
+    private static UIElement FloatOutIcon()
+    {
+        var ink = new SolidColorBrush(NoteStyling.InkFor(NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark))));
+
+        var canvas = (Canvas)Microsoft.UI.Xaml.Markup.XamlReader.Load(
+            "<Canvas xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Width='22' Height='22' IsHitTestVisible='False'>"
+            + "<Path StrokeThickness='1.5' StrokeStartLineCap='Round' StrokeEndLineCap='Round' StrokeLineJoin='Round'"
+            + " Data='M9,4.5 L4.5,4.5 L4.5,17.5 L17.5,17.5 L17.5,13 M12.5,4.5 L17.5,4.5 L17.5,9.5 M17.5,4.5 L9.5,12.5'/>"
+            + "</Canvas>");
+
+        foreach (var path in canvas.Children.OfType<Microsoft.UI.Xaml.Shapes.Path>())
+        {
+            path.Stroke = ink;
+        }
+
+        return canvas;
+    }
+
     /// <summary>
     /// 操作条那三枚的画法凭据：每枚都是"纸面＋悬停层＋按压层＋激活环"四层叠出来的，
     /// 静止时后三层必须全透明，两层的墨占比要等于令牌；删那枚必须是**圆头线帽**的 Path。
@@ -811,15 +842,15 @@ public sealed partial class MainWindow
             return;
         }
 
-        // 动态钮的出现条件：选中一格＝三枚；再加一格＝五枚（排列＋批量标签）。
+        // 动态钮的出现条件：选中一格＝四枚（组/色/浮/删）；再加一格＝六枚（排列＋批量标签）。
         SelectOnly(probe[0].Id);
         ProjectSelection();
 
         var single = RailButtons();
 
-        if (single.Length != 3 || single.Any(button => button.Name is "NoteRailArrange" or "NoteRailTag"))
+        if (single.Length != 4 || single.Any(button => button.Name is "NoteRailArrange" or "NoteRailTag"))
         {
-            problems.Add($"自检状态层: 选中 1 格时操作条应 3 枚、且没有排列/标签钮，读到 {single.Length} 枚");
+            problems.Add($"自检状态层: 选中 1 格时操作条应 4 枚、且没有排列/标签钮，读到 {single.Length} 枚");
         }
 
         _selection.Add(probe[1].Id);
@@ -827,11 +858,11 @@ public sealed partial class MainWindow
 
         var buttons = RailButtons();
 
-        if (buttons.Length != 5
+        if (buttons.Length != 6
             || buttons.All(button => button.Name != "NoteRailArrange")
             || buttons.All(button => button.Name != "NoteRailTag"))
         {
-            problems.Add($"自检状态层: 选中 2 格时操作条应 5 枚、且含排列与标签钮，读到 {buttons.Length} 枚");
+            problems.Add($"自检状态层: 选中 2 格时操作条应 6 枚、且含排列与标签钮，读到 {buttons.Length} 枚");
         }
 
         // 圆盘列的中心要落在选区中心上（四枚时原来会低 27px）。
@@ -1000,7 +1031,7 @@ public sealed partial class MainWindow
             problems.Add($"自检状态层: 选中 {SelectedNotes().Count} 格时，标签钮{(wantArrange ? "应该出现却没有" : "不该出现却在")}");
         }
 
-        if (cells.Length != (wantArrange ? 5 : 3))
+        if (cells.Length != (wantArrange ? 6 : 4))
         {
             problems.Add($"自检状态层: 操作条上有 {cells.Length} 枚钮（选中 {SelectedNotes().Count} 格）");
         }
@@ -1392,7 +1423,19 @@ public sealed partial class MainWindow
             RailPress(_railDelete, down: false);
         };
 
-        foreach (var button in new[] { _railGroup!, _railColor!, _railArrange!, _railTag!, _railDelete! })
+        _railFloat!.PointerPressed += (_, e) =>
+        {
+            RailPress(_railFloat, down: true);
+            PopOutSelectedNotes();
+            e.Handled = true;
+        };
+
+        _railFloat.PointerReleased += (_, e) =>
+        {
+            RailPress(_railFloat, down: false);
+        };
+
+        foreach (var button in new[] { _railGroup!, _railColor!, _railArrange!, _railTag!, _railFloat!, _railDelete! })
         {
             var target = button;
 
@@ -1575,6 +1618,11 @@ public sealed partial class MainWindow
 
     private void EndGroupDrag(RailDrag state)
     {
+        // 组名先记住：拖出最后一枚会把这个空组当场解散，事后再查就只剩"未命名组"。
+        var startGroupName = state.StartGroupId is { } startId
+            ? (string.IsNullOrWhiteSpace(NodeOf(startId)?.Label) ? "未命名组" : NodeOf(startId)!.Label!)
+            : null;
+
         // 松手那一拍重新问一次"现在跟哪个框碰上了"——不依赖拖动中途缓存的末态：末态只在指针
         // 还在动时刷新，拖到位后停一下再松手会漏掉，那一趟角就白碰了（他报的"只有一角移入没
         // 生效，还是只有几何中心移入才入组"就是这个）。判定抽在 JoinByGrowingFrame。
@@ -1611,7 +1659,8 @@ public sealed partial class MainWindow
         }
         else if (state.StartGroupId is not null && now is null)
         {
-            Say($"已从组“{GroupName(state.StartGroupId, NodeOf)}”移出");
+            Say($"已从组“{startGroupName ?? "未命名组"}”移出"
+                + (NodeOf(state.StartGroupId) is null ? "，分组已解散" : string.Empty));
         }
         else
         {
@@ -2230,6 +2279,9 @@ public sealed partial class MainWindow
             return;
         }
 
+        // 有浮牌在外的先收：格子要没了，浮牌还亮着就是幽灵（A 档快照不会自己察觉原件已删）。
+        CloseFloaters(_selection);
+
         var visuals = _realized
             .Where(pair => _selection.Contains(pair.Key))
             .Select(pair => pair.Value)
@@ -2501,5 +2553,31 @@ public sealed partial class MainWindow
                 frameNode.SetGroupMembers(after);
             }
         }
+
+        // 组钮拖出最后一枚＝取消分组：框不能留成空壳（他 11-03 报的"松手后分组还在"）。
+        // 只收"名单被写成空"的框；没有名单的几何框不归这条路管。
+        PurgeEmptyRosters();
+    }
+
+    /// <summary>把名单被写成空的组框从文档里删掉（拖出最后一枚／手工清空名单）。返回删了几个。</summary>
+    private int PurgeEmptyRosters()
+    {
+        var purged = 0;
+
+        foreach (var frameNode in _document.Nodes.Where(node => node.Kind == CanvasNodeKind.Group).ToList())
+        {
+            if (frameNode.GroupMemberIds is { Count: 0 })
+            {
+                _document.Remove(frameNode.Id);
+                purged++;
+            }
+        }
+
+        if (purged > 0)
+        {
+            Diagnostics.Write($"group drag: 最后一枚拖出 ⇒ 解散空组 {purged} 个");
+        }
+
+        return purged;
     }
 }

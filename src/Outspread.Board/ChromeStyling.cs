@@ -171,7 +171,7 @@ internal static class ChromeStyling
     /// 牌宽＝那几个字的自然宽，× 不占位（<paramref name="surface"/> 只用来给 × 算一块盖得住字的底）。
     /// </para>
     /// </summary>
-    public static Border Chip(NoteMarks.Mark mark, double size, Color ink, Color surface, Action onDelete, Action onPress, Action? onDouble, string tip)
+    public static Border Chip(NoteMarks.Mark mark, double size, Color ink, Color surface, Action onDelete, Action<Windows.Foundation.Point, ulong> onPress, Action? onDouble, string tip)
     {
         var scale = size / NoteType.ChipFontPx;
         var self = new Rgb(ink.R, ink.G, ink.B);
@@ -444,6 +444,7 @@ internal static class ChromeStyling
             // 这一发不归拖动：牌子是卡片上的控件，按到它就是要点它。
             args.Handled = true;
 
+            var pp = args.GetCurrentPoint(null);
             var now = DateTime.UtcNow;
             var doubled = onDouble is not null && lastPressAt is { } prev && (now - prev).TotalMilliseconds <= 500;
             lastPressAt = doubled ? null : now;
@@ -454,7 +455,7 @@ internal static class ChromeStyling
             }
             else
             {
-                onPress();
+                onPress(pp.Position, pp.Timestamp);
             }
         };
 
@@ -477,17 +478,11 @@ internal static class ChromeStyling
     /// </remarks>
     private static Grid ChipCrossLayer(double size, double scale, Color knobFill, Color body)
     {
-        var cross = new TextBlock
-        {
-            Text = "×",
-            FontFamily = NoteStyling.NoteFont,
-            FontSize = size,
-            Foreground = new SolidColorBrush(body),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-
         var crossSize = NoteType.ChipCrossHitPx * scale;
+
+        // × 用官方 Dismiss 路径，不用文字「×」：字形墨迹在 em 框里天生偏上，扣进这枚 14px 圆钮
+        // 就对不上圆心（他 11-03 的截图）。官方路径按 20×20 设计网格居中，Viewbox 居中即同心。
+        var cross = FluentIcons.Glyph(FluentIcons.Dismiss, crossSize * 0.68, body);
 
         var knob = new Border
         {

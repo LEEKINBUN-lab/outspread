@@ -327,7 +327,7 @@
                 VerticalAlignment="Top"
                 Margin="0,12,0,0" />
 
-            <!-- 左下角：逾期／即将逾期两档计数。只在非零时出现；点一档＝把那几格临时聚到中间
+            <!-- 左下角：逾期／即将逾期／未完成三档计数。只在非零时出现；点一档＝把那几格临时聚到中间
                  （只改投影不改文档，点空白／Esc 退回）。外壳与右下角那一组同一套令牌。 -->
             <Border
                 x:Name="DueStrip"
@@ -355,6 +355,17 @@
                             <Ellipse x:Name="DueSoonDot" Width="6" Height="6" />
                             <TextBlock x:Name="DueSoonCount" Text="0" />
                             <TextBlock x:Name="DueSoonLabel" Text="即将逾期" />
+                        </StackPanel>
+                    </Button>
+                    <Rectangle x:Name="DueSep2" Width="1" />
+                    <Button
+                        x:Name="DueTodoButton"
+                        Click="OnDueTodoClick"
+                        ToolTipService.ToolTip="把明确写了 @b0 的便签聚到中间">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Ellipse x:Name="DueTodoDot" Width="6" Height="6" />
+                            <TextBlock x:Name="DueTodoCount" Text="0" />
+                            <TextBlock x:Name="DueTodoLabel" Text="未完成" />
                         </StackPanel>
                     </Button>
                 </StackPanel>

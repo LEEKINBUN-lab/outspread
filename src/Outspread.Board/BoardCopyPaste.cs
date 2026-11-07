@@ -210,6 +210,31 @@ public sealed partial class MainWindow
             }
         }
 
+        // 组框自己的名单（members 数组）也是旧名字：只重写成员的 group 字段的话，贴出来的框
+        // 是一张指着源板旧格子的空名单——框在、关系没了，就是"复制粘贴后分组丢失"（他 11-03）。
+        // 名单按这一遍真贴出来的成员重写：没跟过来的旧 id 丢掉，顺序照原名单。
+        foreach (var id in pasted)
+        {
+            if (_document.Find(id) is not { Kind: CanvasNodeKind.Group } frame
+                || frame.Json["members"] is not JsonArray roster)
+            {
+                continue;
+            }
+
+            var fresh = new JsonArray();
+
+            foreach (var item in roster)
+            {
+                if (item is JsonValue value && value.TryGetValue(out string? old)
+                    && old is not null && ids.TryGetValue(old, out var mapped))
+                {
+                    fresh.Add(mapped);
+                }
+            }
+
+            frame.Json["members"] = fresh;
+        }
+
         var edges = 0;
 
         foreach (var edge in BoardFragment.EdgesOf(fragment, ids))
@@ -330,11 +355,54 @@ public sealed partial class MainWindow
     /// </remarks>
     private void SelfTestCopyPaste(List<string> problems)
     {
+        // 真文档那条路先量"复制"这一侧：本应用只写框上的 members 名单，复制成员时框必须跟着进片段
+        // （他 11-03 报的"复制粘贴后分组丢失"根因之一：这里以前只认成员的 group 字段）。
+        {
+            var saved = _document.ToJson();
+            var n1 = _document.Add(CanvasNodeKind.Text, 47000, 44000, 180, 90);
+            var n2 = _document.Add(CanvasNodeKind.Text, 47200, 44000, 180, 90);
+            var frame = _document.Add(CanvasNodeKind.Group, 46990, 43990, 400, 110);
+
+            n1.Text = "组里甲";
+            n2.Text = "组里乙";
+            frame.SetGroupMembers([n1.Id, n2.Id]);
+
+            Rebuild();
+
+            try
+            {
+                var real = BoardFragment.From(_document, [n1.Id], _boardPath ?? string.Empty, out _);
+                var hasFrame = real is not null
+                    && BoardFragment.NodesOf(real).Any(obj => Text(obj, "type") == "group");
+
+                if (!hasFrame)
+                {
+                    problems.Add("自检复制粘贴: 复制组里的便签时组框没进片段——贴过去分组就丢了");
+                }
+                else
+                {
+                    Diagnostics.Write("selftest 复制粘贴: 名单制的组框跟着成员进了片段");
+                }
+            }
+            finally
+            {
+                _document.Remove(n1.Id);
+                _document.Remove(n2.Id);
+                _document.Remove(frame.Id);
+                Rebuild();
+
+                if (_document.ToJson() != saved)
+                {
+                    problems.Add("自检复制粘贴: 组框那一发没把板子原样还回去");
+                }
+            }
+        }
+
         var lf = (char)92 + "n";
 
         var fragment = "{"
             + "\"nodes\":["
-            + "{\"id\":\"usrc1\",\"type\":\"group\",\"x\":0,\"y\":0,\"width\":400,\"height\":400,\"label\":\"一组\"},"
+            + "{\"id\":\"usrc1\",\"type\":\"group\",\"x\":0,\"y\":0,\"width\":400,\"height\":400,\"label\":\"一组\",\"members\":[\"usrc2\",\"usrc3\"]},"
             + "{\"id\":\"usrc2\",\"type\":\"text\",\"text\":\"贴进来的第一格\",\"x\":20,\"y\":20,\"width\":200,\"height\":80,\"color\":\"4\",\"group\":\"usrc1\"},"
             + "{\"id\":\"usrc3\",\"type\":\"text\",\"text\":\"贴进来的第二格\",\"x\":120,\"y\":260,\"width\":200,\"height\":80,\"group\":\"usrc1\"},"
             + "{\"id\":\"usrc4\",\"type\":\"link\",\"url\":\"https://jsoncanvas.org\",\"label\":\"一条线\",\"x\":40,\"y\":440,\"width\":200,\"height\":60}"
@@ -385,6 +453,19 @@ public sealed partial class MainWindow
 
             Check("线头一头在这一批里、另一头在外面",
                 touching.Count == 1 && batch.Contains(touching[0].FromNode) && batch.Contains(touching[0].ToNode));
+
+            // 组框自己的名单也要换到这一批（他 11-03 报的"粘贴后分组丢失"就是名单还指着旧名字）。
+            var roster = batch
+                .Select(_document.Find)
+                .FirstOrDefault(node => node is not null && node.Kind == CanvasNodeKind.Group)?
+                .GroupMemberIds?.ToList() ?? [];
+            var batchMembers = batch
+                .Select(_document.Find)
+                .Where(node => node is not null && node.Kind != CanvasNodeKind.Group)
+                .Select(node => node!.Id)
+                .ToList();
+
+            Check("组框的名单没跟着换到这一批", roster.Count == 2 && roster.All(batchMembers.Contains));
         }
 
         var anchor = PasteWorld();

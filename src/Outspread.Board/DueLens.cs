@@ -29,6 +29,9 @@ public sealed partial class MainWindow
     internal const string LensLate = "late";
     internal const string LensSoon = "soon";
 
+    /// <summary>第三档（他 11-03 拍 A 后加的）：还没完成的便签——没写 @b 也算（与筛选面板同一口径）。</summary>
+    internal const string LensTodo = "todo";
+
     /// <summary>正在看的那一档；null＝正常布局。</summary>
     private string? _lensKind;
 
@@ -41,6 +44,7 @@ public sealed partial class MainWindow
 
     private int _dueLateCount;
     private int _dueSoonCount;
+    private int _dueTodoCount;
 
     /// <summary>镜头里的"翻页"位移（屏幕像素）：聚起来的一坨超过一屏时，滚轮在两端限死地滑槽位。</summary>
     private double _lensScrollY;
@@ -51,8 +55,18 @@ public sealed partial class MainWindow
     private const double LensZoomMin = 0.6;
     private const double LensZoomMax = 2.0;
 
+    /// <summary>镜头里背景的压暗量（他 11-03 改口：背景那些字的轮廓都该看不出来）。</summary>
+    private const double LensBackdropOpacity = 0.6;
+
     /// <summary>镜头里让开的常驻浮件（右下按钮组、左上小地图）及各自进镜头前的可见性。</summary>
     private readonly List<(FrameworkElement Element, Visibility Was)> _lensChromeHidden = [];
+
+    /// <summary>最近一次"按在牌子上"的那一发：投影会把牌子带走，双击的第二发就落不到它身上了，
+    /// 只能按"同一处、500ms 内"把它认回来（他 11-03 报的"双击只会再进一次投影"）。</summary>
+    private DateTime _chipPressAt;
+    private Windows.Foundation.Point _chipPressPoint;
+    private ulong _chipPressStamp;
+    private string? _chipPressNode;
 
     private bool? _dueStripDark;
     private string? _dueStripLit;
@@ -73,6 +87,7 @@ public sealed partial class MainWindow
     {
         var late = 0;
         var soon = 0;
+        var todo = 0;
 
         foreach (var node in BoardNotes())
         {
@@ -86,14 +101,29 @@ public sealed partial class MainWindow
             {
                 soon++;
             }
+
+            // 「未完成」只认明确写了 @b0 的（他 11-03：没有这个状态就不算——没写 @b 的格子没有完成状态）。
+            if (marks.Done == false)
+            {
+                todo++;
+            }
         }
 
         _dueLateCount = late;
         _dueSoonCount = soon;
+        _dueTodoCount = todo;
 
         DueLateCount.Text = late.ToString(CultureInfo.InvariantCulture);
         DueSoonCount.Text = soon.ToString(CultureInfo.InvariantCulture);
-        DueStrip.Visibility = late + soon > 0 ? Visibility.Visible : Visibility.Collapsed;
+        DueTodoCount.Text = todo.ToString(CultureInfo.InvariantCulture);
+
+        // 逐档按需出现（他 11-03 再确认）：哪一档有 1 枚及以上才出现，分隔线只在两侧都有档时才画。
+        DueLateButton.Visibility = late > 0 ? Visibility.Visible : Visibility.Collapsed;
+        DueSoonButton.Visibility = soon > 0 ? Visibility.Visible : Visibility.Collapsed;
+        DueTodoButton.Visibility = todo > 0 ? Visibility.Visible : Visibility.Collapsed;
+        DueSep.Visibility = late > 0 && soon > 0 ? Visibility.Visible : Visibility.Collapsed;
+        DueSep2.Visibility = todo > 0 && (late > 0 || soon > 0) ? Visibility.Visible : Visibility.Collapsed;
+        DueStrip.Visibility = late + soon + todo > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         // 正看着的那一档空了（例如刚把最后一格改完）：退回正常布局，别留一个空镜头。
         if (_lensKind is { } watching && LensMatches(watching).Count == 0)
@@ -119,7 +149,7 @@ public sealed partial class MainWindow
             DueStrip.Background = new SolidColorBrush(NoteStyling.ToColor(Badge.PanelColour(dark)));
             DueStrip.BorderBrush = line;
 
-            foreach (var button in new[] { DueLateButton, DueSoonButton })
+            foreach (var button in new[] { DueLateButton, DueSoonButton, DueTodoButton })
             {
                 button.Padding = new Thickness(Badge.MemberPaddingX, Badge.MemberPaddingY, Badge.MemberPaddingX, Badge.MemberPaddingY);
                 button.MinWidth = 0;
@@ -131,14 +161,14 @@ public sealed partial class MainWindow
                 button.Foreground = muted;
             }
 
-            foreach (var label in new[] { DueLateLabel, DueSoonLabel })
+            foreach (var label in new[] { DueLateLabel, DueSoonLabel, DueTodoLabel })
             {
                 label.FontSize = Badge.FontSize;
                 label.LineHeight = Badge.LineHeight;
                 label.Foreground = muted;
             }
 
-            foreach (var count in new[] { DueLateCount, DueSoonCount })
+            foreach (var count in new[] { DueLateCount, DueSoonCount, DueTodoCount })
             {
                 count.FontSize = Badge.FontSize;
                 count.LineHeight = Badge.LineHeight;
@@ -150,10 +180,18 @@ public sealed partial class MainWindow
                 NoteMarks.BarFor(NoteMarks.DueState.Late, dark) ?? new Rgb(209, 52, 21)));
             DueSoonDot.Fill = new SolidColorBrush(NoteStyling.ToColor(NoteMarks.SoonColour(dark)));
 
+            // 未完成不是警报，是状态：用次要墨色的一枚灰点，别和上面两种到期色抢注意力。
+            DueTodoDot.Fill = muted;
+
             DueSep.Fill = line;
             DueSep.Width = Badge.SeparatorWidthPx;
             DueSep.Margin = new Thickness(Badge.SeparatorMarginX, Badge.SeparatorMarginY, Badge.SeparatorMarginX, Badge.SeparatorMarginY);
             DueSep.VerticalAlignment = VerticalAlignment.Stretch;
+
+            DueSep2.Fill = line;
+            DueSep2.Width = Badge.SeparatorWidthPx;
+            DueSep2.Margin = new Thickness(Badge.SeparatorMarginX, Badge.SeparatorMarginY, Badge.SeparatorMarginX, Badge.SeparatorMarginY);
+            DueSep2.VerticalAlignment = VerticalAlignment.Stretch;
 
             _dueStripDark = dark;
 
@@ -172,6 +210,7 @@ public sealed partial class MainWindow
 
             DueLateButton.Background = _lensKind == LensLate ? wash : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
             DueSoonButton.Background = _lensKind == LensSoon ? wash : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            DueTodoButton.Background = _lensKind == LensTodo ? wash : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         }
     }
 
@@ -185,13 +224,18 @@ public sealed partial class MainWindow
         ToggleDueLens(LensSoon);
     }
 
+    private void OnDueTodoClick(object sender, RoutedEventArgs e)
+    {
+        ToggleDueLens(LensTodo);
+    }
+
     // ---------------------------------------------------------------------
     // 聚焦态
     // ---------------------------------------------------------------------
 
     internal string? LensKind => _lensKind;
 
-    internal (int Late, int Soon) DueCounts => (_dueLateCount, _dueSoonCount);
+    internal (int Late, int Soon, int Todo) DueCounts => (_dueLateCount, _dueSoonCount, _dueTodoCount);
 
     /// <summary>自检读回：这一拍聚起来的那几格，以及每格落了多远（屏幕像素）。</summary>
     internal (List<string> Ids, Dictionary<string, (double DX, double DY)> Offsets) LensPlan => (_lensIds, _lensOffsets);
@@ -246,7 +290,7 @@ public sealed partial class MainWindow
         // 先排一拍把落点算出来（这一拍卡片的 FoldShift 已经是槽位），再从原位播过去——
         // 同一帧里排完就起动画，屏幕上看不到"先跳一下"。
         ArrangeAll();
-        AnimateDim(0.38);
+        AnimateDim(LensBackdropOpacity);
 
         // 同一拍出发：新的一档从原位弹到槽位，上一档从槽位弹回原位、同时退成灰。
         // 两条弹簧并行，才有"这边回去、那边出来"的衔接感（他 11-02 点出来的那一格）。
@@ -254,7 +298,7 @@ public sealed partial class MainWindow
         {
             if (_realized.TryGetValue(id, out var visual))
             {
-                visual.FadeTo(0.22, 1);
+                visual.FadeTo(NodeVisual.LensDimmedOpacity, 1);
                 visual.SlideSpring(0, 0, offset.DX, offset.DY);
             }
         }
@@ -266,7 +310,7 @@ public sealed partial class MainWindow
                 continue;
             }
 
-            leaving.FadeTo(1, 0.22);
+            leaving.FadeTo(1, NodeVisual.LensDimmedOpacity);
             leaving.SlideSpring(offset.DX, offset.DY, 0, 0);
         }
 
@@ -298,12 +342,15 @@ public sealed partial class MainWindow
         AnimateDim(0);
         ArrangeAll();
 
+        // 镜头里压着的选中（双击编辑时会选一下那格）在退出后要把框画回来。
+        ProjectSelection();
+
         foreach (var (id, offset) in offsets)
         {
             if (_realized.TryGetValue(id, out var visual))
             {
                 // 排版已经把位移收回去了，先从"槽位上"那一格弹回原位，同时亮回正常。
-                visual.FadeTo(0.22, 1);
+                visual.FadeTo(NodeVisual.LensDimmedOpacity, 1);
                 visual.SlideSpring(offset.DX, offset.DY, 0, 0);
             }
         }
@@ -416,6 +463,8 @@ public sealed partial class MainWindow
                 return marks.Done == true;
             case "done:0":
                 return marks.Done == false;
+            case LensTodo:
+                return marks.Done == false;
         }
 
         if (kind.StartsWith("tag:", StringComparison.Ordinal))
@@ -439,9 +488,10 @@ public sealed partial class MainWindow
             return null;
         }
 
-        if (mark.Done is { } done)
+        if (mark.Done is not null)
         {
-            return done ? "done:1" : "done:0";
+            // A（他 11-03 拍）：@b 牌单击＝切换完成，不进镜头——完成态浏览走左下「未完成」那档。
+            return null;
         }
 
         if (mark.IsDate)
@@ -457,21 +507,91 @@ public sealed partial class MainWindow
         return "tag:" + mark.Label;
     }
 
-    /// <summary>点牌身＝聚焦这一类；再点同一枚（隔过双击窗口）＝退出。空档不回声的规矩照旧。</summary>
-    private void ChipLensFrom(string nodeId, NoteMarks.Mark mark)
+    /// <summary>点牌身＝聚焦这一类；再点同一枚（隔过双击窗口）＝退出。空档不回声的规矩照旧。
+    /// 第二发又快又落在原处（哪怕实际打在别的东西上）＝双击，直接进编辑、不换镜头。
+    /// @b 那枚是开关（A）：单击＝切换完成，双击＝编辑便签。</summary>
+    private void ChipLensFrom(string nodeId, NoteMarks.Mark mark, Windows.Foundation.Point at, ulong stamp)
     {
+        if (mark.Done is not null)
+        {
+            _chipPressNode = null;
+            ToggleDoneFrom(nodeId, mark.Source);
+
+            return;
+        }
+
         if (ChipLensKind(mark) is not { } kind)
         {
             return;
         }
 
+        if (_chipPressNode is not null && stamp != _chipPressStamp
+            && (DateTime.UtcNow - _chipPressAt).TotalMilliseconds <= DoubleClickWindowMs
+            && NearChipPress(at))
+        {
+            EditChipTarget();
+
+            return;
+        }
+
+        _chipPressAt = DateTime.UtcNow;
+        _chipPressPoint = at;
+        _chipPressStamp = stamp;
+        _chipPressNode = nodeId;
+
         ToggleDueLens(kind);
+
+        if (_lensKind is null)
+        {
+            _chipPressNode = null;
+        }
     }
 
     /// <summary>双击牌身＝编辑便签：把第一发点出来的镜头收掉，再开编辑框。</summary>
     private void ChipEditFrom(string nodeId, NoteMarks.Mark mark)
     {
+        _chipPressNode = null;
+
         if (ChipLensKind(mark) is { } kind && _lensKind == kind)
+        {
+            ExitDueLens();
+        }
+
+        BeginEdit(nodeId);
+    }
+
+    /// <summary>Root 那一发（handledEventsToo）：第二发落到牌子之外——投影把牌子带走了——也要认成双击。</summary>
+    private void TryChipDoubleEdit(Windows.Foundation.Point at, ulong stamp)
+    {
+        if (_chipPressNode is null || stamp == _chipPressStamp)
+        {
+            return;
+        }
+
+        if ((DateTime.UtcNow - _chipPressAt).TotalMilliseconds > DoubleClickWindowMs || !NearChipPress(at))
+        {
+            _chipPressNode = null;
+
+            return;
+        }
+
+        EditChipTarget();
+    }
+
+    private bool NearChipPress(Windows.Foundation.Point at)
+        => Math.Abs(at.X - _chipPressPoint.X) <= 6 && Math.Abs(at.Y - _chipPressPoint.Y) <= 6;
+
+    /// <summary>收掉镜头、打开被点那格的编辑器（双击两发共用这一条收口）。</summary>
+    private void EditChipTarget()
+    {
+        if (_chipPressNode is not { } nodeId)
+        {
+            return;
+        }
+
+        _chipPressNode = null;
+
+        if (_lensKind is not null)
         {
             ExitDueLens();
         }
@@ -491,6 +611,8 @@ public sealed partial class MainWindow
             case "done:1":
                 return "已完成";
             case "done:0":
+                return "未完成";
+            case LensTodo:
                 return "未完成";
         }
 
@@ -688,7 +810,17 @@ public sealed partial class MainWindow
     /// </summary>
     private void SelfTestDueLens(List<string> problems)
     {
-        var (lateBefore, soonBefore) = DueCounts;
+        var (lateBefore, soonBefore, todoBefore) = DueCounts;
+
+        // 起点的按需出现：底座板上哪一档是 0，它现在就该藏着（夹具通常 0 档就有）。
+        if ((lateBefore > 0) != (DueLateButton.Visibility == Visibility.Visible)
+            || (soonBefore > 0) != (DueSoonButton.Visibility == Visibility.Visible)
+            || (todoBefore > 0) != (DueTodoButton.Visibility == Visibility.Visible))
+        {
+            problems.Add(
+                $"selftest 聚焦: 起点三档的按需出现对不上（{lateBefore}/{DueLateButton.Visibility}、" +
+                $"{soonBefore}/{DueSoonButton.Visibility}、{todoBefore}/{DueTodoButton.Visibility}）");
+        }
         var today = _view.Today;
         var originX = Math.Round(_view.ToWorldX(260));
         var originY = Math.Round(_view.ToWorldY(240));
@@ -713,6 +845,10 @@ public sealed partial class MainWindow
         var plain = _document.Add(CanvasNodeKind.Text, originX + 220, originY + 140, 180, 90);
         plain.Text = "没有日期";
 
+        // 未完成那一档只认明确 @b0 的；plain 这种没写 @b 的不该计入（下面按 +1 断）。
+        var openA = _document.Add(CanvasNodeKind.Text, originX + 440, originY + 140, 180, 90);
+        openA.Text = "@b0\n未完成甲";
+
         var group = _document.Add(CanvasNodeKind.Group, originX - 10, originY - 10, 200, 110);
         group.Label = "自检聚焦组";
         group.SetGroupMembers([lateA.Id]);
@@ -721,7 +857,7 @@ public sealed partial class MainWindow
 
         Rebuild();
 
-        var (lateAfter, soonAfter) = DueCounts;
+        var (lateAfter, soonAfter, todoAfter) = DueCounts;
 
         if (lateAfter != lateBefore + 2 || soonAfter != soonBefore + 2)
         {
@@ -730,16 +866,43 @@ public sealed partial class MainWindow
                 "（完成的那格与 +3 天外的都不该计入）");
         }
 
-        if (DueLateCount.Text != lateAfter.ToString(CultureInfo.InvariantCulture)
-            || DueSoonCount.Text != soonAfter.ToString(CultureInfo.InvariantCulture))
+        // 未完成那档（他 11-03 拍 A 后加的）：只数明确 @b0 的——加进来 15 格里只有 openA 带 @b0，
+        // doneLate 是 @b1、其余没写 @b，所以应 +1。
+        if (todoAfter != todoBefore + 1)
         {
-            problems.Add($"selftest 聚焦: 状态条上的字与计数对不上（{DueLateCount.Text}/{DueSoonCount.Text}）");
+            problems.Add($"selftest 聚焦: 未完成计数 {todoBefore} → {todoAfter}，应 +1（只认 @b0；没写 @b 的不算）");
+        }
+
+        if ((lateAfter > 0) != (DueLateButton.Visibility == Visibility.Visible)
+            || (soonAfter > 0) != (DueSoonButton.Visibility == Visibility.Visible)
+            || (todoAfter > 0) != (DueTodoButton.Visibility == Visibility.Visible))
+        {
+            problems.Add(
+                $"selftest 聚焦: 三档的按需出现对不上（{lateAfter}/{DueLateButton.Visibility}、" +
+                $"{soonAfter}/{DueSoonButton.Visibility}、{todoAfter}/{DueTodoButton.Visibility}）");
+        }
+
+        if (DueLateCount.Text != lateAfter.ToString(CultureInfo.InvariantCulture)
+            || DueSoonCount.Text != soonAfter.ToString(CultureInfo.InvariantCulture)
+            || DueTodoCount.Text != todoAfter.ToString(CultureInfo.InvariantCulture))
+        {
+            problems.Add($"selftest 聚焦: 状态条上的字与计数对不上（{DueLateCount.Text}/{DueSoonCount.Text}/{DueTodoCount.Text}）");
         }
 
         if (DueStrip.Visibility != Visibility.Visible)
         {
             problems.Add("selftest 聚焦: 有逾期/即将逾期时状态条没出现");
         }
+
+        // 点「未完成」那档＝同一个镜头，聚的就是它数出来的那些。
+        EnterDueLens(LensTodo);
+
+        if (LensKind != LensTodo || LensPlan.Ids.Count != todoAfter)
+        {
+            problems.Add($"selftest 聚焦: 点「未完成」聚了 {LensPlan.Ids.Count} 格、计数 {todoAfter}（kind={LensKind ?? "无"}）");
+        }
+
+        ExitDueLens();
 
         // 镜头里右下按钮组与左上小地图要让开（他 11-03 报的重叠）：先记下进镜头前的样子，退出后要对上。
         var badgeBefore = BadgeHost.Visibility;
@@ -769,9 +932,50 @@ public sealed partial class MainWindow
             problems.Add($"selftest 聚焦: 聚起来的是 {string.Join("、", ids)}——逾期那两格之外的多进来了");
         }
 
-        if (offsets.Count == 0 || Math.Abs(LensDimOpacity - 0.38) > 0.01)
+        if (offsets.Count == 0 || Math.Abs(LensDimOpacity - LensBackdropOpacity) > 0.01)
         {
-            problems.Add($"selftest 聚焦: 位移 {offsets.Count} 格、压暗 {LensDimOpacity:0.##}（应非零且 0.38）");
+            problems.Add($"selftest 聚焦: 位移 {offsets.Count} 格、压暗 {LensDimOpacity:0.##}（应非零且 {LensBackdropOpacity:0.##}）");
+        }
+
+        // 双击要按"投影后的位置"命中（他 11-03 报的双击打到了别的格子）：在投影落点上放一枚
+        // 诱饵卡（文档坐标正好压在那个屏幕位置），命中仍必须是 lateA。
+        {
+            var homeRect = ScreenRectOf(lateA);
+            var planned = offsets[lateA.Id];
+            var center = new Windows.Foundation.Point(
+                homeRect.X + planned.DX + (homeRect.Width / 2),
+                homeRect.Y + planned.DY + (homeRect.Height / 2));
+            var decoy = _document.Add(
+                CanvasNodeKind.Text,
+                Math.Round(_view.ToWorldX(center.X) - 100),
+                Math.Round(_view.ToWorldY(center.Y) - 60),
+                200,
+                120);
+
+            decoy.Text = "诱饵";
+
+            Rebuild();
+
+            try
+            {
+                // 点在诱饵中心：这一发在文档坐标里必然落在诱饵身上，所以只有"按投影位置判"才可能命中 lateA。
+                var probe = new Windows.Foundation.Point(
+                    _view.ToScreenX(decoy.X + (decoy.Width / 2)),
+                    _view.ToScreenY(decoy.Y + (decoy.Height / 2)));
+                var tap = DoubleTapTarget(probe);
+
+                Diagnostics.Write($"selftest 聚焦双击探针: 点 {probe.X:0.#},{probe.Y:0.#} 诱饵 {decoy.X:0.#},{decoy.Y:0.#} → {tap.Route}/{tap.Node?.Id ?? "无"}（应编辑 {lateA.Id}）");
+
+                if (tap.Route != "编辑" || tap.Node?.Id != lateA.Id)
+                {
+                    problems.Add($"selftest 聚焦: 双击投影那一格命中了「{tap.Route}／{tap.Node?.Id ?? "无"}」，应编辑 {lateA.Id}");
+                }
+            }
+            finally
+            {
+                _document.Remove(decoy.Id);
+                Rebuild();
+            }
         }
 
         if (_document.ToJson() != before)
@@ -811,7 +1015,7 @@ public sealed partial class MainWindow
                 continue;   // 屏外被剔除的那几格不参与这一发
             }
 
-            if (Math.Abs(visual.Opacity - 0.22) > 0.02 || visual.IsHitTestVisible)
+            if (Math.Abs(visual.Opacity - NodeVisual.LensDimmedOpacity) > 0.02 || visual.IsHitTestVisible)
             {
                 problems.Add($"selftest 聚焦: 背景那一格没有退成灰（不透明 {visual.Opacity:0.##}、可点 {visual.IsHitTestVisible}）");
             }
@@ -823,6 +1027,17 @@ public sealed partial class MainWindow
         }
 
         // 编辑框跟着槽位：点进被聚的一格，框要摆在那格屏幕上该在的地方。
+        // 双击那一发会先选中这格（OnSurfaceDoubleTapped → SelectOnly）：镜头里不许画选中框——
+        // 那套几何按文档位置摆，格子被投影带走后只剩背景里一个空框（他 11-03 报的）。
+        SelectOnly(lateA.Id);
+
+        if (SelectionOutline.Width > 0 || SelectionInner.Width > 0 || _rail is { Visibility: Visibility.Visible })
+        {
+            problems.Add(
+                $"selftest 聚焦: 镜头里选中后背景冒出了框/操作条（描边 {SelectionOutline.Width:0.#}、" +
+                $"内线 {SelectionInner.Width:0.#}、条 {(_rail is { Visibility: Visibility.Visible } ? "亮着" : "藏")}）");
+        }
+
         BeginEdit(lateA.Id);
 
         if (_editor is null)
@@ -842,6 +1057,16 @@ public sealed partial class MainWindow
             CloseEditor(commit: false);
         }
 
+        // 退出镜头：压着的选中要把框画回来；下一段换档测试从干净的镜头重来。
+        ExitDueLens();
+
+        if (SelectionOutline.Width <= 0)
+        {
+            problems.Add("selftest 聚焦: 退出镜头后选中框没画回来");
+        }
+
+        EnterDueLens(LensLate);
+
         // 换档：上一档要边走边回家，新的一档同时出发——这是"衔接感"那一格。
         EnterDueLens(LensSoon);
 
@@ -859,7 +1084,7 @@ public sealed partial class MainWindow
         {
             problems.Add("selftest 聚焦: 换档后新的一档没有落点");
         }
-        else if (_realized.TryGetValue(lateA.Id, out var faded) && Math.Abs(faded.Opacity - 0.22) > 0.02)
+        else if (_realized.TryGetValue(lateA.Id, out var faded) && Math.Abs(faded.Opacity - NodeVisual.LensDimmedOpacity) > 0.02)
         {
             problems.Add($"selftest 聚焦: 换档后上一档没有退成灰（{faded.Opacity:0.##}）");
         }
@@ -892,7 +1117,7 @@ public sealed partial class MainWindow
         else
         {
             Diagnostics.Write(
-                $"selftest 聚焦: 计数 {lateAfter}/{soonAfter}、聚 {ids.Count} 格（压暗 0.38、位移 {offsetCount}）、" +
+                $"selftest 聚焦: 计数 {lateAfter}/{soonAfter}、聚 {ids.Count} 格（压暗 {LensBackdropOpacity:0.##}、位移 {offsetCount}）、" +
                 "退出三样都收回；文档零改动");
         }
 
@@ -912,7 +1137,7 @@ public sealed partial class MainWindow
 
         EnterDueLens(LensSoon);
 
-        if (LensKind != LensLate || LensPlan.Ids.Count != guardedIds || Math.Abs(LensDimOpacity - 0.38) > 0.01)
+        if (LensKind != LensLate || LensPlan.Ids.Count != guardedIds || Math.Abs(LensDimOpacity - LensBackdropOpacity) > 0.01)
         {
             problems.Add(
                 $"selftest 聚焦: 聚焦里点空档动了状态（kind={LensKind ?? "null"}、" +
@@ -1055,7 +1280,7 @@ public sealed partial class MainWindow
 
         void Cleanup()
         {
-            foreach (var temp in new[] { group, plain, doneLate, soonB, soonA, lateB, lateA })
+            foreach (var temp in new[] { group, openA, plain, doneLate, soonB, soonA, lateB, lateA })
             {
                 _document.Remove(temp.Id);
             }

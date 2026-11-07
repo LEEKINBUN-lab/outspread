@@ -48,11 +48,14 @@ public static class BoardFragment
 
         // 组跟着成员走：只搬成员会把那圈虚线框丢在原地，贴过去的一堆格子就不再是一件东西。
         // 规则是"组里有一格被选中，组就进来"——半选也要有框，否则贴出来的排布和屏幕上看到的不一样。
+        // 两种成员关系都认：本应用写的是框上的 members 名单（他 11-03 报的"复制粘贴后分组丢失"
+        // 就是这里只认了成员的 group 字段）；别的工具写的板子用成员的 group 字段。
         var groupIds = document.Nodes
             .Where(node => node.Kind == CanvasNodeKind.Group
-                && document.Nodes.Any(member => member.Kind != CanvasNodeKind.Group
-                    && member.GetString("group") == node.Id
-                    && taken.Contains(member.Id, StringComparer.Ordinal)))
+                && ((node.GroupMemberIds?.Any(member => taken.Contains(member, StringComparer.Ordinal)) ?? false)
+                    || document.Nodes.Any(member => member.Kind != CanvasNodeKind.Group
+                        && member.GetString("group") == node.Id
+                        && taken.Contains(member.Id, StringComparer.Ordinal))))
             .Select(node => node.Id)
             .ToList();
 

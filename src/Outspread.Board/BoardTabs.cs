@@ -166,6 +166,11 @@ public sealed partial class MainWindow
         // TabView 的 Padding 只落在自己的 TabListView 上。
         BoardTabs.Padding = new Thickness(8, TabStrip.StripHeight - TabStrip.TabHeight, 0, 0);
 
+        // 右边让出"加号＋设置＋保存"整条带（TitleBarHost 的 Padding 只含三枚窗口按钮）：
+        // 不让的话标签一多，最后一枚就滑到保存／设置底下——11-06 他报的重叠就是这条。
+        // 让位之后标签真的放不下了，TabView 自己的滚动箭头才接手，而不是压到钮上。
+        BoardTabs.Margin = new Thickness(0, 0, TabStrip.TabStripRightInsetPx, 0);
+
         // 点到别处＝这一格改名到此为止。**不能只等 LostFocus**：这一版按一块不持焦点的区域（板面、
         // 条上的空白、别的标签）不会把焦点从 TextBox 拿走，所以"点了别处还在改名"是必然不是偶发
         // ——板子那侧的编辑器早就为同一条写过注释（MainWindow.xaml.cs:700-706）。
@@ -388,9 +393,10 @@ public sealed partial class MainWindow
             left = box.Right + 4;
         }
 
-        // 右端那枚设置入口也占地方：加号最多停到它左边 8px，别在标签多的时候钻到它底下。
-        var available = TitleBarHost.ActualWidth - TitleBarHost.Padding.Right
-            - TabStrip.SettingsInsetPx - (TabStrip.SettingsPx * 2) - 14;
+        // 右端那两枚（保存／设置）也占地方：加号最多探进按钮带 4px，别在标签多的时候钻到它底下。
+        // 标签条自己的右界（TabStripRightInsetPx）已经在按钮带之前让出加号这一格，
+        // 这个钳位只在标签真的满到头时兜底。
+        var available = TitleBarHost.ActualWidth - TitleBarHost.Padding.Right - TabStrip.EndButtonsZonePx;
         left = Math.Clamp(left, 8, Math.Max(8, available - TabStrip.AddPx - 4));
 
         var top = (TabStrip.StripHeight - TabStrip.AddPx) / 2 + TabStrip.AddOpticalDropPx;
@@ -1456,6 +1462,9 @@ public sealed partial class MainWindow
         CancelRename();
 
         FlushCurrentBoard();
+
+        // 浮牌是这块板的快照：切走就全收（A 档不跨板跟人，收比跟稳）。
+        CloseAllFloaters();
 
         LoadBoard(boardPath);
 
@@ -3014,9 +3023,9 @@ public sealed partial class MainWindow
                 && body.Children.Count > 0
                 && body.Children[0] is Border header
                 && header.Child is Grid headerGrid
-                && headerGrid.ColumnDefinitions.Count == 6)
+                && headerGrid.ColumnDefinitions.Count == ManagerDataColumns + 1)
             {
-                for (var column = 0; column < 5; column++)
+                for (var column = 0; column < ManagerDataColumns; column++)
                 {
                     if (headerGrid.ColumnDefinitions[column].Width.GridUnitType != GridUnitType.Star)
                     {
@@ -3024,8 +3033,8 @@ public sealed partial class MainWindow
                     }
                 }
 
-                if (headerGrid.ColumnDefinitions[5].Width.GridUnitType != GridUnitType.Pixel
-                    || Math.Abs(headerGrid.ColumnDefinitions[5].Width.Value - ManagerActionsWidth) > 0.5)
+                if (headerGrid.ColumnDefinitions[ManagerDataColumns].Width.GridUnitType != GridUnitType.Pixel
+                    || Math.Abs(headerGrid.ColumnDefinitions[ManagerDataColumns].Width.Value - ManagerActionsWidth) > 0.5)
                 {
                     problems.Add($"画板表动作列不是固定 {ManagerActionsWidth:0}px");
                 }

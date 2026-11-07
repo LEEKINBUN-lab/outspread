@@ -418,6 +418,16 @@ public static class TabStrip
     /// <summary>它与右侧三枚窗口按钮之间留 6px；加号再留 8px，别顶到它。</summary>
     public const double SettingsInsetPx = 6;
 
+    /// <summary>
+    /// 标题条右端的按钮带：设置＋保存两枚各 30、各带 6px 缝。标签条与加号的右界都从这一格推——
+    /// 11-06 他报"标签页和右侧的按钮重叠"：当时预留只算了三枚窗口按钮（138），保存／设置整个
+    /// 坐在标签条的可达区间里，标签一多最后一枚就压到钮底下。
+    /// </summary>
+    public const double EndButtonsZonePx = (SettingsInsetPx + SettingsPx) * 2;
+
+    /// <summary>标签条的右界＝按钮带再加加号一格＋4px 缝：标签再多也在加号左边收住，谁也不压谁。</summary>
+    public const double TabStripRightInsetPx = EndButtonsZonePx + AddPx + 4;
+
     /// <summary>标签之间的发丝线上下各缩多少。</summary>
     public const double SeparatorInset = 9;
 

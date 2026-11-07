@@ -24,8 +24,9 @@ namespace Outspread.Board;
 /// </remarks>
 public sealed partial class MainWindow
 {
-    /// <summary>表格内容最多这么宽，再宽就居中留边——不把最后几列挤在窗口右边。</summary>
-    private const double ManagerBodyMaxWidth = 1200;
+    /// <summary>表格内容最多这么宽，再宽就居中留边——不把最后几列挤在窗口右边。
+    /// 11-03 加了「位置」那一列之后放到 1320：六列再挤，路径就只剩「D:\…\b…」，等于没加。</summary>
+    private const double ManagerBodyMaxWidth = 1320;
 
     private const double ManagerActionsWidth = 102;
 
@@ -39,6 +40,12 @@ public sealed partial class MainWindow
     /// <summary>名字前面那格状态牌的固定宽度：开着的行有牌、没开的行留空，
     /// 名字才不会一行一个起点（表头「名称」也跟着这个宽度缩进）。</summary>
     private const double ManagerStatusSlot = 64;
+
+    /// <summary>表头写这几列，行也按这几列摆——两处读同一份，加一列不会只改到一半。</summary>
+    private static readonly string[] ManagerColumnLabels = ["名称", "创建时间", "修改时间", "位置", "便签", "大小"];
+
+    /// <summary>数据列的份数；动作列永远排在它后面那一格。</summary>
+    private const int ManagerDataColumns = 6;
 
     private bool _boardManagerOpen;
     private Border? _managerPanel;
@@ -263,14 +270,17 @@ public sealed partial class MainWindow
     {
         var grid = new Grid { ColumnSpacing = ManagerColumnGap };
 
-        // 五列数据全部是星号列 + 最小宽度：窗口变窄时由它们一起缩，动作列永远留在可视区。
+        // 六列数据全部是星号列 + 最小宽度：窗口变窄时由它们一起缩，动作列永远留在可视区。
         // 旧版把 260/150/150/72/88 写死，窄窗时右端直接越出可视区（他 10-26 的截图）。
         // 日期列的最低宽度也放低：窄窗时宁可省略成「2026-10-…」，也不能把右侧三枚动作挤出屏幕。
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star), MinWidth = 100 });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star), MinWidth = 60 });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star), MinWidth = 60 });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.5, GridUnitType.Star), MinWidth = 36 });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.6, GridUnitType.Star), MinWidth = 40 });
+        var stars = new double[] { 1.15, 1.0, 1.0, 1.35, 0.5, 0.6 };
+        var min = new double[] { 100, 60, 60, 120, 36, 40 };
+
+        for (var column = 0; column < ManagerDataColumns; column++)
+        {
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(stars[column], GridUnitType.Star), MinWidth = min[column] });
+        }
+
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ManagerActionsWidth) });
 
         var tint = NoteStyling.IsDark ? new Rgb(255, 255, 255) : new Rgb(27, 29, 31);
@@ -278,12 +288,13 @@ public sealed partial class MainWindow
         if (isHeader)
         {
             var muted = NoteStyling.ToColor(Badge.Muted(NoteStyling.IsDark));
-            var labels = new[] { "名称", "创建时间", "修改时间", "便签", "大小" };
+            var labels = ManagerColumnLabels;
 
             for (var column = 0; column < labels.Length; column++)
             {
-                // 五列表头压在同一中线上：名称也居中（他 10-26 的第二条——只有它靠左，读起来像漏对齐）。
-                var cell = ManagerText(labels[column], muted, column, center: true);
+                // 表头压在同一中线上：名称也居中（他 10-26 的第二条——只有它靠左，读起来像漏对齐）。
+                // 「位置」是唯一靠左的那列：路径从盘符读起才有用，居中会把开头截成省略号。
+                TextBlock cell = ManagerText(labels[column], muted, column, center: column != 3);
                 cell.Opacity = 1;
                 cell.FontSize = 12;
                 cell.FontWeight = Microsoft.UI.Text.FontWeights.Medium;
@@ -326,7 +337,7 @@ public sealed partial class MainWindow
                     HorizontalAlignment = HorizontalAlignment.Stretch,
                     Background = new SolidColorBrush(NoteStyling.WithAlpha(tint, 0.11)),
                 };
-                Grid.SetColumnSpan(rule, 6);
+                Grid.SetColumnSpan(rule, ManagerDataColumns + 1);
                 grid.Children.Add(rule);
             }
 
@@ -522,6 +533,70 @@ public sealed partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// 画板表的列：表头写几列、行就摆几列，动作列永远在最后那一格（他 11-03 要加「位置」那一列）。
+    /// 加一列最容易错的正是"表头改了、行没改"——那会整行左移一格，看着像数据错了。
+    /// </summary>
+    private void SelfTestManagerColumns(List<string> problems)
+    {
+        var wasOpen = _boardManagerOpen;
+
+        try
+        {
+            SetBoardManager(true);
+
+            if (_managerPanel?.Child is not Grid body || body.Children.Count < 2 || _managerRows is null)
+            {
+                problems.Add("自检画板表列: 面板里没拿到表头＋行容器");
+
+                return;
+            }
+
+            if (_managerRows.Children.Count == 0)
+            {
+                problems.Add("自检画板表列: 这块板上没有一行板子——前置没立起来");
+
+                return;
+            }
+
+            var header = (Grid)((Border)body.Children[0]).Child!;
+            var headerTexts = header.Children.OfType<TextBlock>().Select(block => block.Text).ToList();
+            var firstRow = (Grid)((Border)_managerRows.Children[0]).Child!;
+
+            void Check(string label, bool held)
+            {
+                if (!held)
+                {
+                    problems.Add($"自检画板表列: {label}");
+                }
+            }
+
+            Check($"表头不是那 {ManagerColumnLabels.Length} 列（读成 {string.Join("/", headerTexts)}）",
+                headerTexts.Count == ManagerColumnLabels.Length && headerTexts.SequenceEqual(ManagerColumnLabels));
+            Check("表头与行的列数不是一套（加一列只改到一半）",
+                firstRow.ColumnDefinitions.Count == header.ColumnDefinitions.Count &&
+                firstRow.ColumnDefinitions.Count == ManagerDataColumns + 1);
+
+            var place = firstRow.Children.OfType<TextBlock>()
+                .FirstOrDefault(block => Grid.GetColumn(block) == 3)?.Text;
+            var want = Path.GetDirectoryName(_boardPath);
+
+            Check($"「位置」那格不是这块板所在的文件夹（{place ?? "没这格"} ≠ {want}）",
+                place is not null && string.Equals(place.TrimEnd('\\'), want, StringComparison.OrdinalIgnoreCase));
+
+            Check("动作列没让在最后那一格", firstRow.Children.Any(
+                child => child is StackPanel { Children.Count: 3 } panel && Grid.GetColumn(panel) == ManagerDataColumns));
+
+            Diagnostics.Write(
+                $"selftest 画板表列: {string.Join("/", ManagerColumnLabels)}＋动作 {ManagerDataColumns + 1} 列对齐，" +
+                $"「位置」＝{place}（{headerTexts.Count} 列表头、{firstRow.ColumnDefinitions.Count} 列壳）");
+        }
+        finally
+        {
+            SetBoardManager(wasOpen);
+        }
+    }
+
     private Border ManagerRow(BoardLine line, bool isLast)
     {
         var shell = ManagerRowGrid(isHeader: false, isLast: isLast);
@@ -535,8 +610,16 @@ public sealed partial class MainWindow
         // 值用正文墨色、不用次要灰：13px 的灰字在 40px 行里看起来就是"单薄"。
         grid.Children.Add(ManagerText(line.Created.ToString("yyyy-MM-dd HH:mm"), ink, 1, center: true));
         grid.Children.Add(ManagerText(line.Changed.ToString("yyyy-MM-dd HH:mm"), ink, 2, center: true));
-        grid.Children.Add(ManagerText(line.Notes < 0 ? "读不出" : line.Notes.ToString(), ink, 3, center: true));
-        grid.Children.Add(ManagerText(line.Notes < 0 ? "—" : AttachmentStore.FormatSize(line.Bytes), ink, 4, center: true));
+
+        // 「位置」＝这个文件躺在哪个文件夹：同名板子（他 11-03 那两枚「快速入门」）只有靠这列才分得开。
+        // 次要灰 + 12 号：整条路径比板名长得多，全用正文墨色会把这张表压成一片字。
+        var folder = Path.GetDirectoryName(line.Path) ?? line.Path;
+        var place = ManagerText(folder, muted, 3, center: false, fontSize: 12);
+        ToolTipService.SetToolTip(place, line.Path);
+        grid.Children.Add(place);
+
+        grid.Children.Add(ManagerText(line.Notes < 0 ? "读不出" : line.Notes.ToString(), ink, 4, center: true));
+        grid.Children.Add(ManagerText(line.Notes < 0 ? "—" : AttachmentStore.FormatSize(line.Bytes), ink, 5, center: true));
 
         var actions = new StackPanel
         {
@@ -550,7 +633,7 @@ public sealed partial class MainWindow
         actions.Children.Add(ManagerIcon(FluentIcons.FolderOpen, "在文件夹中打开", muted, () => RevealBoardFile(line.Path)));
         actions.Children.Add(ManagerIcon(FluentIcons.Delete, "删除", muted, () => DeleteBoardFromManager(line.Path)));
 
-        Grid.SetColumn(actions, 5);
+        Grid.SetColumn(actions, ManagerDataColumns);
         grid.Children.Add(actions);
 
         return shell;
@@ -606,12 +689,12 @@ public sealed partial class MainWindow
         return cell;
     }
 
-    private static TextBlock ManagerText(string text, Windows.UI.Color color, int column, bool center = false)
+    private static TextBlock ManagerText(string text, Windows.UI.Color color, int column, bool center = false, double fontSize = 14)
     {
         var block = new TextBlock
         {
             Text = text,
-            FontSize = 14,
+            FontSize = fontSize,
             TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = VerticalAlignment.Center,
             Foreground = new SolidColorBrush(color),

@@ -379,6 +379,39 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
+    /// 点「已完成／未完成」那枚牌：把正文里的 <c>@b0</c>／<c>@b1</c> 换过来
+    /// （他 11-03 拍 A 恢复的单击门；完成态的镜头改走左下「未完成」那一档）。
+    /// 走的仍是"改文档"那一扇门——一步可撤销、会存盘，不是只翻一个视图状态。</summary>
+    private void ToggleDoneFrom(string nodeId, string token)
+    {
+        if (NodeOf(nodeId) is not { } node || node.Kind != CanvasNodeKind.Text)
+        {
+            return;
+        }
+
+        var next = !(Tags.Read(node.Text).Done ?? false);
+        var written = Tags.SetDone(node.Text, next);
+
+        if (string.Equals(written, node.Text, StringComparison.Ordinal))
+        {
+            // 换不掉却说换了，比不换更糟。
+            Say($"正文中未找到“{token}”，未作修改");
+            return;
+        }
+
+        BeginGesture(next ? "标为已完成" : "标为未完成");
+
+        node.Text = written;
+        FitNoteHeight(node);
+
+        EndGesture();
+        Rebuild();
+        SaveSoon();
+
+        Say(next ? "已标为已完成 · 可按 Ctrl＋Z 撤销" : "已标为未完成 · 可按 Ctrl＋Z 撤销");
+    }
+
+    /// <summary>
     /// 把一枚标记从隐藏属性块挪进编辑器正文（单独一行）并选中它，等用户改写。
     /// 日期/标签/序号都只是 token，改法一致；提交时解析器会把它重新认成标记。
     /// </summary>
@@ -453,7 +486,7 @@ public sealed partial class MainWindow
 
                     PaintEditorChips();
                 },
-                () => BeginMarkEdit(source),
+                (_, _) => BeginMarkEdit(source),
                 null,
                 "点一下＝改这枚标记；点 × 去掉"));
         }
@@ -546,8 +579,9 @@ public sealed partial class MainWindow
         var before = _document.ToJson();
         var mark = target.Chips[0];
         var kind = ChipLensKind(mark)!;
+        var spot = new Windows.Foundation.Point(640, 360);
 
-        ChipLensFrom(target.Node.Id, mark);
+        ChipLensFrom(target.Node.Id, mark, spot, 11);
 
         if (LensKind != kind || !LensPlan.Ids.Contains(target.Node.Id))
         {
@@ -562,15 +596,17 @@ public sealed partial class MainWindow
             problems.Add("自检标记牌: 聚焦改了文档（它只能是投影）");
         }
 
-        // 再点同一枚＝退出这一档。
-        ChipLensFrom(target.Node.Id, mark);
+        // 再点同一枚＝退出这一档。把"上一发"的钟拨老两秒：同一处、窗口内的第二发按双击算（见下）。
+        _chipPressAt = DateTime.UtcNow.AddSeconds(-2);
+        ChipLensFrom(target.Node.Id, mark, spot, 21);
 
         if (LensKind is not null)
         {
             problems.Add("自检标记牌: 再点同一枚没有退出聚焦");
         }
 
-        // 双击＝编辑便签。
+        // 双击＝编辑便签（同一枚牌子上的第二发）。
+        ChipLensFrom(target.Node.Id, mark, spot, 31);
         ChipEditFrom(target.Node.Id, mark);
 
         if (_editor is null)
@@ -582,9 +618,52 @@ public sealed partial class MainWindow
             CloseEditor(commit: false);
         }
 
+        // 投影把牌子带走了：第二发落在原处（哪怕打在别的东西上）也要认成双击、进编辑（他 11-03 的缺陷）。
+        ChipLensFrom(target.Node.Id, mark, spot, 41);
+
+        if (LensKind != kind)
+        {
+            problems.Add("自检标记牌: 第二发前置没立起来（镜头没在）");
+        }
+        else
+        {
+            TryChipDoubleEdit(new Windows.Foundation.Point(spot.X + 3, spot.Y + 2), 42);
+
+            if (_editor is null)
+            {
+                problems.Add("自检标记牌: 牌子被投影带走后，同一处的第二发没进编辑");
+            }
+            else
+            {
+                CloseEditor(commit: false);
+            }
+
+            if (LensKind is not null)
+            {
+                problems.Add("自检标记牌: 双击进编辑后镜头没收起");
+            }
+
+            // 换到远处的一发不算双击：镜头保持、不开编辑。
+            ChipLensFrom(target.Node.Id, mark, spot, 51);
+            TryChipDoubleEdit(new Windows.Foundation.Point(spot.X + 300, spot.Y), 52);
+
+            if (_editor is not null)
+            {
+                CloseEditor(commit: false);
+                problems.Add("自检标记牌: 远处的第二发被误判成了双击");
+            }
+
+            if (LensKind != kind)
+            {
+                problems.Add("自检标记牌: 远处的第二发把镜头搅了");
+            }
+
+            ExitDueLens();
+        }
+
         if (_document.ToJson() == before)
         {
-            Diagnostics.Write($"selftest 标记牌: 点牌聚焦「{kind}」、再点退出、双击进编辑；一圈下来文档零改动");
+            Diagnostics.Write($"selftest 标记牌: 点牌聚焦「{kind}」、再点退出、双击进编辑（含投影带走后的第二发）；文档零改动");
         }
         else
         {
@@ -635,25 +714,29 @@ public sealed partial class MainWindow
             else
             {
                 var mark = chips.First(chip => chip.Label == "已完成");
-                var before = _document.ToJson();
 
-                ChipLensFrom(node.Id, mark);
-
-                if (LensKind != "done:1" || !LensPlan.Ids.Contains(node.Id))
-                {
-                    problems.Add($"自检完成标记: 点已完成牌没聚焦 done:1（现在是 {LensKind ?? "无"}）");
-                }
-
-                if (_document.ToJson() != before)
-                {
-                    problems.Add("自检完成标记: 点牌改了文档——聚焦只能是投影，切换 @b 走编辑器");
-                }
-
-                ChipLensFrom(node.Id, mark);
+                // A（他 11-03 拍）：@b 牌单击＝切换完成，不进镜头。
+                ChipLensFrom(node.Id, mark, new Windows.Foundation.Point(640, 360), 61);
 
                 if (LensKind is not null)
                 {
-                    problems.Add("自检完成标记: 再点同一枚没有退出聚焦");
+                    problems.Add("自检完成标记: 点 @b 牌进了镜头——A 下它该切换完成");
+                }
+                else if (Tags.Read(node.Text).Done != false || !node.Text.Contains("@b0", StringComparison.Ordinal))
+                {
+                    problems.Add($"自检完成标记: 点牌没把 @b1 换成 @b0（正文「{node.Text}」）");
+                }
+
+                ChipLensFrom(node.Id, mark, new Windows.Foundation.Point(640, 360), 62);
+
+                if (Tags.Read(node.Text).Done != true || !node.Text.Contains("@b1", StringComparison.Ordinal))
+                {
+                    problems.Add($"自检完成标记: 再点牌没换回 @b1（正文「{node.Text}」）");
+                }
+
+                if (!string.Equals(node.Text, "@b1\n自检完成标记", StringComparison.Ordinal))
+                {
+                    problems.Add($"自检完成标记: 两次切换后正文没回到原样（「{node.Text}」）");
                 }
 
                 ChipEditFrom(node.Id, mark);
@@ -675,7 +758,7 @@ public sealed partial class MainWindow
                 }
                 else
                 {
-                    Diagnostics.Write("selftest 完成标记: 点牌聚焦 done:1、再点退出、双击进编辑、× 拿掉整段；四步文档各归各");
+                    Diagnostics.Write("selftest 完成标记: 点牌在 @b0↔@b1 切换（不进镜头）、双击进编辑、× 拿掉整段");
                 }
             }
         }

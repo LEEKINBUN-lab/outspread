@@ -24,6 +24,13 @@ public static class BoardLocator
 
     public const string BoardPathEnvironmentVariable = "TANKAI_BOARD";
 
+    /// <summary>
+    /// 设成 1 就当作"这一发是临时实例"：<see cref="BoardSession"/> 那两份开屏记忆既不读也不写。
+    /// agent 拿 <c>--board</c> 在 %TEMP% 副本上跑自检/截图时必带——不带的话那一发会把他开着的标签排
+    /// 写进共享记忆，下一次开屏凭空多出几枚同名板子（11-03 真发生过：两枚「快速入门」指向 %TEMP%）。
+    /// </summary>
+    public const string SessionQuietEnvironmentVariable = "TANKAI_SESSION_QUIET";
+
     /// <summary>Environment overrides, applied in the order documented here.</summary>
     public sealed record Resolution(string BoardPath, string Reason, bool CreatedIfMissing = false);
 

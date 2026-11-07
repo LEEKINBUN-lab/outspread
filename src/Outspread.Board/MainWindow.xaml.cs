@@ -363,9 +363,24 @@ public sealed partial class MainWindow : Window
             new PointerEventHandler((_, _) => CommitWheelPreview()),
             handledEventsToo: true);
 
+        // 牌一点的投影会把牌子带离指针：双击的第二发落到空白或别的格上，也得认成双击（他 11-03 报的
+        // "双击只会再进一次投影"）。handledEventsToo——第二发常被板面/牌子自己吃掉，这一层照样要看。
+        Root.AddHandler(
+            UIElement.PointerPressedEvent,
+            new PointerEventHandler((_, e) =>
+            {
+                var pp = e.GetCurrentPoint(null);
+
+                TryChipDoubleEdit(pp.Position, pp.Timestamp);
+            }),
+            handledEventsToo: true);
+
         Closed += (_, _) =>
         {
             var at = Environment.TickCount64;
+
+            // 浮牌先收：它们是独立的顶层窗，不收的话主窗关了循环还退不了（最后一扇窗关闭才结束）。
+            CloseAllFloaters();
 
             CommitWheelPreview();
             _watcher?.Dispose();
@@ -416,7 +431,7 @@ public sealed partial class MainWindow : Window
             return BoardLocator.Resolve(requested, searchStart);
         }
 
-        if (BoardSession.ReadLastBoard() is { } last)
+        if (!SessionMemorySuppressed() && BoardSession.ReadLastBoard() is { } last)
         {
             return new BoardLocator.Resolution(last, "the board this window was last on");
         }
@@ -430,12 +445,60 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 这一发是不是临时实例（agent 在副本上跑自检/截图）。带着 <c>TANKAI_SESSION_QUIET=1</c> 启动就是。
+    /// </summary>
+    internal static bool SessionMemorySuppressed()
+        => Environment.GetEnvironmentVariable(BoardLocator.SessionQuietEnvironmentVariable) is { Length: > 0 } value
+            && value.Trim() is "1" or "true" or "yes";
+
+    /// <summary>
+    /// 临时实例那把闸：带着 <c>TANKAI_SESSION_QUIET=1</c> 起来的一发，既不该写他那份开屏记忆，
+    /// 也不该从里面恢复标签排。这一发在进程内改环境变量再问一次判定——写盘那条真路由
+    /// <see cref="RememberLastBoard"/> 共用同一个判定，真机对照另跑（见本轮汇报）。
+    /// </summary>
+    private void SelfTestSessionQuiet(List<string> problems)
+    {
+        var name = BoardLocator.SessionQuietEnvironmentVariable;
+        var was = Environment.GetEnvironmentVariable(name);
+
+        try
+        {
+            Environment.SetEnvironmentVariable(name, null);
+
+            if (SessionMemorySuppressed())
+            {
+                problems.Add("自检临时实例: 没带环境变量却判成\"临时\"——那一发根本不写记忆，他的标签排会记不住");
+            }
+
+            Environment.SetEnvironmentVariable(name, "1");
+
+            if (!SessionMemorySuppressed())
+            {
+                problems.Add("自检临时实例: 带了 TANKAI_SESSION_QUIET=1 却没判成临时——11-03 就是它漏了，两枚 %TEMP% 的「快速入门」进了他的标签条");
+            }
+
+            Environment.SetEnvironmentVariable(name, "0");
+
+            if (SessionMemorySuppressed())
+            {
+                problems.Add("自检临时实例: 设成 0 还算临时——记忆会被永久关掉");
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(name, was);
+        }
+
+        Diagnostics.Write($"selftest 临时实例: {name} 一/0 两档判定都对，临时那一发不碰他的开屏记忆");
+    }
+
+    /// <summary>
     /// 记住这一次的开屏状态：当前这一块 + 开着的那一排（顺序＝标签顺序），下一次启动整排回来。
     /// 自检跑在临时副本上，不写这份记忆——否则自检会把它的临时标签排进他下一次开屏。
     /// </summary>
     private void RememberLastBoard(string path)
     {
-        if (App.SelfTest)
+        if (App.SelfTest || SessionMemorySuppressed())
         {
             return;
         }
@@ -511,7 +574,7 @@ public sealed partial class MainWindow : Window
             // 先把上一次开着的那一排**读进局部量**：`RememberLastBoard` 现在两样一起写，而它必须写在
             // 恢复**之后**——写在前面就会把这一排按"此刻只剩这一块"覆盖掉，于是每开一次软件少一块板
             // （真机两发都红过：第一发 restore 空手而归，第二发只剩 2 枚标签）。
-            IReadOnlyList<string> remembered = App.SelfTest ? [] : BoardSession.ReadOpenBoards();
+            IReadOnlyList<string> remembered = App.SelfTest || SessionMemorySuppressed() ? [] : BoardSession.ReadOpenBoards();
 
             var sidecar = BoardViewState.TryLoad(CanvasStore.SidecarPath(_boardPath));
 
@@ -1466,6 +1529,24 @@ public sealed partial class MainWindow : Window
             && IsSecondEdgePress(edgeTarget, point.Position))
         {
             RecordNodePress(edgeTarget, point.Position);
+            e.Handled = true;
+            return;
+        }
+
+        // 按在格子外沿那一圈（阴影）上：单选那格＝起缩放，别的格＝只选中（他 11-03 报的"反复点"）。
+        if (point.Properties.IsLeftButtonPressed && ShadowEdgeAt(point.Position) is { } shadow)
+        {
+            if (_selection.Count == 1 && _selection.Contains(shadow.Node.Id) && shadow.Side is { } side)
+            {
+                BeginResize(ResizeLetter(side), point.Position);
+
+                BoardArea.CapturePointer(e.Pointer);
+            }
+            else
+            {
+                SelectOnly(shadow.Node.Id);
+            }
+
             e.Handled = true;
             return;
         }
@@ -2754,6 +2835,29 @@ public sealed partial class MainWindow : Window
             ClearEdgeSelection();
         }
 
+        // 聚焦里不画选中框/手柄/操作条：它们的几何全按文档位置算，格子被投影带走后只会
+        // 在背景里剩一个空框（他 11-03 报的"双击投影便签修改，背景也冒出被选框"）。
+        // 编辑框不走这一层，自己跟着槽位走。
+        if (_lensKind is not null)
+        {
+            SelectionOutline.Stroke = null;
+            SelectionOutline.Fill = null;
+            SelectionOutline.Width = 0;
+            SelectionOutline.Height = 0;
+            SelectionInner.Stroke = null;
+            SelectionInner.Width = 0;
+            SelectionInner.Height = 0;
+
+            foreach (var handle in _handles)
+            {
+                handle.Visibility = Visibility.Collapsed;
+            }
+
+            HideRail();
+
+            return;
+        }
+
         // 删除那一发会把描边与内对比线一起淡到 0（见 SelectionChromeVisuals）：这两枚是常驻元素、
         // 不是每次新建的，所以每一次投影都要先抬回满不透明——不然"套子"再也回不来。
         SelectionOutline.Opacity = 1;
@@ -2923,6 +3027,42 @@ public sealed partial class MainWindow : Window
     /// </remarks>
     private string? EdgeOf(CanvasNode node, Point screen, double band = SelectionChrome.EdgeBandPx)
         => LinkPull.EdgeNear(ScreenRectOf(node), screen.X, screen.Y, band)?.Side;
+
+    /// <summary>
+    /// 影子也是这格的一部分（他 11-03）：紧贴格子外沿那一圈（含投影阴影）按下先认到最近的一格——
+    /// 单选那格＝起缩放，别的格＝只选中。不然"点在影子上"全变成点空白，用户会来回点五六次。
+    /// 只认格**外**那一圈：格内的按下走卡片自己那条路，不到这里。
+    /// </summary>
+    private (CanvasNode Node, string? Side)? ShadowEdgeAt(Point at)
+    {
+        const double pad = 8;
+
+        CanvasNode? near = null;
+        var best = pad;
+
+        foreach (var node in BoardNotes())
+        {
+            if (node.Kind == CanvasNodeKind.Group)
+            {
+                continue;
+            }
+
+            var rect = ScreenRectOf(node);
+            var dx = Math.Max(rect.X - at.X, at.X - (rect.X + rect.Width));
+            var dy = Math.Max(rect.Y - at.Y, at.Y - (rect.Y + rect.Height));
+            var away = Math.Max(dx, dy);
+
+            if (away < 0 || away > best)
+            {
+                continue;
+            }
+
+            best = away;
+            near = node;
+        }
+
+        return near is null ? null : (near, LinkPull.EdgeNear(ScreenRectOf(near), at.X, at.Y, pad)?.Side);
+    }
 
     /// <summary>
     /// EdgeNear 给的是 spec 词（left/right/top/bottom），BeginResize 认的是单字母（w/e/n/s）。
@@ -4137,9 +4277,32 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    /// <summary>双击那一发落到哪儿：格子的边缘带＝拉线，格内＝编辑，空白＝新建。</summary>
+    /// <summary>双击那一发落到哪儿：格子的边缘带＝拉线，格内＝编辑，空白＝新建。
+    /// 聚焦里格子被投影挪走了：命中按"投影后的位置"算（他 11-03 报的双击打到了别的格子）。</summary>
     private (string Route, CanvasNode? Node, string? Side) DoubleTapTarget(Point at)
     {
+        if (_lensKind is not null)
+        {
+            foreach (var node in BoardNotes())
+            {
+                if (!_lensOffsets.TryGetValue(node.Id, out var offset))
+                {
+                    continue;
+                }
+
+                var rect = ScreenRectOf(node);
+
+                if (at.X >= rect.X + offset.DX && at.X <= rect.X + offset.DX + rect.Width
+                    && at.Y >= rect.Y + offset.DY && at.Y <= rect.Y + offset.DY + rect.Height)
+                {
+                    return ("编辑", node, null);
+                }
+            }
+
+            // 没被聚的那几格在镜头里不接鼠标：双击它们等于双击空白。
+            return ("新建", null, null);
+        }
+
         if (NodeAt(at) is { } under)
         {
             // 起线的边缘带比改尺寸那一档宽一倍：往里 12px 都算边缘；再往里才是编辑。
@@ -5236,7 +5399,9 @@ public sealed partial class MainWindow : Window
                 continue;
             }
 
-            var submenu = new MenuFlyoutSubItem { Text = section.Key };
+            // 空板那一档不再套「板子」这层子菜单（他 11-03 点的）：那几条直接铺进一级菜单，
+            // 一级就能点到「从路径或链接新建卡片」。别的档（排布）仍走子菜单，不动。
+            var submenu = section.Key == "板子" ? null : new MenuFlyoutSubItem { Text = section.Key };
 
             foreach (var command in rows)
             {
@@ -5244,10 +5409,21 @@ public sealed partial class MainWindow : Window
                 // 加速键文字读的是"现在这一串"（改键优先），和 Tab 清单、改键页同一个来源。
                 var item = new MenuFlyoutItem { Text = command.Label, KeyboardAcceleratorTextOverride = ChordsText(command) };
                 item.Click += (_, _) => action();
-                submenu.Items.Add(item);
+
+                if (submenu is not null)
+                {
+                    submenu.Items.Add(item);
+                }
+                else
+                {
+                    menu.Items.Add(item);
+                }
             }
 
-            menu.Items.Add(submenu);
+            if (submenu is not null)
+            {
+                menu.Items.Add(submenu);
+            }
         }
 
         // 两档都要能一眼够到：按最大＝谁都别裁的同一个框；按最小＝宽高各取组内最小、**可能裁字**
@@ -5308,6 +5484,19 @@ public sealed partial class MainWindow : Window
         if (!emptyMenu.Contains("粘贴剪贴板") || !emptyMenu.Contains("恢复…") || !emptyMenu.Contains("从路径或链接新建卡片"))
         {
             problems.Add($"空板右键菜单应留着粘贴、从路径或链接新建、恢复这三件，读到 {string.Join(" / ", emptyMenu)}");
+        }
+
+        // 他 11-03 点的两格：「板子」那层子菜单去掉，「从路径或链接新建卡片」进一级。
+        var emptyTop = BuildBoardMenu(MenuWhere.Empty).Items;
+
+        if (emptyTop.OfType<MenuFlyoutSubItem>().Any(sub => sub.Text == "板子"))
+        {
+            problems.Add("右键菜单（空板）：一级菜单里还挂着「板子」这层子菜单");
+        }
+
+        if (!emptyTop.OfType<MenuFlyoutItem>().Any(item => item.Text == "从路径或链接新建卡片"))
+        {
+            problems.Add("右键菜单（空板）：「从路径或链接新建卡片」没铺到一级");
         }
         string[] gone = ["叠放", "提到最前", "压到最后", "上移一格", "下移一格", "左移一格", "右移一格", "从边缘拉一根线", "回到 100%", "新建便签", "按颜色排列", "按标签排列"];
         var leaked = gone.Where(all.Contains).Distinct().ToList();
@@ -5709,6 +5898,74 @@ public sealed partial class MainWindow : Window
     /// 这一发钉两件事：① 排版字号恒等于 12（世界）；② 那枚变换恒等于相机缩放，
     /// 缺一半都会红：①丢了＝有人把缩放又乘回排版里；②丢了＝牌子（连同整张卡）停在小数档。
     /// </summary>
+    /// <summary>
+    /// 牌子多了要换行、不许溢出被裁（他 11-03）：窄格里塞 8 枚标签，必须排成多行，
+    /// 每行不超过卡片内宽，牌子带高度按行数算。
+    /// </summary>
+    private void SelfTestChipWrap(List<string> problems)
+    {
+        var saved = _document.ToJson();
+        var savedCamera = (_view.PanX, _view.PanY, _view.Zoom);
+        var node = _document.Add(CanvasNodeKind.Text, 46300, 43000, 260, 200);
+
+        node.Text = "@t甲 @t乙 @t丙 @t丁 @t戊 @t己 @t庚 @t辛\n多标签换行";
+
+        _view.Zoom = 1;
+        _view.PanX = 60 - 46300;
+        _view.PanY = 60 - 43000;
+
+        Rebuild();
+        ArrangeAll();
+        BoardArea.UpdateLayout();
+
+        try
+        {
+            if (!_realized.TryGetValue(node.Id, out var card) || !card.PaintsReadout)
+            {
+                problems.Add("自检牌子换行: 这一格没画出来或没牌子，量不到");
+            }
+            else
+            {
+                var rows = card.PaintedChipRowCount;
+                var band = card.PaintedChipBandWorld;
+                var expectedBand = (rows * NoteType.ChipBand(1)) + ((rows - 1) * 4);
+
+                if (rows < 2)
+                {
+                    problems.Add($"自检牌子换行: 8 枚窄牌只排了 {rows} 行——没换行，溢出被裁");
+                }
+                else if (Math.Abs(band - expectedBand) > 0.01)
+                {
+                    problems.Add($"自检牌子换行: 带高 {band:0.#} 与 {rows} 行应得 {expectedBand:0.#} 对不上");
+                }
+                else
+                {
+                    var over = card.PaintedChipRowWidths.Where(width => width > card.PaintedChipWrapWidth + 1.5).ToList();
+
+                    if (over.Count > 0)
+                    {
+                        problems.Add($"自检牌子换行: {over.Count} 行越出内宽（最宽 {over.Max():0.#} > {card.PaintedChipWrapWidth:0.#}）");
+                    }
+                    else
+                    {
+                        Diagnostics.Write($"selftest 牌子换行: 8 枚牌排成 {rows} 行、带高 {band:0.#}、每行不越内宽");
+                    }
+                }
+            }
+        }
+        finally
+        {
+            _document.Remove(node.Id);
+            (_view.PanX, _view.PanY, _view.Zoom) = savedCamera;
+            Rebuild();
+
+            if (_document.ToJson() != saved)
+            {
+                problems.Add("自检牌子换行: 没把板子原样还回去");
+            }
+        }
+    }
+
     private void SelfTestChipScalesWithZoom(List<string> problems)
     {
         var card = _realized.Values.FirstOrDefault(visual =>
@@ -5782,6 +6039,110 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 影子也算这格的一部分（他 11-03）：贴着格子外沿那一圈要认回这一格（单选＝缩放、其它＝选中），
+    /// 出圈 8px 外仍是点空白。这一发只量判定，不模拟指针。
+    /// </summary>
+    private void SelfTestShadowEdge(List<string> problems)
+    {
+        var saved = _document.ToJson();
+        var savedCamera = (_view.PanX, _view.PanY, _view.Zoom);
+        var node = _document.Add(CanvasNodeKind.Text, 44000, 41000, 200, 120);
+
+        node.Text = "阴影命中";
+
+        _view.Zoom = 1;
+        _view.PanX = 100 - 44000;
+        _view.PanY = 100 - 41000;
+
+        Rebuild();
+        ArrangeAll();
+        BoardArea.UpdateLayout();
+
+        try
+        {
+            var rect = ScreenRectOf(node);
+            var mid = rect.Y + (rect.Height / 2);
+            var outside = new Windows.Foundation.Point(rect.X + rect.Width + 4, mid);
+
+            var hit = ShadowEdgeAt(outside);
+
+            if (hit is not { } found || found.Node.Id != node.Id || found.Side != CanvasEdge.Right)
+            {
+                problems.Add($"自检阴影命中: 外沿 4px 没认回这一格（{hit?.Node.Id ?? "无"}／{hit?.Side ?? "无"}）");
+            }
+            else if (ShadowEdgeAt(new Windows.Foundation.Point(rect.X + rect.Width + 24, mid)) is not null)
+            {
+                problems.Add("自检阴影命中: 圈外 24px 也认成了这格——点空白会被吃掉");
+            }
+            else if (ShadowEdgeAt(new Windows.Foundation.Point(rect.X + rect.Width - 10, mid)) is not null)
+            {
+                problems.Add("自检阴影命中: 格内也认成了外沿（格内走卡片自己那条路）");
+            }
+            else
+            {
+                Diagnostics.Write("selftest 阴影命中: 外沿 4px 认回、圈外 24px 与格内都不认");
+            }
+        }
+        finally
+        {
+            _document.Remove(node.Id);
+            (_view.PanX, _view.PanY, _view.Zoom) = savedCamera;
+            Rebuild();
+
+            if (_document.ToJson() != saved)
+            {
+                problems.Add("自检阴影命中: 没把板子原样还回去");
+            }
+        }
+    }
+
+    /// <summary>
+    /// 组钮拖出最后一枚 ⇒ 空组当场解散（他 11-03 报的"松手后分组还在"）。
+    /// 这一发量的是拖出收口用的那条清理：名单被写成空就删框，走同一笔手势。
+    /// </summary>
+    private void SelfTestEmptyGroupPurge(List<string> problems)
+    {
+        var saved = _document.ToJson();
+        var note = _document.Add(CanvasNodeKind.Text, 45200, 42000, 180, 90);
+
+        note.Text = "空组余料";
+
+        var group = _document.Add(CanvasNodeKind.Group, 45190, 41990, 200, 110);
+        group.SetGroupMembers([note.Id]);
+
+        Rebuild();
+
+        try
+        {
+            BeginGesture("自检：拖出最后一枚");
+            group.SetGroupMembers([]);
+            PurgeEmptyRosters();
+            EndGesture();
+
+            Rebuild();
+
+            if (NodeOf(group.Id) is not null)
+            {
+                problems.Add("自检空组: 最后一枚拖出后空组还在");
+            }
+            else
+            {
+                Diagnostics.Write("selftest 空组: 名单写成空后当场解散，便签留下");
+            }
+        }
+        finally
+        {
+            _document.Remove(note.Id);
+            Rebuild();
+
+            if (_document.ToJson() != saved)
+            {
+                problems.Add("自检空组: 没把板子原样还回去");
+            }
+        }
+    }
+
+    /// <summary>
     /// × 从"把牌尾整条盖掉"改成"扣一枚圆钮"（他 11-02 的截图：那条底把日期后两位吞了）。
     /// 这一发钉三件：正圆（宽＝高＝直径、圆角＝半圆）、不纵向拉伸、静止时藏着；钮底下还得有那圈影。
     /// 动效本身要眼睛判，这里只钉落点与悬停能点。
@@ -5796,7 +6157,7 @@ public sealed partial class MainWindow : Window
             NoteStyling.InkFor(null, surface),
             surface,
             () => { },
-            () => { },
+            (_, _) => { },
             null,
             "点一下＝聚焦这个日期 · 双击＝编辑便签 · 点 × 去掉");
 
@@ -5839,6 +6200,15 @@ public sealed partial class MainWindow : Window
         else if (Math.Abs(knob.CornerRadius.TopLeft - (expected / 2)) > 0.01)
         {
             problems.Add($"selftest 牌子 × 钮: 圆角 {knob.CornerRadius.TopLeft:0.#}，应为半圆 {expected / 2:0.#}");
+        }
+        else if (knob.Child is not Viewbox knobIcon
+                 || knobIcon.Child is not Microsoft.UI.Xaml.Shapes.Path { Data: { } ink }
+                 || Math.Abs(ink.Bounds.X + (ink.Bounds.Width / 2) - 10) > 0.6
+                 || Math.Abs(ink.Bounds.Y + (ink.Bounds.Height / 2) - 10) > 0.6)
+        {
+            // × 是文字形时墨迹在 em 框里天生偏上，扣进圆钮就对不上圆心（他 11-03 的截图）。
+            // 官方路径按 20×20 设计网格居中，Viewbox 一居中就同心——这一条钉的就是那个"居中"。
+            problems.Add("selftest 牌子 × 钮: × 不是居中的官方路径（文字形会偏出圆心）");
         }
         else if (layer.Opacity != 0 || layer.IsHitTestVisible)
         {
@@ -6211,6 +6581,11 @@ public sealed partial class MainWindow : Window
         SelfTestMarkEditEnter(problems);
         SelfTestDoneChip(problems);
         SelfTestManagerShadow(problems);
+        SelfTestManagerColumns(problems);
+        SelfTestSessionQuiet(problems);
+        SelfTestShadowEdge(problems);
+        SelfTestEmptyGroupPurge(problems);
+        SelfTestChipWrap(problems);
         SelfTestBatchTag(problems);
         SelfTestUniformSize(problems);
         SelfTestCulledVisuals(problems);
@@ -8326,6 +8701,7 @@ public sealed partial class MainWindow : Window
 
         // 操作条三枚图标是同一档画法（10-24 他在比稿页上点了 B 档）。
         SelfTestRailStateLayers(problems);
+        SelfTestFloatOut(problems);
         SelfTestTabHoverDoesNotShift(problems);
         SelfTestEdgeHandleFeedback(problems);
         SelfTestEdgeCanBeSelectedByItsWire(problems);
@@ -10629,6 +11005,8 @@ public sealed partial class MainWindow : Window
         var savedRestore = _restoreOpen;
         var savedRename = _renamingPath;
         var savedManager = _boardManagerOpen;
+        var savedLens = LensKind;
+        var lensOpenedForShot = false;
         var panelsOpened = false;
         string? savedPanelTagFilter = null;
         Box? framedBox = null;
@@ -10874,8 +11252,30 @@ public sealed partial class MainWindow : Window
                             break;
                         }
 
+                    case "lens":
+                        // 镜头态也要取证：背景压到几分、便签浮不浮，只有 PNG 说得了这件事。
+                        // 拿板上第一档有货的（逾期→未完成→即将），三档全空就明说——取证不造空镜头。
+                        {
+                            var wanted = new[] { LensLate, LensTodo, LensSoon }.FirstOrDefault(kind => LensMatches(kind).Count > 0);
+
+                            if (wanted is null)
+                            {
+                                return new ShotReply(false, null, Error: "板上逾期/未完成/即将三档都没有便签，镜头无从可聚");
+                            }
+
+                            if (_lensKind is not null)
+                            {
+                                ExitDueLens();
+                            }
+
+                            EnterDueLens(wanted);
+                            lensOpenedForShot = true;
+                        }
+
+                        break;
+
                     default:
-                        return new ShotReply(false, null, Error: $"不懂的 panel \"{panelArg}\"，可给 filter / cheat / banner / search / restore / rename / fold / unfold / pair / pull / shrink / scrolled");
+                        return new ShotReply(false, null, Error: $"不懂的 panel \"{panelArg}\"，可给 filter / cheat / banner / search / restore / rename / fold / unfold / pair / pull / shrink / scrolled / lens");
                 }
 
                 panelsOpened = true;
@@ -10893,7 +11293,8 @@ public sealed partial class MainWindow : Window
             // 挪相机、藏邻居是同一类"这一拍刚改的"，所以共用这一让。
             if (reframed || hiddenForShot || request.Panel is { Length: > 0 })
             {
-                await Task.Delay(90);
+                // 镜头那发要等弹簧落定：90ms 只够浮层出现，聚拢的位移还没走完，拍到的是一张"半路"图。
+                await Task.Delay(request.Panel?.Trim().ToLowerInvariant() == "lens" ? 700 : 90);
             }
 
             surface.UpdateLayout();
@@ -10999,6 +11400,16 @@ public sealed partial class MainWindow : Window
                 }
 
                 ProjectSelection();
+            }
+
+            if (lensOpenedForShot)
+            {
+                ExitDueLens();
+
+                if (savedLens is { } back)
+                {
+                    EnterDueLens(back);
+                }
             }
 
             if (panelsOpened)

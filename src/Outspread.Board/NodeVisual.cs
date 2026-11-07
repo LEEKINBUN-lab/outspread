@@ -273,20 +273,30 @@ public sealed class NodeVisual : ContentControl
 
     private readonly StackPanel _chips = new()
     {
-        Orientation = Orientation.Horizontal,
+        Orientation = Orientation.Vertical,
         Spacing = 4,
         Visibility = Visibility.Collapsed,
         VerticalAlignment = VerticalAlignment.Bottom,
     };
 
+    /// <summary>牌子带现在会换行（他 11-03：标签多了被遮挡）：这是当前排出来的行数，以及它占的世界高度。</summary>
+    private int _chipRowCount;
+
+    private double _chipBandWorld;
+
+    private double _chipWrapWidth;
+
     /// <summary>Set by the window: (node id, the exact span in the text) → remove it, undoably.</summary>
     internal Action<string, string>? RemoveMark;
 
-    /// <summary>点牌身＝聚焦这一类标记（投影镜头，他 11-03 拍的 A）。</summary>
-    internal Action<string, NoteMarks.Mark>? ChipPressed;
+    /// <summary>点牌身＝聚焦这一类标记（投影镜头，他 11-03 拍的 A）；带按下处的窗口坐标与这一发的时间戳。</summary>
+    internal Action<string, NoteMarks.Mark, Windows.Foundation.Point, ulong>? ChipPressed;
 
     /// <summary>双击牌身＝编辑便签。</summary>
     internal Action<string, NoteMarks.Mark>? ChipDoublePressed;
+
+    /// <summary>镜头里没被聚的那几格淡到多少（他 11-03 改口：背景的字要几乎看不出来）。</summary>
+    internal const double LensDimmedOpacity = 0.05;
 
     /// <summary>Set by the window: the card header's open button asks the host where this entity lives.</summary>
     internal Action<string>? OpenEntity;
@@ -789,7 +799,7 @@ public sealed class NodeVisual : ContentControl
             var inFlow = 0;
             var overlay = 0;
 
-            foreach (var chip in _chips.Children.OfType<Border>())
+            foreach (var chip in Chips())
             {
                 if (chip.Child is not Grid face)
                 {
@@ -801,19 +811,19 @@ public sealed class NodeVisual : ContentControl
                     .OfType<TextBlock>()
                     .Count(text => text.Text == "×");
                 // 11-02 起 × 是一枚圆钮（Grid 那一层里的 Border），不再是一块贴边的 Border：
-                // 从牌面层的非横排子层里找，横排那一支一个都不许有。
+                // 从牌面层的非横排子层里找，横排那一支一个都不许有。钮里装的可能是文字「×」，
+                // 也可能（11-03 起）是官方 Dismiss 路径——数的是钮本身，不是它装的东西。
                 overlay += face.Children.OfType<Grid>()
                     .SelectMany(layer => layer.Children)
-                    .Select(child => child is Border knob ? knob.Child : child)
-                    .OfType<TextBlock>()
-                    .Count(text => text.Text == "×");
+                    .OfType<Border>()
+                    .Count();
             }
 
             return (inFlow, overlay);
         }
     }
 
-    internal int PaintedChipCount => _chips.Children.Count;
+    internal int PaintedChipCount => Chips().Count();
 
     /// <summary>自检那把尺：把这一格所有牌子的 × 圆钮"悬停一次"长出来，返回长了几枚。
     /// 11-03 起那枚钮是悬停才建的（静止时不占元素），所以量它之前必须先催一次；
@@ -822,7 +832,7 @@ public sealed class NodeVisual : ContentControl
     {
         var revealed = 0;
 
-        foreach (var chip in _chips.Children.OfType<Border>())
+        foreach (var chip in Chips())
         {
             if (chip.Tag is Action reveal)
             {
@@ -842,7 +852,7 @@ public sealed class NodeVisual : ContentControl
         {
             (double Chip, double Label) best = (0, 0);
 
-            foreach (var chip in _chips.Children.OfType<Border>())
+            foreach (var chip in Chips())
             {
                 var label = ChipRow(chip)?.Children.OfType<TextBlock>().FirstOrDefault();
 
@@ -856,7 +866,21 @@ public sealed class NodeVisual : ContentControl
         }
     }
 
-    private IEnumerable<StackPanel> ChipRows() => _chips.Children.OfType<Border>().Select(ChipRow).Where(row => row is not null)!;
+    private IEnumerable<StackPanel> ChipRows() => _chips.Children.OfType<StackPanel>();
+
+    /// <summary>所有牌子（跨行）。</summary>
+    private IEnumerable<Border> Chips() => ChipRows().SelectMany(row => row.Children).OfType<Border>();
+
+    /// <summary>自检读回：牌子带排成了几行（换行那一刀量的就是这个）。</summary>
+    internal int PaintedChipRowCount => _chipRowCount;
+
+    /// <summary>自检读回：牌子带占的世界高度。</summary>
+    internal double PaintedChipBandWorld => _chipBandWorld;
+
+    /// <summary>自检读回：换行时用的内宽（世界单位）与每行排完后的实际宽。</summary>
+    internal double PaintedChipWrapWidth => _chipWrapWidth;
+
+    internal IReadOnlyList<double> PaintedChipRowWidths => ChipRows().Select(row => row.ActualWidth).ToList();
 
     private static StackPanel? ChipRow(Border chip)
         => chip.Child switch
@@ -1541,7 +1565,7 @@ public sealed class NodeVisual : ContentControl
         // 它压过筛选那一档——用户是点名要看这几格，不该再被他开着的筛选压暗。
         Opacity = display.FoldedAway ? 0d
             : display.LensFocus ? 1d
-            : display.LensDimmed ? 0.22d
+            : display.LensDimmed ? LensDimmedOpacity
             : shows ? 1d : 0.22d;
         _label.Foreground = new SolidColorBrush(isGroup ? NoteStyling.InkFor(null, NoteStyling.SurfaceFor(null)) : ink);
 
@@ -1645,7 +1669,6 @@ public sealed class NodeVisual : ContentControl
         {
             _textLodOwned = true;
             var leading = type.Leading;
-            var band = NoteType.ChipBand(1);
 
             // 牌子之间的空隙也随卡缩放（变换路线）：节奏是世界的一部分，不该随相机变。
             _chips.Spacing = 4;
@@ -1681,7 +1704,6 @@ public sealed class NodeVisual : ContentControl
             // 正文能用到卡片下沿（下内距被下一行的半行借走），所以"完整行数"只扣上内距；
             // 用两倍内距算会把本可以显示的下一行提前判成溢出，于是只能整行显示/整行消失。
             var lineRoom = Math.Max(0, Height - inset - headerWorld - tableWorld);
-            var withChips = (int)Math.Floor(((room - band) / leading) + lineEpsilon);
 
             IReadOnlyList<NoteMarks.Mark> chips = isGroup ? Array.Empty<NoteMarks.Mark>() : NoteMarks.Chips(marks, view.Today);
 
@@ -1692,15 +1714,14 @@ public sealed class NodeVisual : ContentControl
                 chips = new[] { gate }.Concat(chips).ToList();
             }
 
-            // 卡片小得装不下一行正文加一排牌子时，先保正文：色条还在，时间这件事不会变成沉默。
-            var showChips = chips.Count > 0 && withChips >= 1;
+            // 先把牌子排成行：带子占多高要等换行定下来才知道（他 11-03 的换行令）。
+            var band = PaintChips(chips, ink, surface, Math.Max(20, Width - (inset * 2)));
+            var withChips = (int)Math.Floor(((room - band) / leading) + lineEpsilon);
+
+            // 卡片小得装不下一行正文加牌子带时，先保正文：色条还在，时间这件事不会变成沉默。
+            var showChips = chips.Count > 0 && band > 0 && withChips >= 1;
 
             _chips.Visibility = showChips ? Visibility.Visible : Visibility.Collapsed;
-
-            if (showChips)
-            {
-                PaintChips(chips, ink, surface);
-            }
 
             // The room the words actually get, in world units: the marks band is chrome and sits
             // under them, so it comes off before anything asks how many lines fit.
@@ -2143,7 +2164,7 @@ public sealed class NodeVisual : ContentControl
         // 该淡的地方硬切、牌子反倒被抹掉下沿（他 10-25 的 @n7：两个读数同一个根因）。
         // 有牌子时：正文区的下沿在"卡片外沿－下内距－牌子带"那里（有牌子时正文借不到下内距，
         // 见上面 Padding 那一发），所以把遮罩从底沿抬起 内距＋牌子带 这么多。
-        var chips = _chips.Visibility == Visibility.Visible ? NoteType.ChipBand(1) : 0;
+        var chips = _chips.Visibility == Visibility.Visible ? _chipBandWorld : 0;
         var bottomMargin = chips > 0 ? inset + chips : 0;
         var fadeBottom = Math.Max(0, Height - bottomMargin);
 
@@ -2509,36 +2530,72 @@ public sealed class NodeVisual : ContentControl
     /// a pan re-runs <c>Update</c> for every card, and re-making a chip mid-hover would hide the ×
     /// the delete depends on.
     /// </summary>
-    private void PaintChips(IReadOnlyList<NoteMarks.Mark> chips, Color ink, Color surface)
+    /// <summary>
+    /// 牌子带按卡片内宽<b>换行</b>（他 11-03：标签多了被挡住而不是换行）：每行放不下下一枚就起新行。
+    /// 返回它占的世界高度（0＝没有牌子），正文的行数预算扣的就是这个数。
+    /// </summary>
+    private double PaintChips(IReadOnlyList<NoteMarks.Mark> chips, Color ink, Color surface, double wrapWidth)
     {
-        // 键里不再带缩放：牌子按世界字号排一次，屏幕上的大小归内容层那枚变换。
-        var key = $"{surface}|{string.Join("/", chips.Select(chip => $"{chip.Source}={chip.Label}"))}";
+        _chipWrapWidth = wrapWidth;
 
-        if (key == _chipKey)
+        if (chips.Count == 0)
         {
-            return;
+            _chips.Children.Clear();
+            _chipKey = string.Empty;
+            _chipRowCount = 0;
+            _chipBandWorld = 0;
+
+            return 0;
         }
 
-        _chipKey = key;
-        _chips.Children.Clear();
+        // 键里带上换行宽：卡片被拉宽/拉窄时行要重分。缩放仍不进键（牌子按世界字号排一次）。
+        var key = $"{wrapWidth:0.#}|{surface}|{string.Join("/", chips.Select(chip => $"{chip.Source}={chip.Label}"))}";
 
-        // 形状不在这里定。卡片这一排和编辑器里那一排走同一枚渲染器（ChromeStyling.Chip）——
-        // 这里以前是第二份实现，画的是 1px 实线方框，正是他打回的「一个方框看起来很廉价」，
-        // 而编辑器里那份又是另一种画法。一处定义，两处同形。
-        foreach (var chip in chips)
+        if (key != _chipKey)
         {
-            var source = chip.Source;
+            _chipKey = key;
+            _chips.Children.Clear();
 
-            _chips.Children.Add(ChromeStyling.Chip(
-                chip,
-                NoteType.ChipFont(1),
-                ink,
-                surface,
-                () => RemoveMark?.Invoke(NodeId, source),
-                () => ChipPressed?.Invoke(NodeId, chip),
-                () => ChipDoublePressed?.Invoke(NodeId, chip),
-                ChipTip(chip)));
+            const double spacing = 4;
+            StackPanel? row = null;
+            var rowWidth = 0.0;
+
+            // 形状不在这里定。卡片这一排和编辑器里那一排走同一枚渲染器（ChromeStyling.Chip）。
+            foreach (var chip in chips)
+            {
+                var source = chip.Source;
+
+                var border = ChromeStyling.Chip(
+                    chip,
+                    NoteType.ChipFont(1),
+                    ink,
+                    surface,
+                    () => RemoveMark?.Invoke(NodeId, source),
+                    (at, stamp) => ChipPressed?.Invoke(NodeId, chip, at, stamp),
+                    () => ChipDoublePressed?.Invoke(NodeId, chip),
+                    ChipTip(chip));
+
+                // 量一次自然宽：换行判据是"这一行还放不放得下下一枚"。
+                border.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+                var width = border.DesiredSize.Width;
+
+                if (row is null || (row.Children.Count > 0 && rowWidth + spacing + width > wrapWidth + 0.5))
+                {
+                    row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = spacing };
+                    _chips.Children.Add(row);
+                    rowWidth = 0;
+                }
+
+                row.Children.Add(border);
+                rowWidth += (row.Children.Count > 1 ? spacing : 0) + width;
+            }
+
+            _chipRowCount = _chips.Children.Count;
         }
+
+        _chipBandWorld = (_chipRowCount * NoteType.ChipBand(1)) + ((_chipRowCount - 1) * 4);
+
+        return _chipBandWorld;
     }
 
     /// <summary>牌身的悬停说明跟着新三扇门写（他 11-03 拍：点＝聚焦、双击＝编辑、×＝删）。</summary>
@@ -2546,7 +2603,7 @@ public sealed class NodeVisual : ContentControl
     {
         if (chip.Done is not null)
         {
-            return "点一下＝聚焦完成态 · 双击＝编辑便签 · 点 × 去掉";
+            return "点一下＝切换完成 · 双击＝编辑便签 · 点 × 去掉";
         }
 
         if (chip.IsDate)

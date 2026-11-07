@@ -1,0 +1,95 @@
+[1/6] 核心测试
+  正在确定要还原的项目…
+  所有项目均是最新的，无法还原。
+  Outspread.Core -> D:\MyProject\borad\src\Outspread.Core\bin\Debug\net10.0\Outspread.Core.dll
+D:\MyProject\borad\tests\Outspread.Core.Tests\ChromeTests.cs(28,21): warning CS8793: 给定的表达式始终与提供的模式匹配。 [D:\MyProject\borad\tests\Outspread.Core.Tests\Outspread.Core.Tests.csproj]
+  Outspread.Core.Tests -> D:\MyProject\borad\tests\Outspread.Core.Tests\bin\Debug\net10.0\Outspread.Core.Tests.dll
+D:\MyProject\borad\tests\Outspread.Core.Tests\bin\Debug\net10.0\Outspread.Core.Tests.dll (.NETCoreApp,Version=v10.0)的测试运行
+总共 1 个测试文件与指定模式相匹配。
+
+已通过! - 失败:     0，通过:   749，已跳过:     0，总计:   749，持续时间: 6 s - Outspread.Core.Tests.dll (net10.0)
+[2/6] MCP 写分�?
+  正在确定要还原的项目…
+  所有项目均是最新的，无法还原。
+D:\MyProject\borad\src\Outspread.Core\CanvasDocument.cs(394,24): warning CS8604: “bool Func<string, bool>.Invoke(string arg)”中的形参“arg”可能传入 null 引用实参。 [D:\MyProject\borad\src\Outspread.Core\Outspread.Core.csproj]
+  Outspread.Core -> D:\Temp\outspread-gate-mcp\bin\Outspread.Core\debug\Outspread.Core.dll
+  outspread-mcp -> D:\Temp\outspread-gate-mcp\bin\outspread-mcp\debug\outspread-mcp.dll
+D:\MyProject\borad\tests\Outspread.Mcp.Tests\BoardToolsWriteTests.cs(137,21): warning xUnit2031: Do not use a Where clause to filter before calling Assert.Single. Use the overload of Assert.Single that accepts a filtering function. (https://xunit.net/xunit.analyzers/rules/xUnit2031) [D:\MyProject\borad\tests\Outspread.Mcp.Tests\Outspread.Mcp.Tests.csproj]
+D:\MyProject\borad\tests\Outspread.Mcp.Tests\BoardToolsWriteTests.cs(176,21): warning xUnit2031: Do not use a Where clause to filter before calling Assert.Single. Use the overload of Assert.Single that accepts a filtering function. (https://xunit.net/xunit.analyzers/rules/xUnit2031) [D:\MyProject\borad\tests\Outspread.Mcp.Tests\Outspread.Mcp.Tests.csproj]
+D:\MyProject\borad\tests\Outspread.Mcp.Tests\BoardToolsWriteTests.cs(217,21): warning xUnit2031: Do not use a Where clause to filter before calling Assert.Single. Use the overload of Assert.Single that accepts a filtering function. (https://xunit.net/xunit.analyzers/rules/xUnit2031) [D:\MyProject\borad\tests\Outspread.Mcp.Tests\Outspread.Mcp.Tests.csproj]
+D:\MyProject\borad\tests\Outspread.Mcp.Tests\BoardToolsWriteTests.cs(300,21): warning xUnit2031: Do not use a Where clause to filter before calling Assert.Single. Use the overload of Assert.Single that accepts a filtering function. (https://xunit.net/xunit.analyzers/rules/xUnit2031) [D:\MyProject\borad\tests\Outspread.Mcp.Tests\Outspread.Mcp.Tests.csproj]
+  Outspread.Mcp.Tests -> D:\Temp\outspread-gate-mcp\bin\Outspread.Mcp.Tests\debug\Outspread.Mcp.Tests.dll
+D:\Temp\outspread-gate-mcp\bin\Outspread.Mcp.Tests\debug\Outspread.Mcp.Tests.dll (.NETCoreApp,Version=v10.0)的测试运行
+总共 1 个测试文件与指定模式相匹配。
+
+已通过! - 失败:     0，通过:    36，已跳过:     0，总计:    36，持续时间: 547 ms - Outspread.Mcp.Tests.dll (net10.0)
+[3/6] 界面构建 —�?先看有没有实例锁着 dll
+[3/6] 界面构建
+  正在确定要还原的项目…
+  所有项目均是最新的，无法还原。
+D:\MyProject\borad\src\Outspread.Core\CanvasDocument.cs(394,24): warning CS8604: “bool Func<string, bool>.Invoke(string arg)”中的形参“arg”可能传入 null 引用实参。 [D:\MyProject\borad\src\Outspread.Core\Outspread.Core.csproj]
+  Outspread.Core -> D:\MyProject\borad\src\Outspread.Core\bin\x64\Debug\net10.0\Outspread.Core.dll
+D:\MyProject\borad\src\Outspread.Board\MainWindow.xaml.cs(1634,18): warning CS0414: 字段“MainWindow._probeActive”已被赋值，但从未使用过它的值 [D:\MyProject\borad\src\Outspread.Board\Outspread.Board.csproj]
+D:\MyProject\borad\src\Outspread.Board\MainWindow.xaml.cs(1634,18): warning CS0414: 字段“MainWindow._probeActive”已被赋值，但从未使用过它的值 [D:\MyProject\borad\src\Outspread.Board\Outspread.Board.csproj]
+  Outspread.Board -> D:\MyProject\borad\src\Outspread.Board\bin\x64\Debug\net10.0-windows10.0.26100.0\win-x64\Outspread.Board.dll
+
+已成功生成。
+
+D:\MyProject\borad\src\Outspread.Core\CanvasDocument.cs(394,24): warning CS8604: “bool Func<string, bool>.Invoke(string arg)”中的形参“arg”可能传入 null 引用实参。 [D:\MyProject\borad\src\Outspread.Core\Outspread.Core.csproj]
+D:\MyProject\borad\src\Outspread.Board\MainWindow.xaml.cs(1634,18): warning CS0414: 字段“MainWindow._probeActive”已被赋值，但从未使用过它的值 [D:\MyProject\borad\src\Outspread.Board\Outspread.Board.csproj]
+D:\MyProject\borad\src\Outspread.Board\MainWindow.xaml.cs(1634,18): warning CS0414: 字段“MainWindow._probeActive”已被赋值，但从未使用过它的值 [D:\MyProject\borad\src\Outspread.Board\Outspread.Board.csproj]
+    3 个警告
+    0 个错误
+
+已用时间 00:00:20.20
+[4/6] 命令行构�?
+  正在确定要还原的项目…
+  所有项目均是最新的，无法还原。
+  Outspread.Core -> D:\MyProject\borad\src\Outspread.Core\bin\Debug\net10.0\Outspread.Core.dll
+  outspread -> D:\MyProject\borad\src\Outspread.Cli\bin\Debug\net10.0\outspread.dll
+
+已成功生成。
+    0 个警告
+    0 个错误
+
+已用时间 00:00:01.59
+[4/6] 连接�?exe 顺手刷新（尽力；被别的连接器锁着就跳过，不挡闸门——它会在下次会话�?build�?
+  正在确定要还原的项目…
+  所有项目均是最新的，无法还原。
+  Outspread.Core -> D:\MyProject\borad\src\Outspread.Core\bin\Debug\net10.0\Outspread.Core.dll
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 1 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 2 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 3 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 4 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 5 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 6 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 7 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 8 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 9 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 10 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): error MSB3027: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。超出了重试计数 10。失败。文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): error MSB3021: 无法将文件“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+
+生成失败。
+
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 1 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 2 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 3 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 4 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 5 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 6 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 7 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 8 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 9 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): warning MSB3026: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。1000 毫秒后将开始第 10 次重试。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. 文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): error MSB3027: 无法将“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。超出了重试计数 10。失败。文件被“outspread-mcp (22576)”锁定。 [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+C:\Program Files\dotnet\sdk\10.0.403\Microsoft.Common.CurrentVersion.targets(5455,5): error MSB3021: 无法将文件“D:\MyProject\borad\src\Outspread.Mcp\obj\Debug\net10.0\apphost.exe”复制到“bin\Debug\net10.0\outspread-mcp.exe”。The process cannot access the file 'D:\MyProject\borad\src\Outspread.Mcp\bin\Debug\net10.0\outspread-mcp.exe' because it is being used by another process. [D:\MyProject\borad\src\Outspread.Mcp\outspread-mcp.csproj]
+    10 个警告
+    2 个错误
+
+已用时间 00:00:12.86
+跳过：exe 被锁或构建失败；不挡闸门
+[5/6] 界面自检（在临时副本上跑，绝不动 boards 里的板子�?
+[6/6] 跟上开始菜单那�?
+
+全过

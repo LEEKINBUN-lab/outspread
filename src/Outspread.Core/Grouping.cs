@@ -185,12 +185,18 @@ public static class Grouping
 /// 一条硬规矩：**有名单的框不再靠几何收人**。否则新格落在显式框里仍会被算成成员，这一改等于没改。
 /// 没有名单的框（别的工具写的、10-24 之前存的）照旧按几何——那才是它唯一能有的语义。
 /// </para>
+/// <para>
+/// 11-12 起名单里也可以写**组的 id**：一个组能是另一个组的成员（嵌套分组）。读的时候按框的
+/// 文档顺序定归属、一格只归一个上层组；写坏成环的名单在这里被拆开（环上后处理到的那个成员
+/// 不再进名单），画面上不会出现互相包着、永远量不完的两只框。
+/// </para>
 /// </remarks>
 public sealed class GroupMap
 {
     private readonly Dictionary<string, string> _noteToGroup;
     private readonly Dictionary<string, List<string>> _members;
     private readonly Dictionary<string, Grouping.Rect> _frames;
+    private readonly List<Grouping.Rect> _frameOrder;
     private readonly IReadOnlyList<Grouping.Rect> _notes;
 
     /// <summary>没有名单的那些框：只有它们还按几何收人。</summary>
@@ -200,12 +206,14 @@ public sealed class GroupMap
         Dictionary<string, string> noteToGroup,
         Dictionary<string, List<string>> members,
         Dictionary<string, Grouping.Rect> frames,
+        List<Grouping.Rect> frameOrder,
         IReadOnlyList<Grouping.Rect> notes,
         IReadOnlyList<Grouping.Rect> openFrames)
     {
         _noteToGroup = noteToGroup;
         _members = members;
         _frames = frames;
+        _frameOrder = frameOrder;
         _notes = notes;
         _openFrames = openFrames;
     }
@@ -218,14 +226,54 @@ public sealed class GroupMap
     {
         var live = new HashSet<string>(notes.Select(note => note.Id), StringComparer.Ordinal);
         var byId = new Dictionary<string, Grouping.Rect>(StringComparer.Ordinal);
+        var frameOrder = new List<Grouping.Rect>();
+        var raw = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
+        foreach (var (frame, ids) in frames)
+        {
+            live.Add(frame.Id);
+            byId[frame.Id] = frame;
+            frameOrder.Add(frame);
+            raw[frame.Id] = ids ?? [];
+        }
+
+        // 外层是不是（直接或穿过几层）装着内层：只用来拆掉写坏的环，不改任何正常名单。
+        bool Contains(string outerId, string innerId)
+        {
+            var pending = new Stack<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            pending.Push(outerId);
+
+            while (pending.Count > 0)
+            {
+                var id = pending.Pop();
+
+                if (!seen.Add(id) || !raw.TryGetValue(id, out var children))
+                {
+                    continue;
+                }
+
+                foreach (var child in children)
+                {
+                    if (string.Equals(child, innerId, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+
+                    pending.Push(child);
+                }
+            }
+
+            return false;
+        }
+
         var noteToGroup = new Dictionary<string, string>(StringComparer.Ordinal);
         var members = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         var open = new List<Grouping.Rect>();
 
         foreach (var (frame, ids) in frames)
         {
-            byId[frame.Id] = frame;
-
             if (ids is null)
             {
                 open.Add(frame);
@@ -236,14 +284,31 @@ public sealed class GroupMap
             // 名单里指向已经不在板上的那些格，读的时候丢掉：删一格不该在别的节点上留下鬼名。
             // 一格只归一个组：按框的文档顺序，先认到的那个组算——被前面的组认走的那些，
             // 不再列进后面那张表的成员里（否则"框 hug 谁"和"这格属于谁"会各说一套）。
-            var kept = ids
-                .Where(id => live.Contains(id) && noteToGroup.TryAdd(id, frame.Id))
-                .ToList();
+            // 组也能是成员；会把自己套成环的那些成员在这里就被拆掉。
+            var kept = new List<string>();
+
+            foreach (var id in ids)
+            {
+                if (!live.Contains(id) || noteToGroup.ContainsKey(id))
+                {
+                    continue;
+                }
+
+                if (raw.ContainsKey(id) && (string.Equals(id, frame.Id, StringComparison.Ordinal) || Contains(id, frame.Id)))
+                {
+                    continue;
+                }
+
+                if (noteToGroup.TryAdd(id, frame.Id))
+                {
+                    kept.Add(id);
+                }
+            }
 
             members[frame.Id] = kept;
         }
 
-        return new GroupMap(noteToGroup, members, byId, notes, open);
+        return new GroupMap(noteToGroup, members, byId, frameOrder, notes, open);
     }
 
     /// <summary>这个框有没有显式名单（没有＝它靠几何收人）。</summary>
@@ -262,7 +327,7 @@ public sealed class GroupMap
         return Grouping.GroupOf(note, _openFrames);
     }
 
-    /// <summary>这个框里的成员，按文档（叠放）顺序。</summary>
+    /// <summary>这个框的直接成员，按文档（叠放）顺序：便签在前、嵌进来的子组在后。</summary>
     public IReadOnlyList<Grouping.Rect> Members(string frameId)
     {
         if (!_members.TryGetValue(frameId, out var ids))
@@ -271,11 +336,102 @@ public sealed class GroupMap
         }
 
         var wanted = new HashSet<string>(ids, StringComparer.Ordinal);
+        var result = new List<Grouping.Rect>(wanted.Count);
 
-        return _notes.Where(note => wanted.Contains(note.Id)).ToList();
+        foreach (var note in _notes)
+        {
+            if (wanted.Contains(note.Id))
+            {
+                result.Add(note);
+            }
+        }
+
+        foreach (var frame in _frameOrder)
+        {
+            if (wanted.Contains(frame.Id))
+            {
+                result.Add(frame);
+            }
+        }
+
+        return result;
     }
 
     public IReadOnlyList<string> MemberIds(string frameId) => [.. Members(frameId).Select(member => member.Id)];
+
+    /// <summary>
+    /// 这个框里（含着嵌进来的子组一路走到底）所有便签的 id：点外面的名牌＝选里面全部便签。
+    /// </summary>
+    public IReadOnlyList<string> NoteIdsUnder(string frameId)
+    {
+        var collected = new List<string>();
+        var seenNotes = new HashSet<string>(StringComparer.Ordinal);
+        var seenFrames = new HashSet<string>(StringComparer.Ordinal);
+
+        Walk(frameId);
+
+        return collected;
+
+        void Walk(string id)
+        {
+            if (!seenFrames.Add(id))
+            {
+                return;
+            }
+
+            if (!_members.TryGetValue(id, out var ids))
+            {
+                if (_frames.TryGetValue(id, out var box))
+                {
+                    foreach (var member in Grouping.Members(box, _notes))
+                    {
+                        if (seenNotes.Add(member.Id))
+                        {
+                            collected.Add(member.Id);
+                        }
+                    }
+                }
+
+                return;
+            }
+
+            var wanted = new HashSet<string>(ids, StringComparer.Ordinal);
+
+            foreach (var note in _notes)
+            {
+                if (wanted.Contains(note.Id) && seenNotes.Add(note.Id))
+                {
+                    collected.Add(note.Id);
+                }
+            }
+
+            foreach (var frame in _frameOrder)
+            {
+                if (wanted.Contains(frame.Id))
+                {
+                    Walk(frame.Id);
+                }
+            }
+        }
+    }
+
+    /// <summary>这个框套了几层（最外层 0）：渲染把外面那圈画淡一档，嵌套才看得出层级。</summary>
+    public int Depth(string frameId)
+    {
+        var depth = 0;
+        var current = frameId;
+
+        while (depth < 64 && _noteToGroup.TryGetValue(current, out var parent))
+        {
+            depth++;
+            current = parent;
+        }
+
+        return depth;
+    }
+
+    /// <summary>这一格（便签或组）套在哪个外层组里；散着／最外层的返回 null。</summary>
+    public string? ParentOf(string id) => _noteToGroup.TryGetValue(id, out var parent) ? parent : null;
 
     /// <summary>按在名牌或虚线上＝选中组里所有便签（框自己从不进选中）。</summary>
     public IReadOnlyList<string> OnFramePressed(Grouping.Rect group) => MemberIds(group.Id);

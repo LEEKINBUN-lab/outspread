@@ -59,6 +59,26 @@ public static class BoardFragment
             .Select(node => node.Id)
             .ToList();
 
+        // 嵌套组：外层名单里写的是内层组的 id，所以"组里有一格被选中"要沿名单一路往上走到外层。
+        for (var grew = true; grew;)
+        {
+            grew = false;
+
+            foreach (var node in document.Nodes.Where(node => node.Kind == CanvasNodeKind.Group))
+            {
+                if (groupIds.Contains(node.Id) || node.GroupMemberIds is not { } roster)
+                {
+                    continue;
+                }
+
+                if (roster.Any(id => taken.Contains(id) || groupIds.Contains(id, StringComparer.Ordinal)))
+                {
+                    groupIds.Add(node.Id);
+                    grew = true;
+                }
+            }
+        }
+
         var inside = taken.Concat(groupIds).ToHashSet(StringComparer.Ordinal);
 
         var nodes = new JsonArray();

@@ -73,6 +73,10 @@ public sealed partial class MainWindow
 
         /// <summary>开手那一拍每个组的成员名单：松手时按它改写，才知道谁进了谁出了组。</summary>
         public Dictionary<string, List<string>> StartRosters { get; init; } = new(StringComparer.Ordinal);
+
+        /// <summary>开手那一拍每个框的矩形。出组判定要量"拖的时候看得见的那只框"，
+        /// 不能量松手后才被重算过的框（捕获丢失的收尾会按旧名单把它贴回那一格）。</summary>
+        public Dictionary<string, Grouping.Rect> StartFrames { get; init; } = new(StringComparer.Ordinal);
     }
 
     /// <summary>ProjectSelection 每一拍叫它：该不该有操作条、贴在哪。手势进行中不重画。</summary>
@@ -1303,6 +1307,7 @@ public sealed partial class MainWindow
                 StartPositions = positions,
                 StartGroupId = Groups().GroupOf(RectOf(first))?.Id,
                 StartRosters = RosterSnapshot(),
+                StartFrames = GroupRects().ToDictionary(frame => frame.Id, frame => frame, StringComparer.Ordinal),
             };
 
             group.CapturePointer(e.Pointer);
@@ -1343,9 +1348,12 @@ public sealed partial class MainWindow
                 return;
             }
 
-            group.ReleasePointerCapture(e.Pointer);
             _railDrag = null;
 
+            // 先结算、再放捕获。ReleasePointerCapture 会同步发 PointerCaptureLost，那条收尾走
+            // EndGesture→RefitFrames，会按"还没改过的名单"把框贴回拖出去的那一格——框先长过去，
+            // 出组判定就永远"还碰着原框"（11-12 他报的"松手只是分组范围扩大"）。整板拖动
+            // 也是这个次序：结算在前，放捕获在后。
             if (state.Started)
             {
                 EndGroupDrag(state);
@@ -1360,6 +1368,7 @@ public sealed partial class MainWindow
                 ShowGroupMenu();
             }
 
+            group.ReleasePointerCapture(e.Pointer);
             e.Handled = true;
         };
 
@@ -2391,6 +2400,7 @@ public sealed partial class MainWindow
             StartPositions = new Dictionary<string, (double X, double Y)>(StringComparer.Ordinal) { [loose.Id] = (loose.X, loose.Y) },
             StartGroupId = null,
             StartRosters = RosterSnapshot(),
+            StartFrames = GroupRects().ToDictionary(frame => frame.Id, frame => frame, StringComparer.Ordinal),
         };
 
         BeginGroupDrag(state, state.StartPointer);
@@ -2467,6 +2477,74 @@ public sealed partial class MainWindow
         Rebuild();
     }
 
+    /// <summary>
+    /// 组钮拖出成员：名单必须真的写掉那一格。11-12 他报"长按组钮拖不出去，松手只是分组范围扩大"——
+    /// 松手那一拍 ReleasePointerCapture 会同步发 PointerCaptureLost，收尾先按旧名单把框贴回来罩住
+    /// 那一格，出组判定于是永远"还碰着原框"。这里按那条顺序走一遍（捕获丢失先收尾、Released 再结算），
+    /// 判据读文档：名单里不许再留着拖出去的那一格。
+    /// </summary>
+    private void SelfTestGroupDragDetach(List<string> problems)
+    {
+        var originX = Math.Round(_view.ToWorldX(420));
+        var originY = Math.Round(_view.ToWorldY(320));
+
+        var stay = _document.Add(CanvasNodeKind.Text, originX, originY, 200, 100);
+        var leaving = _document.Add(CanvasNodeKind.Text, originX, originY + 130, 200, 100);
+        var frame = _document.Add(CanvasNodeKind.Group, originX - 10, originY - 10, 220, 250);
+        frame.Label = "自检出组";
+        frame.SetGroupMembers([stay.Id, leaving.Id]);
+        Rebuild();
+
+        var start = new Point(
+            _view.ToScreenX(leaving.X + (leaving.Width / 2)),
+            _view.ToScreenY(leaving.Y + (leaving.Height / 2)));
+
+        var state = new RailDrag
+        {
+            NodeId = leaving.Id,
+            StartPointer = start,
+            StartX = leaving.X,
+            StartY = leaving.Y,
+            StartPositions = new Dictionary<string, (double X, double Y)>(StringComparer.Ordinal)
+            {
+                [leaving.Id] = (leaving.X, leaving.Y),
+            },
+            StartGroupId = frame.Id,
+            StartRosters = RosterSnapshot(),
+            StartFrames = GroupRects().ToDictionary(candidate => candidate.Id, candidate => candidate, StringComparer.Ordinal),
+        };
+
+        BeginGroupDrag(state, start);
+        state.Started = true;
+        MoveGroupDrag(state, new Point(start.X + 420, start.Y + 320));
+
+        // 他机上发生的顺序：捕获丢失先收尾（会 RefitFrames 把框贴回来），Released 再结算这一发。
+        AbortGroupDrag();
+        EndGroupDrag(state);
+
+        var roster = Groups().MemberIds(frame.Id);
+
+        if (roster.Contains(leaving.Id))
+        {
+            problems.Add("selftest 出组: 捕获丢失先到以后，名单里还留着拖出去的那一格——框随后被贴回去罩住它");
+        }
+        else if (roster.Count != 1 || !roster.Contains(stay.Id))
+        {
+            problems.Add($"selftest 出组: 留下那一格也丢了（名单 {roster.Count} 格）");
+        }
+        else
+        {
+            Diagnostics.Write($"selftest 出组: 名单只剩留下那一格，拖出的那格已经出组（框 {NodeOf(frame.Id)?.Width:0.#}×{NodeOf(frame.Id)?.Height:0.#}）");
+        }
+
+        foreach (var temp in new[] { frame, leaving, stay })
+        {
+            _document.Remove(temp.Id);
+        }
+
+        Rebuild();
+    }
+
     /// <summary>画面上那枚框的警示态；没画出来的读 "?"，别把"没画"当成"已清"。</summary>
     private string? FrameAlert(string id)
         => _realized.TryGetValue(id, out var visual) ? visual.GroupChrome().Alert : "?";
@@ -2515,9 +2593,10 @@ public sealed partial class MainWindow
 
             if (landed is null && own is { } ownId)
             {
-                var self = frames.FirstOrDefault(frame => frame.Id == ownId);
-
-                if (self.Width > 0 && self.Intersects(rect))
+                // 原来那只框按开手那一拍的形状量：松手后的几何可能已经被 RefitFrames 贴回来
+                // 罩住这一格，拿它量就等于问"框有没有长过来"，出组永远判不出来。
+                if (state.StartFrames.TryGetValue(ownId, out var self)
+                    && self.Width > 0 && self.Intersects(rect))
                 {
                     landed = ownId;   // 还碰着原来的框＝留在原组
                 }
@@ -2559,17 +2638,50 @@ public sealed partial class MainWindow
         PurgeEmptyRosters();
     }
 
-    /// <summary>把名单被写成空的组框从文档里删掉（拖出最后一枚／手工清空名单）。返回删了几个。</summary>
+    /// <summary>把名单里活成员一个不剩的组框从文档里删掉（拖出最后一枚／手工清空名单）。返回删了几个。</summary>
     private int PurgeEmptyRosters()
     {
         var purged = 0;
 
-        foreach (var frameNode in _document.Nodes.Where(node => node.Kind == CanvasNodeKind.Group).ToList())
+        // 嵌套档：内层组被拖空删掉后，外层名单里会剩一条死引用，外层自己也可能因此变空。
+        // 每一圈先摘死名，再删"名单还在、活成员一个不剩"的框；没有名单的几何框不归这条路管。
+        for (var pass = 0; pass < 32; pass++)
         {
-            if (frameNode.GroupMemberIds is { Count: 0 })
+            var live = _document.Nodes.Select(node => node.Id).ToHashSet(StringComparer.Ordinal);
+            var rosterFrames = _document.Nodes
+                .Where(node => node.Kind == CanvasNodeKind.Group && node.GroupMemberIds is not null)
+                .ToList();
+            var changed = false;
+
+            foreach (var frameNode in rosterFrames)
             {
-                _document.Remove(frameNode.Id);
+                var roster = frameNode.GroupMemberIds!;
+                var kept = roster.Where(live.Contains).ToList();
+
+                if (kept.Count != roster.Count)
+                {
+                    frameNode.SetGroupMembers(kept);
+                    changed = true;
+                }
+            }
+
+            var map = Groups();
+            var dead = _document.Nodes
+                .Where(node => node.Kind == CanvasNodeKind.Group && node.GroupMemberIds is not null)
+                .Where(node => map.Members(node.Id).Count == 0)
+                .Select(node => node.Id)
+                .ToList();
+
+            foreach (var id in dead)
+            {
+                _document.Remove(id);
                 purged++;
+                changed = true;
+            }
+
+            if (!changed)
+            {
+                break;
             }
         }
 

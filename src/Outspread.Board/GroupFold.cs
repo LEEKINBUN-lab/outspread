@@ -73,7 +73,11 @@ public sealed partial class MainWindow
             var members = Groups().Members(frame.Id).Select(member => NodeOf(member.Id)!).ToList();
 
             var rects = members.ConvertAll(RectOf);
-            var plan = Folding.PlanOf(members.Select((node, i) => (rects[i], Shows(node))).ToList());
+
+            // 子组框没有正文可筛：它永远算"看得见"，不许被折到某一格背后（嵌套档）。
+            var plan = Folding.PlanOf(members
+                .Select((node, i) => (rects[i], node.Kind == CanvasNodeKind.Group || Shows(node)))
+                .ToList());
 
             if (!plan.AnythingFolded)
             {

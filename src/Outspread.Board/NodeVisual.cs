@@ -602,6 +602,28 @@ public sealed class NodeVisual : ContentControl
     internal (bool Dashed, double Thickness) GroupFrameLine()
         => (_frame.StrokeDashArray is { Count: > 0 }, _frame.StrokeThickness);
 
+    private int _groupDepth = -1;
+
+    /// <summary>
+    /// 嵌套层级：里面还套着组的"容器框"画淡一档（越外层越淡），最里面那层保持原样——
+    /// 两只虚线框叠在一起时，层级只靠这一档看出来。只动框线，名牌与警示态各用自己的颜色。
+    /// </summary>
+    internal void SetGroupDepth(int depth, bool containsGroups)
+    {
+        var opacity = containsGroups ? Math.Max(0.45, 0.78 - (0.16 * depth)) : 1d;
+
+        if (_groupDepth == depth && Math.Abs(_frame.Opacity - opacity) < 0.001)
+        {
+            return;
+        }
+
+        _groupDepth = depth;
+        _frame.Opacity = opacity;
+    }
+
+    /// <summary>自检读的框线不透明度：外层容器该比里层淡。</summary>
+    internal double GroupFrameOpacity() => _frame.Opacity;
+
     /// <summary>
     /// 自检读的警示环：基值、以及"此刻还在往哪儿淡"（null＝没有动画在跑）。
     /// 11-02 那个"另一个框一直亮"的根子就在这第二个数：清警示态时若只写基值、不停掉正在

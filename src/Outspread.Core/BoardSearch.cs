@@ -83,7 +83,9 @@ public static class BoardSearch
         var nodes = document.Nodes;
         var scored = new List<Scored>(nodes.Count);
         var liveNotes = nodes.Where(node => node.Kind != CanvasNodeKind.Group).ToList();
-        var liveIds = new HashSet<string>(liveNotes.Select(node => node.Id), StringComparer.Ordinal);
+
+        // 组的 id 也算活成员：外层框的名单里写着内层组的 id（嵌套档），别把装着东西的外层当空组藏掉。
+        var liveIds = new HashSet<string>(nodes.Select(node => node.Id), StringComparer.Ordinal);
 
         for (var index = 0; index < nodes.Count; index++)
         {

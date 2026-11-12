@@ -127,4 +127,42 @@ public class GroupMapTests
         Assert.True(GroupMap.Build([a], [Frame("g", [])]).HasRoster("g"));
         Assert.False(GroupMap.Build([a], [Frame("g", null)]).HasRoster("g"));
     }
+
+    /// <summary>
+    /// 11-12 的嵌套档：名单里可以写另一个组的 id。外层读出来的直接成员是那个组；
+    /// 点外层名牌收的是它里面全部便签。
+    /// </summary>
+    [Fact]
+    public void A_group_can_be_a_member_of_another_group()
+    {
+        var a = Note("a", 10, 10);
+        var b = Note("b", 40, 10);
+        var inner = Note("inner", 0, 0, 200, 100);
+        var outer = Note("outer", -10, -10, 400, 200);
+        var map = GroupMap.Build(
+            [a, b],
+            [(inner, ["a", "b"]), (outer, ["inner"])]);
+
+        Assert.Equal(["inner"], map.MemberIds("outer"));
+        Assert.Equal(["a", "b"], map.NoteIdsUnder("outer"));
+        Assert.Equal("inner", map.GroupOf(a)?.Id);
+        Assert.Equal("inner", map.ParentOf(a.Id));
+        Assert.Equal("outer", map.ParentOf("inner"));
+        Assert.Equal(0, map.Depth("outer"));
+        Assert.Equal(1, map.Depth("inner"));
+    }
+
+    /// <summary>名单写成互相装着（别的工具写坏的数据）：读的时候拆掉环，不许无限递归。</summary>
+    [Fact]
+    public void A_roster_cycle_is_broken_when_reading()
+    {
+        var a = Note("a", 10, 10);
+        var first = Note("g1", 0, 0, 200, 100);
+        var second = Note("g2", 0, 0, 200, 100);
+        var map = GroupMap.Build([a], [(first, ["g2"]), (second, ["g1"])]);
+
+        Assert.Empty(map.MemberIds("g1"));
+        Assert.Empty(map.MemberIds("g2"));
+        Assert.Empty(map.NoteIdsUnder("g1"));
+    }
 }

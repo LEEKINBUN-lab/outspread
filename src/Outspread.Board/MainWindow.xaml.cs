@@ -1130,6 +1130,7 @@ public sealed partial class MainWindow : Window
         // 否则锚点在屏内、真位置在屏外的那一格会在摊开时是空的。
         var displays = MergeLensDisplays(BuildDisplays());
         var emptyGroups = EmptyGroupIds();
+        var groupStyles = GroupFrameStyles();
 
         // 这一拍的节点表只取一次：每取一次都会把整份 JSON 重新包成 330 个视图对象。
         var nodes = _document.Nodes;
@@ -1323,6 +1324,12 @@ public sealed partial class MainWindow : Window
             }
 
             // 位置、尺寸、缩放、命中、内容都由 Update 按"上一拍写过什么"对账，只写真变的那几笔。
+            if (pendingVisual.Kind == CanvasNodeKind.Group
+                && groupStyles.TryGetValue(pendingNode.Id, out var groupStyle))
+            {
+                pendingVisual.SetGroupDepth(groupStyle.Depth, groupStyle.Container);
+            }
+
             pendingVisual.Update(pendingNode, _view, scale, pendingDisplay);
             visible++;
 
@@ -1843,6 +1850,23 @@ public sealed partial class MainWindow : Window
             frames.Add(new NodeHug(frameId, [.. map.MemberIds(frameId)]));
         }
 
+        // 嵌套：拖内层便签时，外层的框也得跟着走——外层罩的是内层那只框，内层一动它就得重贴。
+        // 顺序是从内层往外套（后贴的外层读到的已是内层贴好的框）。
+        void AdoptChain(string? frameId)
+        {
+            var guard = 0;
+
+            for (var id = frameId; id is not null && guard++ < 64; id = map.ParentOf(id))
+            {
+                if (seen.Contains(id))
+                {
+                    break;
+                }
+
+                Adopt(id);
+            }
+        }
+
         if (pressed.Kind == CanvasNodeKind.Group)
         {
             Adopt(pressed.Id);
@@ -1852,7 +1876,7 @@ public sealed partial class MainWindow : Window
         {
             if (NodeOf(draggedId) is { Kind: not CanvasNodeKind.Group } note)
             {
-                Adopt(map.GroupOf(RectOf(note))?.Id);
+                AdoptChain(map.GroupOf(RectOf(note))?.Id);
             }
         }
 
@@ -2382,7 +2406,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private (List<string> Ids, string? Focus) PressTarget(CanvasNode pressed)
         => pressed.Kind == CanvasNodeKind.Group
-            ? ([.. Groups().OnFramePressed(RectOf(pressed))], pressed.Id)
+            ? ([.. Groups().NoteIdsUnder(pressed.Id)], pressed.Id)
             : ([pressed.Id], null);
 
     /// <summary>记下这一发：下一发要在 500ms/4px 内回到同一格才认成双击。</summary>
@@ -2519,8 +2543,9 @@ public sealed partial class MainWindow : Window
         {
             if (pressedNode.Kind == CanvasNodeKind.Group)
             {
-                // Ctrl 点在名牌／环带上＝整组加进选出、再点一次整组退出。
-                var memberIds = Groups().OnFramePressed(RectOf(pressedNode));
+                // Ctrl 点在名牌／环带上＝整组加进选出、再点一次整组退出。嵌套时收的是
+                // 这一框里所有便签（子组一路走到底）——点外层名牌＝整个外层的便签。
+                var memberIds = Groups().NoteIdsUnder(pressedNode.Id);
                 var allIn = memberIds.All(_selection.Contains);
 
                 foreach (var member in memberIds)
@@ -2662,11 +2687,16 @@ public sealed partial class MainWindow : Window
             ClearSelection();
         }
 
-        var emptyGroups = EmptyGroupIds();
+        // 框选没有"按住了哪个框"这回事：焦点必须跟着清，否则之后 Ctrl＋G 会拿上一次
+        // 点过的框去拆（嵌套以后拆错一层不是小事）。
+        _groupFocus = null;
 
         foreach (var node in _document.Nodes)
         {
-            if (node.Kind == CanvasNodeKind.Group && emptyGroups.Contains(node.Id))
+            // 组框是关系、不是场上的东西（10-22 定的：框自己从不进选中）。框选必须让它让开——
+            // 否则在组里框选两枚便签时整块框也跟着进选中，选中框一下涨到整个组的范围
+            // （他 11-12 报的"一框选分组里的元素就会选中整个分组"）。
+            if (node.Kind == CanvasNodeKind.Group)
             {
                 continue;
             }
@@ -2683,6 +2713,64 @@ public sealed partial class MainWindow : Window
         }
 
         Diagnostics.Write($"marquee selected {_selection.Count} node(s)");
+    }
+
+    /// <summary>
+    /// 框选只收便签，组框永不进选中（11-12 他报的"一框选分组里的元素就会选中整个分组"）。
+    /// 造一组两格：只框其中一枚 ⇒ 只选中那一枚；整组框进来 ⇒ 两枚都选中，框自己仍然不在名单里。
+    /// </summary>
+    private void SelfTestMarqueeNotesOnly(List<string> problems)
+    {
+        var originX = Math.Round(_view.ToWorldX(420));
+        var originY = Math.Round(_view.ToWorldY(320));
+
+        var first = _document.Add(CanvasNodeKind.Text, originX, originY, 200, 100);
+        var second = _document.Add(CanvasNodeKind.Text, originX + 300, originY, 200, 100);
+        var frame = _document.Add(CanvasNodeKind.Group, originX - 10, originY - 10, 520, 120);
+        frame.Label = "自检框选";
+        frame.SetGroupMembers([first.Id, second.Id]);
+        Rebuild();
+
+        SelectInside(new Rect(originX - 5, originY - 5, 210, 110), append: false);
+
+        var onlyFirst = _selection.Contains(first.Id)
+            && !_selection.Contains(second.Id)
+            && !_selection.Contains(frame.Id);
+
+        SelectInside(new Rect(originX - 20, originY - 20, 540, 140), append: false);
+
+        var bothNotes = _selection.Contains(first.Id)
+            && _selection.Contains(second.Id)
+            && !_selection.Contains(frame.Id);
+
+        if (!onlyFirst)
+        {
+            problems.Add("selftest 框选: 只框组内一枚时名单不对——组框跟进了选中，或把另一枚也收进来了");
+        }
+        else if (!bothNotes)
+        {
+            problems.Add("selftest 框选: 整组框进来以后两枚便签没都选中，或组框自己进了选中");
+        }
+        else
+        {
+            Diagnostics.Write("selftest 框选: 只框一枚＝只选那一枚；整组框进来＝两枚便签都选、组框一路不收");
+        }
+
+        ClearSelection();
+        ProjectSelection();
+
+        // 同 CleanupNestedSelfTest：淡出没播完会被下一发当成"条还亮着"，自检里直接落定。
+        if (_rail is not null && !RailIsShown)
+        {
+            _rail.Visibility = Visibility.Collapsed;
+        }
+
+        foreach (var temp in new[] { frame, second, first })
+        {
+            _document.Remove(temp.Id);
+        }
+
+        Rebuild();
     }
 
     // -------------------------------------------------------------------------
@@ -6574,6 +6662,15 @@ public sealed partial class MainWindow : Window
 
         // 组钮拖过两个框：同时只能亮一个，松手都回虚线（11-02 他报的"另一个框一直亮"）。
         SelfTestGroupDragAlerts(problems);
+
+        // 组钮拖出：捕获丢失先到也不许把那一格留在名单里（11-12 他报的"松手只把框撑大"）。
+        SelfTestGroupDragDetach(problems);
+
+        // 框选只收便签：组框永不进选中（11-12 他报的"框选组内元素＝选中整个分组"）。
+        SelfTestMarqueeNotesOnly(problems);
+
+        // 嵌套分组：多选整组＋散格成外层；点外/内层名牌各收各的；拆外层保留内层；外层更淡。
+        SelfTestNestedGroups(problems);
 
         // 左下角两档计数 + 点一档把符合的那几格临时聚到中间（11-02 定档的 B＋聚合）。
         SelfTestDueLens(problems);

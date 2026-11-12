@@ -1,3 +1,4 @@
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Outspread.Core;
 
@@ -564,7 +565,49 @@ public sealed partial class MainWindow
         }
 
         var map = Groups();
+        var selected = members.Select(note => note.Id).ToHashSet(StringComparer.Ordinal);
         var loose = members.Where(note => map.GroupOf(RectOf(note)) is null).ToList();
+
+        // 嵌套（11-12 他拍）：选中了某个组的**全部**便签，这个组就整组当一件东西，
+        // 和选中里的散格一起新建一个外层组。只选中组里一部分时，仍旧走"并进已有的组"。
+        var fullGroups = GroupRects()
+            .Where(frame => map.HasRoster(frame.Id))
+            .Select(frame => (Frame: frame.Id, Notes: map.NoteIdsUnder(frame.Id)))
+            .Where(pair => pair.Notes.Count > 0 && pair.Notes.All(selected.Contains))
+            .ToList();
+
+        // 都是"整组选中"时只留最外面那几枚：外层已经装着内层，不能把同一个组写进两层。
+        var units = fullGroups
+            .Where(pair => !fullGroups.Any(other => other.Frame != pair.Frame
+                && other.Notes.Count > pair.Notes.Count
+                && other.Notes.ToHashSet(StringComparer.Ordinal).IsSupersetOf(pair.Notes)))
+            .Select(pair => pair.Frame)
+            .ToList();
+
+        var covered = units
+            .SelectMany(id => map.NoteIdsUnder(id))
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (units.Count > 0)
+        {
+            if (units.Count == 1 && loose.Count == 0)
+            {
+                // 只有"再罩一层"的活要干时不做：一个组外面再包一个组没有任何意义。
+                Say("所选便签均已属于组 · 按 Ctrl＋G 解散");
+                return;
+            }
+
+            var memberIds = new List<string>(units);
+
+            memberIds.AddRange(loose.Select(note => note.Id));
+
+            CreateGroup(
+                memberIds,
+                members.Select(note => note.Id).ToList(),
+                covered.Count + loose.Count);
+
+            return;
+        }
 
         if (loose.Count == 0)
         {
@@ -581,9 +624,168 @@ public sealed partial class MainWindow
             return;
         }
 
+        CreateGroup([.. members.Select(member => member.Id)], [.. members.Select(member => member.Id)], members.Count);
+    }
+
+    /// <summary>
+    /// 嵌套组（11-12 他拍的三条）：多选整组＋散格成组＝长出外层；点外层名牌选里面全部便签、
+    /// 点内层名牌只选内层；拆外层时内层原样留下；外层全是容器、画得比里层淡。
+    /// </summary>
+    private void SelfTestNestedGroups(List<string> problems)
+    {
+        var originX = Math.Round(_view.ToWorldX(420));
+        var originY = Math.Round(_view.ToWorldY(320));
+
+        var first = _document.Add(CanvasNodeKind.Text, originX, originY, 200, 100);
+        var second = _document.Add(CanvasNodeKind.Text, originX, originY + 130, 200, 100);
+        var loose = _document.Add(CanvasNodeKind.Text, originX + 260, originY, 200, 100);
+
+        var inner = _document.Add(CanvasNodeKind.Group, originX - 10, originY - 10, 220, 250);
+        inner.Label = "自检内层";
+        inner.SetGroupMembers([first.Id, second.Id]);
+
+        Rebuild();
+
+        ClearSelection();
+        _selection.Add(first.Id);
+        _selection.Add(second.Id);
+        _selection.Add(loose.Id);
+        ProjectSelection();
+
+        GroupSelection();
+
+        var outer = _document.Nodes
+            .Where(node => node.Kind == CanvasNodeKind.Group
+                && node.Id != inner.Id
+                && node.GroupMemberIds is { } roster
+                && roster.Contains(inner.Id, StringComparer.Ordinal)
+                && roster.Contains(loose.Id, StringComparer.Ordinal))
+            .FirstOrDefault();
+
+        if (outer is null)
+        {
+            problems.Add("selftest 嵌套组: 整组＋散格按下成组，没有长出外层组（或外层名单里没有内层组的 id）");
+            CleanupNestedSelfTest(inner, loose, first, second);
+
+            return;
+        }
+
+        var innerStill = NodeOf(inner.Id)?.GroupMemberIds;
+        var outerIds = Groups().NoteIdsUnder(outer.Id);
+        var innerIds = Groups().NoteIdsUnder(inner.Id);
+        var derived = DerivedFrames();
+
+        var encloses = derived.TryGetValue(outer.Id, out var outerBox)
+            && NodeOf(inner.Id) is { } innerNow
+            && outerBox.X <= innerNow.X + 0.001
+            && outerBox.Y <= innerNow.Y + 0.001
+            && outerBox.X + outerBox.Width >= innerNow.X + innerNow.Width - 0.001
+            && outerBox.Y + outerBox.Height >= innerNow.Y + innerNow.Height - 0.001;
+
+        _realized.TryGetValue(outer.Id, out var outerVisual);
+        _realized.TryGetValue(inner.Id, out var innerVisual);
+
+        var outerFainter = outerVisual is not null && innerVisual is not null
+            && innerVisual.GroupFrameOpacity() > outerVisual.GroupFrameOpacity();
+
+        if (innerStill is null || !innerStill.Contains(first.Id, StringComparer.Ordinal))
+        {
+            problems.Add("selftest 嵌套组: 长出外层以后，内层组自己那份名单被改掉了");
+        }
+        else if (!outerIds.Contains(first.Id) || !outerIds.Contains(second.Id) || !outerIds.Contains(loose.Id))
+        {
+            problems.Add($"selftest 嵌套组: 点外层名牌该收全部 3 格便签，读到 {outerIds.Count} 格");
+        }
+        else if (innerIds.Contains(loose.Id) || innerIds.Count != 2)
+        {
+            problems.Add($"selftest 嵌套组: 点内层名牌该只收内层 2 格，读到 {innerIds.Count} 格");
+        }
+        else if (!encloses)
+        {
+            problems.Add("selftest 嵌套组: 外层框没有把内层框罩进去");
+        }
+        else if (!outerFainter)
+        {
+            problems.Add("selftest 嵌套组: 外层容器框没有画得比里层淡（或两枚框没画出来，读不到不透明度）");
+        }
+        else
+        {
+            Diagnostics.Write(
+                $"selftest 嵌套组: 外层名单={outer.GroupMemberIds?.Count ?? 0} 项、点外层收 {outerIds.Count} 格便签、"
+                + $"点内层收 {innerIds.Count} 格；外层框罩住内层，不透明度 {outerVisual?.GroupFrameOpacity() ?? 1:0.##} < 内层 {innerVisual?.GroupFrameOpacity() ?? 1:0.##}");
+        }
+
+        // 拆外层：只删外层，内层组与它的名单原样留下，散格回到自由身。
+        ClearSelection();
+        _selection.Add(first.Id);
+        _selection.Add(second.Id);
+        _selection.Add(loose.Id);
+        _groupFocus = outer.Id;
+        ProjectSelection();
+
+        UngroupSelection();
+
+        var innerKept = NodeOf(inner.Id)?.GroupMemberIds is { } keptRoster
+            && keptRoster.Contains(first.Id, StringComparer.Ordinal)
+            && keptRoster.Contains(second.Id, StringComparer.Ordinal);
+        var looseFree = Groups().GroupOf(RectOf(NodeOf(loose.Id)!)) is null;
+
+        if (NodeOf(outer.Id) is not null)
+        {
+            problems.Add("selftest 嵌套组: 拆外层以后外层框还在");
+        }
+        else if (!innerKept)
+        {
+            problems.Add("selftest 嵌套组: 拆外层时把内层组也拆了（或改了它的名单）");
+        }
+        else if (!looseFree)
+        {
+            problems.Add("selftest 嵌套组: 拆外层以后散格还在某个组里");
+        }
+        else
+        {
+            Diagnostics.Write("selftest 嵌套组: 拆外层只删外层，内层组与名单原样、散格回到自由身");
+        }
+
+        CleanupNestedSelfTest(inner, loose, first, second);
+    }
+
+    private void CleanupNestedSelfTest(params CanvasNode[] nodes)
+    {
+        ClearSelection();
+        _groupFocus = null;
+
+        foreach (var node in nodes)
+        {
+            if (NodeOf(node.Id) is not null)
+            {
+                _document.Remove(node.Id);
+            }
+        }
+
+        Rebuild();
+        ProjectSelection();   // 操作条跟着选中一起收：只 Rebuild 会把它留在屏上
+
+        // 收操作条带淡出：自检是同步跑完的，下一发读 Visibility 时那支淡出还没播完，
+        // 会被当成"条还亮着"。这里直接落定，下一发看到的就是收好的样子。
+        if (_rail is not null && !RailIsShown)
+        {
+            _rail.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    /// <summary>新建一个组框，成员名单原样写进去：可能是便签，也可能是整块内层组（嵌套）。</summary>
+    private void CreateGroup(IReadOnlyList<string> memberIds, IReadOnlyList<string> selectIds, int noteCount)
+    {
         BeginGesture("成组");
 
-        var frame = Grouping.Enclose(string.Empty, members.ConvertAll(RectOf));
+        var boxes = memberIds
+            .Select(id => NodeOf(id))
+            .Where(node => node is not null)
+            .Select(node => RectOf(node!))
+            .ToList();
+
+        var frame = Grouping.Enclose(string.Empty, boxes);
         var made = _document.Add(CanvasNodeKind.Group, frame.X, frame.Y, frame.Width, frame.Height);
 
         // 新建的组要有一句能看见、能改的描述（10-22 他：新建的组没描述也没法改）。
@@ -591,19 +793,19 @@ public sealed partial class MainWindow
         made.Label = "分组";
 
         // 成员是一张名单：成组那一拍把它写死，之后只有组钮那一路能改它。
-        made.SetGroupMembers([.. members.Select(member => member.Id)]);
+        made.SetGroupMembers([.. memberIds]);
 
         EndGesture();
 
         _groupFocus = made.Id;
         Rebuild();
-        Reselect(members.Select(member => member.Id));
+        Reselect(selectIds);
         SaveSoon();
         ProjectSelection();
 
-        Say(members.Count == 1
+        Say(noteCount == 1
             ? "已创建组（1 个便签）· 按 Ctrl＋G 解散"
-            : $"已创建组（{members.Count} 个便签）· 按 Ctrl＋G 解散");
+            : $"已创建组（{noteCount} 个便签）· 按 Ctrl＋G 解散");
     }
 
     /// <summary>
@@ -698,22 +900,49 @@ public sealed partial class MainWindow
     }
 
     /// <summary>解散选中这些格子所在的组（菜单那一项；Ctrl＋G 在"全都在组里"时走这里）。</summary>
+    /// <remarks>
+    /// 嵌套档（11-12 他拍）：按住的是哪个框就拆哪个——拆外层时里面的内层组原样留下。
+    /// 没按过框（比如框选）时拆的是"直接装着选中便签的那些组"，并且只拆最外层那些：
+    /// 外层一拆，内层组仍然带着自己的便签，正好是"保留内层"那条。
+    /// </remarks>
     private void UngroupSelection()
     {
         var groups = GroupRects();
         var hit = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var node in SelectedNotes())
+        if (_groupFocus is { } focus && groups.Any(group => group.Id == focus))
         {
-            if (Groups().GroupOf(RectOf(node)) is { } group)
-            {
-                hit.Add(group.Id);
-            }
+            hit.Add(focus);
         }
-
-        foreach (var id in _selection.Where(selected => groups.Any(group => group.Id == selected)))
+        else
         {
-            hit.Add(id);
+            foreach (var node in SelectedNotes())
+            {
+                if (Groups().GroupOf(RectOf(node)) is { } group)
+                {
+                    hit.Add(group.Id);
+                }
+            }
+
+            foreach (var id in _selection.Where(selected => groups.Any(group => group.Id == selected)))
+            {
+                hit.Add(id);
+            }
+
+            // 同一发里外层和内层都被点名时只拆外层：内层组连同它的便签留下来。
+            if (hit.Count > 1)
+            {
+                var under = hit.ToDictionary(
+                    id => id,
+                    id => Groups().NoteIdsUnder(id).ToHashSet(StringComparer.Ordinal),
+                    StringComparer.Ordinal);
+
+                hit = hit
+                    .Where(id => !hit.Any(other => other != id
+                        && under[other].Count > under[id].Count
+                        && under[other].IsSupersetOf(under[id])))
+                    .ToHashSet(StringComparer.Ordinal);
+            }
         }
 
         if (hit.Count == 0)
@@ -732,6 +961,9 @@ public sealed partial class MainWindow
         _groupFocus = null;
 
         var keep = _selection.ToList();
+
+        // 拆掉的框若还是某个外层的成员，那条引用一并摘掉；摘空了的外壳也一起收。
+        PurgeEmptyGroups();
 
         EndGesture();
         Rebuild();
@@ -957,25 +1189,29 @@ public sealed partial class MainWindow
     private void SelfTestGroupToggle(List<string> problems)
     {
         var before = _document.ToJson();
-        var loose = BoardNotes().Where(note => Groups().GroupOf(RectOf(note)) is null).Take(2).ToList();
+        var loose = BoardNotes().Where(note => Groups().GroupOf(RectOf(note)) is null).Take(3).ToList();
 
-        if (loose.Count < 2)
+        if (loose.Count < 3)
         {
-            problems.Add("自检成组开关: 板上不足两格散格，这一发不适用");
+            problems.Add("自检成组开关: 板上不足三格散格，这一发不适用");
 
             return;
         }
 
         var groupsBefore = GroupRects().Count;
 
+        // ① 成组：两格散格 ⇒ 一个新组。用两格而不是一格，是因为"一格成组"凑不出
+        // "只选中组里一部分"那一发（那一格就是整组），混选并入就测不到了。
         SelectOnly(loose[0].Id);
+        _selection.Add(loose[1].Id);
+        ProjectSelection();
         GroupOrDissolve();
 
         var group = Groups().GroupOf(RectOf(loose[0]))?.Id;
 
         if (group is null || GroupRects().Count != groupsBefore + 1)
         {
-            problems.Add($"自检成组开关: 单格 Ctrl＋G 没建出新组（组数 {GroupRects().Count}，原 {groupsBefore}）");
+            problems.Add($"自检成组开关: 两格 Ctrl＋G 没建出新组（组数 {GroupRects().Count}，原 {groupsBefore}）");
 
             Undo();
             Rebuild();
@@ -990,9 +1226,10 @@ public sealed partial class MainWindow
             problems.Add("自检成组开关: 成组以后选中被清掉了——再按一次没有对象");
         }
 
-        // 混选：这一格已在组里 ＋ 另一格散着 ⇒ 只把散的那格并进去，不罩第二个框。
+        // 混选：只选中组里**一部分** ＋ 另一格散着 ⇒ 只把散的那格并进去，不罩第二个框。
+        // （整组全选中＋散格不再并进老组——那一档 11-12 起是新建外层组，见 SelfTestNestedGroups。）
         SelectOnly(loose[0].Id);
-        _selection.Add(loose[1].Id);
+        _selection.Add(loose[2].Id);
         ProjectSelection();
         GroupOrDissolve();
 
@@ -1003,12 +1240,16 @@ public sealed partial class MainWindow
             problems.Add($"自检成组开关: 混选以后组数是 {GroupRects().Count}，应仍是 {groupsBefore + 1}（不该再造一个框）");
         }
 
-        if (!roster.Contains(loose[1].Id, StringComparer.Ordinal))
+        if (!roster.Contains(loose[2].Id, StringComparer.Ordinal))
         {
             problems.Add("自检成组开关: 混选里没成组的那格没被并进组");
         }
 
         // 全在组里 ⇒ 再按一次是解散。
+        SelectOnly(loose[0].Id);
+        _selection.Add(loose[1].Id);
+        _selection.Add(loose[2].Id);
+        ProjectSelection();
         GroupOrDissolve();
 
         if (NodeOf(group) is not null)

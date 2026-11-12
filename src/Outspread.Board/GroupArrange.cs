@@ -146,6 +146,50 @@ public sealed partial class MainWindow
         return at;
     }
 
+    /// <summary>每个框的嵌套层级与"里面还套着组"：外层容器画淡一档，最里面那层保持原样。</summary>
+    private Dictionary<string, (int Depth, bool Container)> GroupFrameStyles()
+    {
+        var styles = new Dictionary<string, (int, bool)>(StringComparer.Ordinal);
+        var frames = _document.Nodes.Where(node => node.Kind == CanvasNodeKind.Group).ToList();
+
+        if (frames.Count == 0)
+        {
+            return styles;
+        }
+
+        var frameIds = frames.Select(frame => frame.Id).ToHashSet(StringComparer.Ordinal);
+        var parents = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var frame in frames)
+        {
+            if (frame.GroupMemberIds is not { } roster)
+            {
+                continue;
+            }
+
+            foreach (var id in roster)
+            {
+                parents.TryAdd(id, frame.Id);
+            }
+        }
+
+        foreach (var frame in frames)
+        {
+            var depth = 0;
+            var guard = 0;
+
+            for (var id = frame.Id; guard++ < 64 && parents.TryGetValue(id, out var parent); id = parent)
+            {
+                depth++;
+            }
+
+            var container = frame.GroupMemberIds is { } roster && roster.Any(frameIds.Contains);
+            styles[frame.Id] = (depth, container);
+        }
+
+        return styles;
+    }
+
     /// <summary>没有成员的组：框没有可贴的东西，渲染层把它藏起来，别拿一个空的大方框压着别人的便签。</summary>
     private HashSet<string> EmptyGroupIds()
     {
@@ -173,12 +217,10 @@ public sealed partial class MainWindow
         {
             var live = new HashSet<string>(StringComparer.Ordinal);
 
+            // 组的 id 也算活成员：外层框里装着内层框时，外层不是空组（11-12 起的嵌套档）。
             foreach (var node in _document.Nodes)
             {
-                if (node.Kind != CanvasNodeKind.Group)
-                {
-                    live.Add(node.Id);
-                }
+                live.Add(node.Id);
             }
 
             foreach (var frame in frames)
@@ -245,18 +287,51 @@ public sealed partial class MainWindow
     /// </summary>
     private int PurgeEmptyGroups()
     {
-        var map = Groups();
-        var dead = GroupRects()
-            .Where(frame => map.Members(frame.Id).Count == 0)
-            .Select(frame => frame.Id)
-            .ToList();
+        var removed = 0;
 
-        foreach (var id in dead)
+        // 嵌套以后删掉一个内层组会让外层的名单里多一条鬼名：每一圈先摘掉名单里已经不存在的号，
+        // 再把成员真的一个不剩的组删掉；删除又可能让更外层变空，所以转到不动为止。
+        for (var pass = 0; pass < 32; pass++)
         {
-            _document.Remove(id);
+            var live = _document.Nodes.Select(node => node.Id).ToHashSet(StringComparer.Ordinal);
+            var changed = false;
+
+            foreach (var frameNode in _document.Nodes.Where(node => node.Kind == CanvasNodeKind.Group))
+            {
+                if (frameNode.GroupMemberIds is not { } roster)
+                {
+                    continue;
+                }
+
+                var kept = roster.Where(live.Contains).ToList();
+
+                if (kept.Count != roster.Count)
+                {
+                    frameNode.SetGroupMembers(kept);
+                    changed = true;
+                }
+            }
+
+            var map = Groups();
+            var dead = GroupRects()
+                .Where(frame => map.Members(frame.Id).Count == 0)
+                .Select(frame => frame.Id)
+                .ToList();
+
+            foreach (var id in dead)
+            {
+                _document.Remove(id);
+                removed++;
+                changed = true;
+            }
+
+            if (!changed)
+            {
+                break;
+            }
         }
 
-        return dead.Count;
+        return removed;
     }
 
     /// <summary>
@@ -417,22 +492,60 @@ public sealed partial class MainWindow
     private Dictionary<string, Grouping.Rect> DerivedFrames()
     {
         var notes = BoardNotes().ConvertAll(RectOf);
+        var frames = GroupRects();
         var map = Groups();
         var derived = new Dictionary<string, Grouping.Rect>(StringComparer.Ordinal);
 
-        foreach (var frame in GroupRects())
+        // 嵌套组：外层框要罩住内层框，而内层框自己也是派生的——整张表要量到稳定为止
+        // （子组排在父组后面时，第一圈读到的是子组文件里的旧框，第二圈就归位）。上限 32 圈，
+        // 与下面几何那一档同一枚保险：真到不了稳定就交给下一拍排版，不许死循环。
+        for (var pass = 0; pass < 32; pass++)
         {
-            if (map.HasRoster(frame.Id))
+            var changed = false;
+
+            foreach (var frame in frames)
             {
-                // 名单说它是成员它就是成员，一屏量完。下面那一圈"量到不再变大为止"是几何那一档
-                // 的补丁：框长出去会把别人的中心盖进来，还得再长一圈——有名单就不该有这件事。
-                var roster = map.Members(frame.Id);
+                var box = map.HasRoster(frame.Id)
+                    ? RosterBox(frame)
+                    : GeometricBox(frame);
 
-                derived[frame.Id] = roster.Count == 0 ? frame : Grouping.Enclose(frame.Id, roster);
-
-                continue;
+                if (!derived.TryGetValue(frame.Id, out var previous) || !SameGroupBox(previous, box))
+                {
+                    changed = true;
+                    derived[frame.Id] = box;
+                }
             }
 
+            if (!changed)
+            {
+                break;
+            }
+        }
+
+        return derived;
+
+        Grouping.Rect RosterBox(Grouping.Rect frame)
+        {
+            var ids = map.MemberIds(frame.Id);
+            var members = new List<Grouping.Rect>(ids.Count);
+
+            foreach (var id in ids)
+            {
+                if (derived.TryGetValue(id, out var child))
+                {
+                    members.Add(child);   // 嵌进来的子组：用这一圈算出来的框，不用它文件里的旧框
+                }
+                else if (NodeOf(id) is { } node)
+                {
+                    members.Add(RectOf(node));
+                }
+            }
+
+            return members.Count == 0 ? frame : Grouping.Enclose(frame.Id, members);
+        }
+
+        Grouping.Rect GeometricBox(Grouping.Rect frame)
+        {
             var box = frame;
 
             for (var growth = 0; growth < 32; growth++)
@@ -455,10 +568,8 @@ public sealed partial class MainWindow
                 }
             }
 
-            derived[frame.Id] = box;
+            return box;
         }
-
-        return derived;
     }
 
     /// <summary>

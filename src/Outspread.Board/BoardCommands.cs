@@ -611,7 +611,10 @@ public sealed partial class MainWindow
 
         if (loose.Count == 0)
         {
-            Say("所选便签均已属于组 · 按 Ctrl＋G 解散");
+            // 选中的几格都在组里、但不是整组：在它们所在的那一层里再分一个组（嵌套的子组）。
+            // 11-12 他报的"在分组里选几个便签点组钮，直接把组拆了、根本没法再分组"就是这一档。
+            CreateSubGroup(members, map);
+
             return;
         }
 
@@ -750,6 +753,113 @@ public sealed partial class MainWindow
         CleanupNestedSelfTest(inner, loose, first, second);
     }
 
+    /// <summary>
+    /// 11-12 他报的那一格：组里选几格点组钮，直接把组拆了，也就没法在组里再分组。这里钉两半：
+    /// ① 只选中一部分 ⇒ 不进解散，而是在原组里分出一个子组（原组名单换成"留着的便签＋子组"）；
+    /// ② 选中整组全部便签 ⇒ 才是解散。
+    /// </summary>
+    private void SelfTestSubgroupOnPartialSelection(List<string> problems)
+    {
+        var originX = Math.Round(_view.ToWorldX(420));
+        var originY = Math.Round(_view.ToWorldY(320));
+
+        var first = _document.Add(CanvasNodeKind.Text, originX, originY, 200, 100);
+        var second = _document.Add(CanvasNodeKind.Text, originX + 220, originY, 200, 100);
+        var keep = _document.Add(CanvasNodeKind.Text, originX + 440, originY, 200, 100);
+
+        var group = _document.Add(CanvasNodeKind.Group, originX - 10, originY - 10, 660, 120);
+        group.Label = "自检再分层";
+        group.SetGroupMembers([first.Id, second.Id, keep.Id]);
+
+        Rebuild();
+
+        ClearSelection();
+        _selection.Add(first.Id);
+        _selection.Add(second.Id);
+        _groupFocus = group.Id;
+        ProjectSelection();
+
+        GroupOrDissolve();
+
+        var keptRoster = NodeOf(group.Id)?.GroupMemberIds;
+        var inner = _document.Nodes
+            .Where(node => node.Kind == CanvasNodeKind.Group
+                && node.Id != group.Id
+                && node.GroupMemberIds is { } roster
+                && roster.Contains(first.Id, StringComparer.Ordinal)
+                && roster.Contains(second.Id, StringComparer.Ordinal))
+            .FirstOrDefault();
+
+        if (keptRoster is null)
+        {
+            problems.Add("selftest 再分层: 只选中组里一部分时，整组被解散了（该在组里分出新的一层）");
+        }
+        else if (inner is null)
+        {
+            problems.Add("selftest 再分层: 没有生出子组——选中的那两格没成为新组");
+        }
+        else if (!keptRoster.Contains(keep.Id, StringComparer.Ordinal) || !keptRoster.Contains(inner.Id, StringComparer.Ordinal))
+        {
+            problems.Add("selftest 再分层: 原组名单没有换成「留着的便签＋子组」");
+        }
+        else if (Groups().NoteIdsUnder(group.Id).Count != 3)
+        {
+            problems.Add($"selftest 再分层: 外层名牌该收到全部 3 格便签，读到 {Groups().NoteIdsUnder(group.Id).Count} 格");
+        }
+        else
+        {
+            Diagnostics.Write("selftest 再分层: 组里选两格点组钮 ⇒ 新增一层子组，原组名单＝留着的便签＋子组，外面仍收 3 格");
+        }
+
+        // ② 整组全选中 ⇒ 才解散（点名牌那一路）。
+        ClearSelection();
+
+        foreach (var id in Groups().NoteIdsUnder(group.Id))
+        {
+            _selection.Add(id);
+        }
+
+        _groupFocus = group.Id;
+        ProjectSelection();
+        GroupOrDissolve();
+
+        if (NodeOf(group.Id) is not null)
+        {
+            problems.Add("selftest 再分层: 选中整个组的全部便签后，组没有被解散");
+        }
+        else
+        {
+            Diagnostics.Write("selftest 再分层: 选中整组全部便签 ⇒ 才解散外层（子组按既有规则留下）");
+        }
+
+        ClearSelection();
+        _groupFocus = null;
+
+        foreach (var id in new[] { inner?.Id, group.Id })
+        {
+            if (id is not null && NodeOf(id) is not null)
+            {
+                _document.Remove(id);
+            }
+        }
+
+        foreach (var node in new[] { first, second, keep })
+        {
+            if (NodeOf(node.Id) is not null)
+            {
+                _document.Remove(node.Id);
+            }
+        }
+
+        Rebuild();
+        ProjectSelection();
+
+        if (_rail is not null && !RailIsShown)
+        {
+            _rail.Visibility = Visibility.Collapsed;
+        }
+    }
+
     private void CleanupNestedSelfTest(params CanvasNode[] nodes)
     {
         ClearSelection();
@@ -809,15 +919,99 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// Ctrl＋G 这一发是"成组"还是"解散"：选中的每一格都已经在组里 ⇒ 解散；否则按
-    /// <see cref="GroupSelection"/> 办（全散＝新建，混选＝把散格并进已有的组）。
+    /// 在组里再分一层：选中的几格都属于组、但只选中了其中一部分时，把它们从原组的名单里摘出来，
+    /// 组成一个新组，并把这个新组挂进原组那一层的名单——便签只能直接属于一个组，所以原组名单
+    /// 变成"留着的便签＋子组"。新组放在装得下这几格的最近一层：同一组里选的就在那个组里分层；
+    /// 跨两组但同属一个外层的放进那个外层；没有共同外层时落成顶层组。
+    /// </summary>
+    private void CreateSubGroup(IReadOnlyList<CanvasNode> members, GroupMap map)
+    {
+        var selected = members.Select(note => note.Id).ToList();
+        var selectedSet = selected.ToHashSet(StringComparer.Ordinal);
+
+        var owners = members
+            .Select(note => map.GroupOf(RectOf(note))?.Id)
+            .Where(id => id is not null)
+            .Select(id => id!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var parent = GroupRects()
+            .Select(frame => (frame.Id, Under: map.NoteIdsUnder(frame.Id)))
+            .Where(pair => pair.Under.Count > 0 && selectedSet.IsSubsetOf(pair.Under))
+            .OrderByDescending(pair => map.Depth(pair.Id))
+            .Select(pair => pair.Id)
+            .FirstOrDefault();
+
+        BeginGesture("在组里再分一层");
+
+        var box = Grouping.Enclose(string.Empty, members.Select(RectOf).ToList());
+        var made = _document.Add(CanvasNodeKind.Group, box.X, box.Y, box.Width, box.Height);
+        made.Label = "分组";
+        made.SetGroupMembers(selected);
+
+        // 便签只能直接属于一个组：从原组的名单里摘掉。
+        foreach (var owner in owners)
+        {
+            if (NodeOf(owner) is { } ownerNode && ownerNode.GroupMemberIds is { } roster)
+            {
+                var kept = roster.Where(id => !selectedSet.Contains(id)).ToList();
+
+                if (kept.Count != roster.Count)
+                {
+                    ownerNode.SetGroupMembers(kept);
+                }
+            }
+        }
+
+        // 新组接进那一层；没有共同外层就落成顶层组。
+        if (parent is not null && NodeOf(parent) is { } parentNode)
+        {
+            var roster = (parentNode.GroupMemberIds ?? map.MemberIds(parent)).ToList();
+
+            if (!roster.Contains(made.Id, StringComparer.Ordinal))
+            {
+                roster.Add(made.Id);
+                parentNode.SetGroupMembers(roster);
+            }
+        }
+
+        EndGesture();
+
+        _groupFocus = made.Id;
+        Rebuild();
+        Reselect(selected);
+        SaveSoon();
+        ProjectSelection();
+
+        Say($"已在组里新建一层分组（{selected.Count} 个便签）· 按 Ctrl＋G 解散");
+    }
+
+    /// <summary>
+    /// 组钮／Ctrl＋G 这一发是"成组"还是"解散"。**解散只认整个组**：选中的便签正好盖住所碰到的
+    /// 每一个组（含嵌进来的子组）的全部便签——点名牌选整组、或框选整个组里所有便签，才算数。
+    /// 只选中组里几格时按成组办（在组里再分一层），不再把整个组拆掉（11-12 他报的那一格）。
     /// </summary>
     private void GroupOrDissolve()
     {
         var members = SelectedNotes();
         var map = Groups();
 
-        if (members.Count > 0 && members.All(note => map.GroupOf(RectOf(note)) is not null))
+        var selected = members.Select(note => note.Id).ToHashSet(StringComparer.Ordinal);
+        var owners = members
+            .Select(note => map.GroupOf(RectOf(note))?.Id)
+            .ToList();
+
+        // 解散要同时满足：选中的每一格都在组里（没有散格），并且碰到的每一个组都被**整组选中**
+        // （含嵌套：外层的子组便签也全选中）。只选中一部分时按成组办，不拆组。
+        var whole = owners.Count > 0
+            && owners.All(id => id is not null)
+            && owners
+                .Select(id => id!)
+                .Distinct(StringComparer.Ordinal)
+                .All(id => selected.IsSupersetOf(map.NoteIdsUnder(id)));
+
+        if (whole)
         {
             UngroupSelection();
 

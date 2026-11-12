@@ -1360,7 +1360,7 @@ public sealed partial class MainWindow
             }
             else if (SelectedNotes().Count >= 2)
             {
-                // 多选时单击＝成组/并入/解散，和 Ctrl＋G 同一条；长按拖走的是上面那条 Started。
+                // 多选时单击＝成组/并入/在组里再分层/解散，和 Ctrl＋G 同一条；长按拖走的是上面那条 Started。
                 GroupOrDissolve();
             }
             else

@@ -6672,6 +6672,9 @@ public sealed partial class MainWindow : Window
         // 嵌套分组：多选整组＋散格成外层；点外/内层名牌各收各的；拆外层保留内层；外层更淡。
         SelfTestNestedGroups(problems);
 
+        // 组里只选一部分点组钮＝在组里再分一层；整组全选中才解散（11-12 他报的那一格）。
+        SelfTestSubgroupOnPartialSelection(problems);
+
         // 左下角两档计数 + 点一档把符合的那几格临时聚到中间（11-02 定档的 B＋聚合）。
         SelfTestDueLens(problems);
         SelfTestMarkChipEdits(problems);

@@ -670,6 +670,23 @@ public sealed class BoardToolsWriteTests : IDisposable
     }
 
     [Fact]
+    public void Comments_on_deleted_cells_do_not_keep_the_inbox_noisy()
+    {
+        var board = SeededBoard(ordinal: 0);
+
+        // 卡删了、线程还留在文件里（撤销回来还要看得见）。对账与读板只报锚点还在的那些——
+        // 不然删掉的卡会让评论账每轮都吵一次。
+        var comments = new BoardComments();
+        comments.AddThread("ghost", "他", "锚点已经没了", agent: false, threadId: "cghost");
+        comments.Save(CanvasStore.CommentsPath(board));
+
+        var inbox = BoardTools.BoardInbox(board: board);
+
+        Assert.DoesNotContain("评论：", inbox);
+        Assert.DoesNotContain("锚点已经没了", BoardTools.BoardComments(board: board));
+    }
+
+    [Fact]
     public async Task Twelve_concurrent_comments_all_land_on_their_own_cells()
     {
         var board = Path.Combine(_root, "并发.canvas");

@@ -627,7 +627,9 @@ public sealed class BoardTools
         // 所以对账这一步顺带回一句评论的账（详情用 board_comments 取）。
         var commentsPath = CanvasStore.CommentsPath(path);
         var pendingComments = File.Exists(commentsPath)
-            ? BoardCommentsStore.Load(commentsPath).Threads.Where(thread => !thread.Resolved).ToList()
+            ? BoardCommentsStore.Load(commentsPath).Threads
+                .Where(thread => !thread.Resolved && now.ContainsKey(thread.Node))
+                .ToList()
             : [];
 
         var commentLine = pendingComments.Count == 0
@@ -1500,8 +1502,16 @@ public sealed class BoardTools
             return $"{path} 里没有 {id} 这一格（整串 13 位或 @n 短号都认）。";
         }
 
+        // 格子删了，线程还留在文件里（撤销回来还要看得见）——但对账与读板都只报"锚点还在"的那些，
+        // 与界面的徽标同一判据；不然删掉的卡会让评论账每轮都吵一次。
+        var live = string.IsNullOrWhiteSpace(id)
+            ? document.Nodes.Select(node => node.Id).ToHashSet(StringComparer.Ordinal)
+            : null;
+
         var threads = comments.Threads
-            .Where(thread => anchor is null || string.Equals(thread.Node, anchor, StringComparison.Ordinal))
+            .Where(thread => anchor is not null
+                ? string.Equals(thread.Node, anchor, StringComparison.Ordinal)
+                : live!.Contains(thread.Node))
             .Where(thread => !unresolvedOnly || !thread.Resolved)
             .ToList();
 

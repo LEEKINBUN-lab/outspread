@@ -670,6 +670,29 @@ public sealed class BoardToolsWriteTests : IDisposable
     }
 
     [Fact]
+    public async Task Twelve_concurrent_comments_all_land_on_their_own_cells()
+    {
+        var board = Path.Combine(_root, "并发.canvas");
+        var nodes = string.Join(",", Enumerable.Range(0, 12).Select(i =>
+            $"{{\"id\":\"n{i}\",\"type\":\"text\",\"x\":{i * 10},\"y\":0,\"width\":100,\"height\":60,\"text\":\"格 {i}\"}}"));
+
+        File.WriteAllText(board, $"{{\"nodes\":[{nodes}],\"edges\":[]}}");
+
+        // 2026-11-19 的报障：12 发并发只活下 7 条（我这台复核到 3 条）。
+        // 写的一侧现在走按板互斥＋盘上再并一次，这条就是那次的回归锁。
+        var calls = Enumerable.Range(0, 12).Select(i => Task.Run(() =>
+            BoardTools.BoardComment($"n{i}", $"并发 {i}", agent: "probe", board: board))).ToArray();
+
+        await Task.WhenAll(calls);
+
+        var comments = BoardComments.Load(CanvasStore.CommentsPath(board));
+
+        Assert.Null(comments.Problem);
+        Assert.Equal(12, comments.Threads.Count);
+        Assert.Equal(12, comments.MessageTotal);
+    }
+
+    [Fact]
     public void A_board_created_by_the_tool_is_marked_not_to_sync()
     {
         var path = Path.Combine(_root, "量尺.canvas");

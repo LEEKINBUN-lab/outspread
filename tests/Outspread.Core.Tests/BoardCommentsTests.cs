@@ -127,6 +127,188 @@ public class BoardCommentsTests
         }
     }
 
+    private static string TempBoard() => Path.Combine(Path.GetTempPath(), $"outspread-comments-{Guid.NewGuid():n}.canvas");
+
+    private static void CleanUp(string board)
+    {
+        foreach (var path in new[] { board, CanvasStore.CommentsPath(board) })
+        {
+            try
+            {
+                File.Delete(path);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Twelve_writers_at_once_all_survive()
+    {
+        var board = TempBoard();
+        var path = CanvasStore.CommentsPath(board);
+
+        try
+        {
+            // 2026-11-19：12 发并发只活下 3 条。写的一侧现在是「按板互斥 + 盘上那份再并一次」，
+            // 这一条就是那次丢数据的回归锁。
+            var writers = Enumerable.Range(0, 12).Select(i => Task.Run(() =>
+            {
+                var comments = new BoardComments();
+                comments.AddThread("n1", "agent", $"并发 {i}", agent: true);
+                comments.Save(path);
+            }));
+
+            await Task.WhenAll(writers);
+
+            var loaded = BoardComments.Load(path);
+
+            Assert.Null(loaded.Problem);
+            Assert.Equal(12, loaded.Threads.Count);
+            Assert.Equal(12, loaded.MessageTotal);
+            Assert.Equal(12, loaded.Threads.SelectMany(thread => thread.Messages).Select(message => message.Id).Distinct().Count());
+        }
+        finally
+        {
+            CleanUp(board);
+        }
+    }
+
+    [Fact]
+    public void Merge_is_a_union_and_the_newer_state_wins_per_thread()
+    {
+        var local = new BoardComments();
+        var lhs = local.AddThread("n1", "他", "本机这句", agent: false, threadId: "c1", time: "10:00");
+        local.AddThread("n2", "他", "只有本机有", agent: false, threadId: "c3", time: "10:02");
+
+        var far = new BoardComments();
+        var rhs = far.AddThread("n1", "agent", "远端那句", agent: true, threadId: "c1", time: "10:01");
+        rhs.Messages.Insert(0, new CommentMessage
+        {
+            Id = lhs.Messages[0].Id,
+            Author = lhs.Messages[0].Author,
+            Text = lhs.Messages[0].Text,
+            Time = lhs.Messages[0].Time,
+            At = lhs.Messages[0].At,
+        });
+        rhs.UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(5).ToString("O");
+
+        var merged = BoardComments.Merge(local, far);
+
+        Assert.Equal(2, merged.Threads.Count);
+        Assert.Equal(2, merged.Find("c1")!.Messages.Count);
+        Assert.False(merged.Find("c1")!.Resolved);
+
+        // 两端都有的线程不重复；只有本机有的照留；只有远端有的算新消息（亮橙点）。
+        Assert.NotNull(merged.Find("c3"));
+        Assert.False(merged.Find("c3")!.Unread);
+    }
+
+    [Fact]
+    public void A_deleted_thread_stays_deleted_after_merging()
+    {
+        var local = new BoardComments();
+        local.AddThread("n1", "他", "删我", agent: false, threadId: "c1", time: "10:00");
+        local.RemoveThread("c1");
+
+        // 远端还留着那条（另一台设备没删过），并集不能把它带回来。
+        var far = new BoardComments();
+        far.AddThread("n1", "他", "删我", agent: false, threadId: "c1", time: "10:00");
+
+        var merged = BoardComments.Merge(local, far);
+
+        Assert.Empty(merged.Threads);
+        Assert.Single(merged.Tombstones);
+    }
+
+    [Fact]
+    public void Unread_is_a_local_view_and_never_reaches_the_wire()
+    {
+        var comments = new BoardComments();
+        var thread = comments.AddThread("n1", "agent", "新消息", agent: true, threadId: "c1", time: "10:00");
+
+        // 同一份内容、未读没打开的那一版：消息号也一样，只有 unread 不同。
+        var quiet = BoardComments.Parse(comments.ToJson(includeUnread: false));
+        thread.Unread = true;
+
+        Assert.Contains("unread", comments.ToJson());
+        Assert.DoesNotContain("unread", comments.ToJson(includeUnread: false));
+
+        // 未读翻一下不算"内容变了"：同步不该因为它花一次往返。
+        Assert.Equal(
+            BoardComments.ContentDigest(quiet),
+            BoardComments.ContentDigest(comments));
+    }
+
+    [Fact]
+    public void Merge_is_order_independent_so_two_devices_cannot_ping_pong()
+    {
+        var left = new BoardComments();
+        left.AddThread("n1", "他", "第一句", agent: false, threadId: "c1", time: "10:00");
+        left.AddThread("n2", "他", "第二句", agent: false, threadId: "c2", time: "10:01");
+
+        // 右端拿到同一份内容、顺序倒过来，再补一条：两边合并必须落到同一份字节上。
+        var right = BoardComments.Parse(left.ToJson(includeUnread: false));
+        right.Threads.Reverse();
+        right.AddThread("n3", "他", "右端新写的", agent: false, threadId: "c3", time: "10:02");
+
+        var oneWay = BoardComments.Merge(left, right);
+        var otherWay = BoardComments.Merge(right, left);
+
+        Assert.Equal(oneWay.ToJson(includeUnread: false), otherWay.ToJson(includeUnread: false));
+        Assert.Equal(BoardComments.ContentDigest(oneWay), BoardComments.ContentDigest(otherWay));
+    }
+
+    [Fact]
+    public void Legacy_messages_get_the_same_id_at_both_ends()
+    {
+        const string legacy = """
+        {
+          "threads": [
+            {
+              "id": "c1",
+              "node": "n1",
+              "messages": [
+                { "author": "他", "text": "旧账", "time": "10:00", "agent": false }
+              ]
+            }
+          ]
+        }
+        """;
+
+        var left = BoardComments.Parse(legacy);
+        var right = BoardComments.Parse(legacy);
+
+        Assert.NotNull(left.Threads[0].Messages[0].Id);
+        Assert.Equal(left.Threads[0].Messages[0].Id, right.Threads[0].Messages[0].Id);
+
+        // 并一次不会把同一条旧消息算成两条。
+        Assert.Single(BoardComments.Merge(left, right).Threads[0].Messages);
+    }
+
+    [Fact]
+    public void A_broken_file_is_refused_not_overwritten()
+    {
+        var board = TempBoard();
+        var path = CanvasStore.CommentsPath(board);
+
+        try
+        {
+            File.WriteAllText(path, "{ 这不是 JSON");
+
+            var comments = new BoardComments();
+            comments.AddThread("n1", "他", "这句不能被写进一份读不懂的旧账", agent: false);
+
+            Assert.Throws<IOException>(() => comments.Save(path));
+            Assert.Equal("{ 这不是 JSON", File.ReadAllText(path));
+        }
+        finally
+        {
+            CleanUp(board);
+        }
+    }
+
     [Fact]
     public void Resolving_marks_it_read_and_revision_advances_so_the_layer_repaints()
     {

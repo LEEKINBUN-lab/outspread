@@ -6218,6 +6218,61 @@ public sealed partial class MainWindow : Window
     /// 影子也算这格的一部分（他 11-03）：贴着格子外沿那一圈要认回这一格（单选＝缩放、其它＝选中），
     /// 出圈 8px 外仍是点空白。这一发只量判定，不模拟指针。
     /// </summary>
+    /// <summary>
+    /// 窗影的浓淡尺。两档各量两处：**纸边**（影还伸不出去的位置）浓到一定程度就会被读成描边，
+    /// 而**留边外沿**必须已经归零，否则那张位图会在窗边留一条被裁断的台阶。
+    /// </summary>
+    /// <remarks>
+    /// 这条是给"还要不要再调一轮"用的：以前只能靠截图看，看完还得猜是不是屏幕缩放的问题。
+    /// 现在数字就是判据——小窗那档纸边累计 ≤ 10%，宽窗 ≤ 18%，留边外沿都 ≤ 1%。
+    /// </remarks>
+    private static void SelfTestShadowProfile(List<string> problems)
+    {
+        foreach (var scale in new[] { 1.0, 2.0, 3.06 })
+        {
+            var compactEdge = WindowShadow.AlphaAt(WindowShadow.TuckPx(scale, true), scale, true);
+
+            if (compactEdge > 0.10)
+            {
+                problems.Add($"窗影自检: {scale:0.##}x 下小窗纸边浓度 {compactEdge:P0}，超过 10% 会被读成描边");
+            }
+
+            var wideEdge = WindowShadow.AlphaAt(WindowShadow.TuckPx(scale, false), scale, false);
+
+            if (wideEdge > 0.18)
+            {
+                problems.Add($"窗影自检: {scale:0.##}x 下宽窗纸边浓度 {wideEdge:P0}，超过 18%");
+            }
+
+            foreach (var compact in new[] { true, false })
+            {
+                var margin = compact ? WindowShadow.CompactMargin : WindowShadow.WideMargin;
+                var outer = WindowShadow.AlphaAt(margin * scale, scale, compact);
+
+                if (outer > 0.01)
+                {
+                    problems.Add($"窗影自检: {scale:0.##}x 下{(compact ? "小" : "宽")}窗留边外沿还剩 {outer:P1}，位图边界会有台阶");
+                }
+            }
+        }
+
+        // 单调衰减：纸边往外不许再变浓（那是"描边"的另一种长相）。
+        var previous = double.MaxValue;
+
+        for (var distance = WindowShadow.TuckPx(2, true); distance <= 40; distance += 2)
+        {
+            var alpha = WindowShadow.AlphaAt(distance, 2, true);
+
+            if (alpha > previous + 0.0005)
+            {
+                problems.Add($"窗影自检: 小窗影在 {distance:0}px 处没有继续变淡");
+                break;
+            }
+
+            previous = alpha;
+        }
+    }
+
     private void SelfTestShadowEdge(List<string> problems)
     {
         var saved = _document.ToJson();
@@ -6745,7 +6800,13 @@ public sealed partial class MainWindow : Window
         // 对齐索引那把尺：候选集必须与全表扫逐格相同（先于会改板面的那些发）。
         SelfTestSnapIndexMatchesScan(problems);
 
+        // 评论层：徽标贴锚点、没有评论的格上不许自己冒出来、浮层开得起来收得掉、簇档只剩一枚。
+        SelfTestCommentLayer(problems);
+
         SelfTestIconsUseDesignGrid(problems);
+
+        // 影的浓淡尺：纸边那圈不许浓到读成描边，留边外沿必须归零。
+        SelfTestShadowProfile(problems);
         SelfTestGroups(problems);
 
         // 组钮拖过两个框：同时只能亮一个，松手都回虚线（11-02 他报的"另一个框一直亮"）。

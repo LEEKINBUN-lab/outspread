@@ -972,8 +972,22 @@ public sealed class NodeVisual : ContentControl
     /// 这里只存"上一拍是什么"——那一拍不能没有：没有它，压在阈值上的板子来回滚轮每帧都要
     /// 把全部可见格的阴影层重铺一遍（实测 104ms/帧 vs 8.3ms）。
     /// </summary>
+    /// <summary>
+    /// 浮牌窗里那一份用：那个窗只能裁到格子边界，影画在窗里、伸不出去的那一截就成了沿右、
+    /// 下两条的硬线（他 11-18 截图里那条）。浮牌外面由 <see cref="WindowShadow"/> 顶着，所以
+    /// 这一份只要纸面和一圈发丝。
+    /// </summary>
+    internal bool ShadowSuppressed { get; set; }
+
     private bool ShadowLod(double zoom)
     {
+        if (ShadowSuppressed)
+        {
+            _shadowLod = false;
+
+            return false;
+        }
+
         var next = NoteSurface.ShadowLod(zoom, _shadowLod ?? NoteSurface.DrawsShadow(zoom));
 
         _shadowLod = next;
@@ -2453,12 +2467,19 @@ public sealed class NodeVisual : ContentControl
         {
             // tldraw's own degradation is two things at once: the shadow goes away AND one bottom
             // line appears. Dropping the shadow without the line leaves a card with no edge at all.
-            if (_shadowKey != "line")
+            //
+            // 浮牌那一份连发丝都不要：它是纸压在影上，纸边自己就是那条线（他 11-18 第三张截图里
+            // 那条"黑框"就是这里描出来的 1px）。四边都描上更糟——那是第二个窗框。
+            var edgeKey = ShadowSuppressed ? "bare" : "line";
+
+            if (_shadowKey != edgeKey)
             {
-                _shadowKey = "line";
+                _shadowKey = edgeKey;
                 _bands.Children.Clear();
                 _press.Visibility = Visibility.Collapsed;
-                _surface.BorderThickness = new Thickness(0, 0, 0, NoteSurface.FallbackLineWidth);
+                _surface.BorderThickness = ShadowSuppressed
+                    ? new Thickness(0)
+                    : new Thickness(0, 0, 0, NoteSurface.FallbackLineWidth);
             }
 
             return;

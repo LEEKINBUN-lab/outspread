@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>弹出到桌面 · 投影原型</title>
+<style>
+  :root{
+    --ink:#232528;
+    --muted:#6C7177;
+    --faint:#95999F;
+    --line:#E3E0D9;
+    --paper:#FFFDFA;
+    --danger:#B4342F;
+    --danger-bg:#FBEAEA;
+    --k:1;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    font-family:-apple-system,"Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+    color:var(--ink);
+    background:#EFEEE9;
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+
+  header{
+    height:54px;flex:none;display:flex;align-items:center;gap:14px;
+    padding:0 16px;background:#FBFAF7;border-bottom:1px solid var(--line);
+  }
+  .brand{font-size:13.5px;font-weight:500}
+  .brand span{color:var(--faint);font-weight:400;font-size:12px;margin-left:8px}
+  .ctl{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--muted)}
+  .ctl:first-of-type{margin-left:16px}
+  .seg{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+  .seg button{
+    height:26px;padding:0 10px;border:0;background:#fff;color:var(--muted);
+    font:inherit;font-size:11.5px;cursor:pointer;
+  }
+  .seg button + button{border-left:1px solid var(--line)}
+  .seg button.on{background:#2C2E31;color:#fff}
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;width:120px;height:2px;
+    background:#DCD8CF;border-radius:2px;outline:none;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:12px;height:12px;border-radius:50%;
+    background:#fff;border:1px solid #B9B4A9;box-shadow:0 1px 2px rgba(0,0,0,.12);cursor:pointer;
+  }
+  .spacer{margin-left:auto;font-size:11.5px;color:var(--faint)}
+
+  main{flex:1;display:flex;gap:14px;padding:14px;min-height:0}
+
+  .panel{
+    position:relative;flex:1;min-width:0;border-radius:14px;overflow:hidden;
+    border:1px solid #DCD9D1;
+    display:flex;align-items:center;justify-content:center;
+    transition:background .18s;
+  }
+  .panel.light{
+    background:
+      radial-gradient(900px 520px at 26% 18%,#FBFCFD 0%,#EDEFF3 46%,#E2E5EA 100%);
+  }
+  .panel.dark{
+    background:
+      radial-gradient(900px 520px at 26% 18%,#2A2F36 0%,#1B1F25 52%,#12151A 100%);
+  }
+
+  .cap{
+    position:absolute;left:16px;top:14px;z-index:3;
+    font-size:11.5px;letter-spacing:.01em;
+    display:flex;align-items:center;gap:7px;
+  }
+  .panel.light .cap{color:#5C6167}
+  .panel.dark .cap{color:#AEB4BB}
+  .cap b{font-weight:500}
+  .cap .dot{width:7px;height:7px;border-radius:50%}
+
+  .card{
+    position:relative;width:312px;height:158px;
+    background:var(--paper);
+    border-radius:9px;
+    padding:22px 24px 18px;
+    display:flex;flex-direction:column;
+  }
+
+  /* ── 现在：一条硬边。0 模糊、正右下偏移，被窗口边缘裁成 1–2px 黑线 ── */
+  .card.bad{
+    border:1px solid #E4E2DB;
+    box-shadow:2px 2px 0 -1px rgba(0,0,0,.5), 0 0 0 .5px rgba(0,0,0,.10);
+  }
+
+  /* ── 重做：接触影 + 环境影 + 主投影，最外圈 alpha 归零 ── */
+  .card.good{
+    border:1px solid rgba(20,24,31,.07);
+    box-shadow:
+      0 calc(1px * var(--k)) calc(2px * var(--k)) 0 rgba(16,24,40,calc(.05 * var(--k))),
+      0 calc(6px * var(--k)) calc(14px * var(--k)) calc(-4px * var(--k)) rgba(16,24,40,calc(.11 * var(--k))),
+      0 calc(20px * var(--k)) calc(44px * var(--k)) calc(-14px * var(--k)) rgba(16,24,40,calc(.22 * var(--k)));
+  }
+  .panel.dark .card.good{
+    border:1px solid rgba(255,255,255,.10);
+    box-shadow:
+      0 1px 2px 0 rgba(0,0,0,.35),
+      0 8px 20px -6px rgba(0,0,0,.55),
+      0 26px 56px -18px rgba(0,0,0,.65),
+      0 0 0 1px rgba(255,255,255,.045);
+  }
+
+  .card h3{margin:0;font-size:20px;font-weight:400;letter-spacing:.01em;color:#26282B}
+  .panel.dark .card h3{color:#26282B}
+  .chip{
+    margin-top:12px;display:inline-flex;align-items:center;gap:5px;
+    height:22px;padding:0 9px;border-radius:11px;align-self:flex-start;
+    background:var(--danger-bg);color:var(--danger);font-size:12px;
+  }
+  .chip i{width:9px;height:9px;border-radius:50%;background:var(--danger);opacity:.75;position:relative}
+  .chip i::before,.chip i::after{
+    content:"";position:absolute;left:2px;right:2px;top:4px;height:1px;background:#fff;
+  }
+  .chip i::before{transform:rotate(45deg)}
+  .chip i::after{transform:rotate(-45deg)}
+  .corner{
+    position:absolute;top:12px;right:12px;width:24px;height:24px;border-radius:50%;
+    border:1px solid #E2DED5;background:#fff;display:flex;align-items:center;justify-content:center;
+    color:#8E9399;
+  }
+
+  .loupe{
+    position:absolute;right:14px;bottom:14px;
+    width:186px;height:118px;border-radius:10px;overflow:hidden;
+    border:1px solid rgba(255,255,255,.5);
+    background:#F4F5F7;
+    box-shadow:0 6px 18px -8px rgba(16,24,40,.35);
+    z-index:4;
+  }
+  .panel.dark .loupe{border-color:rgba(255,255,255,.14);background:#20242B}
+  .loupe .scale{
+    position:absolute;right:56px;bottom:46px;
+    transform:scale(3);
+    transform-origin:100% 100%;
+  }
+  .loupe .tag{
+    position:absolute;left:8px;top:7px;z-index:2;
+    font-size:9.5px;letter-spacing:.02em;
+    padding:2px 6px;border-radius:5px;
+    background:rgba(44,46,49,.82);color:#fff;
+  }
+  .loupe .card{
+    width:312px;height:158px;
+  }
+  .loupe .card h3{font-size:20px}
+  .loupe .card .chip{margin-top:12px}
+
+  footer{
+    flex:none;padding:10px 16px 12px;
+    background:#FBFAF7;border-top:1px solid var(--line);
+    font-size:11.5px;line-height:1.6;color:var(--muted);
+    display:flex;gap:18px;
+  }
+  footer div{flex:1}
+  footer code{
+    font-family:ui-monospace,Consolas,monospace;font-size:10.5px;
+    background:#F1EFE9;border:1px solid #E6E3DB;border-radius:4px;padding:0 4px;
+  }
+  footer b{color:var(--ink);font-weight:500}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">铺陈 <span>弹出到桌面 · 投影原型</span></div>
+
+  <div class="ctl">
+    <span>高度</span>
+    <input id="k" type="range" min="40" max="160" value="100">
+  </div>
+
+  <div class="ctl">
+    <span>壁纸</span>
+    <div class="seg" id="wall">
+      <button data-w="light" class="on">浅</button>
+      <button data-w="dark">深</button>
+    </div>
+  </div>
+
+  <div class="spacer">拖「高度」看影随层级走；两张卡的边角右下角各有一枚 3× 放大</div>
+</header>
+
+<main>
+  <section class="panel light" id="left">
+    <div class="cap"><span class="dot" style="background:#B4342F"></span><b>现在</b> 一条硬边</div>
+    <div class="card bad">
+      <div class="corner">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3">
+          <rect x="2.5" y="4.5" width="8" height="9" rx="1.2"/>
+          <path d="M6 4.5V2.6h7.4v8H11"/>
+        </svg>
+      </div>
+      <h3>撰写自己的思考</h3>
+      <div class="chip"><i></i>未完成</div>
+    </div>
+    <div class="loupe">
+      <span class="tag">右下角 3×</span>
+      <div class="scale">
+        <div class="card bad"><h3>撰写自己的思考</h3><div class="chip"><i></i>未完成</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel light" id="right">
+    <div class="cap"><span class="dot" style="background:#2F7D5E"></span><b>重做</b> 两层软影</div>
+    <div class="card good" id="goodCard">
+      <div class="corner">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3">
+          <rect x="2.5" y="4.5" width="8" height="9" rx="1.2"/>
+          <path d="M6 4.5V2.6h7.4v8H11"/>
+        </svg>
+      </div>
+      <h3>撰写自己的思考</h3>
+      <div class="chip"><i></i>未完成</div>
+    </div>
+    <div class="loupe">
+      <span class="tag">右下角 3×</span>
+      <div class="scale">
+        <div class="card good"><h3>撰写自己的思考</h3><div class="chip"><i></i>未完成</div></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div><b>那条黑线是怎么来的</b><br>
+    投影是 0 模糊、正右下方偏移的实心块，只被窗口边缘裁掉一部分——于是右、下各留 1–2px 的硬边。
+    左上没有，因为主体盖住了它。</div>
+  <div><b>重做改了什么</b><br>
+    三层都留模糊半径，最外圈 alpha 归零；圆角跟随卡片（<code>border-radius</code> 9px）；接触影收到 1px，
+    只负责"贴着桌面"这一件事，抬升交给环境影。</div>
+  <div><b>落到窗口那一层</b><br>
+    <code>WindowShadow.Render</code> 里 <code>sigmaTight=2.5</code> 在距边 1px 处仍有约 12% 黑，且只在右/下漏出。
+    把最外圈压到 0、紧影换成 1px 接触影、角按 9px 圆角跟随即可。</div>
+</footer>
+
+<script>
+const root = document.documentElement;
+const left = document.getElementById('left');
+const right = document.getElementById('right');
+
+document.getElementById('k').addEventListener('input', e => {
+  root.style.setProperty('--k', (Number(e.target.value) / 100).toFixed(2));
+});
+
+document.getElementById('wall').addEventListener('click', e => {
+  const b = e.target.closest('button[data-w]');
+  if(!b) return;
+
+  for(const btn of document.querySelectorAll('#wall button')) btn.classList.toggle('on', btn === b);
+
+  const dark = b.dataset.w === 'dark';
+  for(const panel of [left, right]){
+    panel.classList.toggle('dark', dark);
+    panel.classList.toggle('light', !dark);
+  }
+});
+
+// 放大镜里的卡要跟外面同一档高度：改 --k 时同步到 loupe 内的克隆（同一个 var，天生同步）。
+
+// 地址栏 #dark 直接进深壁纸那一档，方便截图核对。
+if(location.hash === '#dark'){
+  document.querySelector('#wall button[data-w="dark"]').click();
+}
+</script>
+</body>
+</html>

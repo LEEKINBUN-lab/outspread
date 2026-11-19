@@ -196,7 +196,76 @@ internal sealed class WindowShadow : IDisposable
     private int _appWidth;
     private int _appHeight;
     private int _margin;
+    private bool _compact;
     private bool _visible;
+
+    /// <summary>整扇窗口那档的留边（3σ 之外，位图边界不会出现被裁断的台阶）。</summary>
+    internal const double WideMargin = 46;
+
+    /// <summary>一张纸那档的留边：够放下紧影就行，再宽就成了一圈框。</summary>
+    internal const double CompactMargin = 22;
+
+    /// <summary>一层影的形状：σ（设备 px）、峰值透明度、往下落的偏移。</summary>
+    internal readonly record struct ShadowLayer(double Sigma, double Alpha, double Drop);
+
+    /// <summary>
+    /// 影的配方。渲染与自检读同一份——"纸边那圈会不会读成描边"是可算的，不该只靠眼睛。
+    /// </summary>
+    /// <remarks>
+    /// 三层：接触影把纸按在桌面上，环境影给一圈很淡的雾，主投影才负责"浮起来"。
+    /// 原来那枚 σ=2.5 的紧影在距边 1px 处仍有约 12% 黑，而它只从右、下两处漏出来
+    /// （左上被主体盖住）——他截图里那条黑细线就是它。这里没有任何 0 模糊的分量：
+    /// 每层都是"半个峰值 × 高斯尾巴"，最外圈随距离衰减到 0，留边也放大到 3σ 之外。
+    ///
+    /// 小窗那档整体收一档并压暗：σ14 的雾铺在一张纸上就是一圈 70px 的灰环，
+    /// 加上纸边 16% 的接触浓度，读起来不是"浮起来"而是"套了个框"（他 11-18 的第三张截图）。
+    /// </remarks>
+    internal static ShadowLayer[] LayersFor(double scale, bool compact) => compact
+        ?
+        [
+            new(1.2 * scale, 0.04, 0.5 * scale),
+            new(3.5 * scale, 0.07, 1.5 * scale),
+            new(8.0 * scale, 0.12, 3.0 * scale),
+        ]
+        :
+        [
+            new(1.5 * scale, 0.05, 1.0 * scale),
+            new(8.0 * scale, 0.09, 2.0 * scale),
+            new(14.0 * scale, 0.18, 5.0 * scale),
+        ];
+
+    /// <summary>剪影往里收多少：影的最黑处落在纸底下，贴着纸边读到的才是"淡淡的托举"。</summary>
+    internal static double TuckPx(double scale, bool compact)
+        => compact ? 2.5 * scale : Math.Max(1, 1.1 * scale);
+
+    /// <summary>某一层在距剪影 <paramref name="distance"/> 处贡献的透明度。</summary>
+    private static double AlphaOf(ShadowLayer layer, double distance)
+    {
+        var q = distance / layer.Sigma;
+
+        return layer.Alpha * 0.5 * Math.Exp(-(q * q));
+    }
+
+    /// <summary>
+    /// 距剪影 <paramref name="distance"/>（设备 px）处的累计透明度。自检拿它当尺：
+    /// 纸边那一档要够淡（不然读成描边），留边外沿要归零（不然位图边界上会留一条台阶）。
+    /// </summary>
+    internal static double AlphaAt(double distance, double scale, bool compact)
+    {
+        var alpha = 0d;
+
+        foreach (var layer in LayersFor(scale, compact))
+        {
+            if (distance > 0)
+            {
+                alpha += AlphaOf(layer, distance);
+            }
+        }
+
+        return alpha;
+    }
+
+
 
     public WindowShadow(IntPtr owner)
     {
@@ -207,7 +276,11 @@ internal sealed class WindowShadow : IDisposable
     /// 把影子窗口贴到主窗口后面。只有 <paramref name="visible"/> 且尺寸有效时才显示；
     /// 最大化/最小化时由调用方传 false。
     /// </summary>
-    public void Update(int x, int y, int width, int height, bool visible)
+    /// <param name="compact">
+    /// 小窗用（浮牌那一档）：它只有一张便签那么大，按整扇窗口那份"留 46px、最外层 σ14"的影去铺，
+    /// 影会比纸还宽，读起来像套了一圈框（他 11-18 的第三张截图）。小窗要的是紧贴纸边的一点点悬浮感。
+    /// </param>
+    public void Update(int x, int y, int width, int height, bool visible, bool compact = false)
     {
         if (!visible || width <= 0 || height <= 0 || _owner == IntPtr.Zero)
         {
@@ -230,13 +303,14 @@ internal sealed class WindowShadow : IDisposable
             scale = 1;
         }
 
-        var margin = Math.Max(10, (int)Math.Round(18 * scale));
+        var margin = Math.Max(12, (int)Math.Round((compact ? CompactMargin : WideMargin) * scale));
 
-        if (width != _appWidth || height != _appHeight || margin != _margin)
+        if (width != _appWidth || height != _appHeight || margin != _margin || compact != _compact)
         {
             _appWidth = width;
             _appHeight = height;
             _margin = margin;
+            _compact = compact;
             Render(x, y, width, height, margin, scale);
         }
         else
@@ -331,56 +405,58 @@ internal sealed class WindowShadow : IDisposable
 
         // 只算窗口外那一圈。中心被主窗口整个盖住，byte[] 默认 0 就够。
         var pixels = new byte[width * height * 4];
-        var sigmaSoft = 10 * scale;
-        var sigmaTight = 2.5 * scale;
-        var offsetY = (int)Math.Round(2 * scale);
 
-        // 影子相对主窗口下移 2px：上沿更轻，下沿稍实。
-        var left = margin;
-        var top = margin + offsetY;
-        var right = margin + appWidth;
-        var bottom = margin + appHeight + offsetY;
+        // 圆角跟随卡片（原型 9px），影往里收一点点——边缘那一条因此不是最高点。
+        // 小窗那档的纸是直角的（板上的格子就是 CornerRadius(0)），影跟着直角才不错位。
+        var radius = _compact ? Math.Max(1, 3 * scale) : Math.Max(2, (9 * scale) - 1);
+
+        var tuck = TuckPx(scale, _compact);
+        var layers = LayersFor(scale, _compact);
+
+        var left = margin + tuck;
+        var right = margin + appWidth - tuck;
+        var top = margin + tuck;
+        var bottom = margin + appHeight - tuck;
 
         for (var py = 0; py < height; py++)
         {
-            var middleRow = py >= margin && py < margin + appHeight;
+            var insideRow = py >= margin && py < margin + appHeight;
+            var rowStart = insideRow ? margin : 0;
+            var rowEnd = insideRow ? margin + appWidth : width;
 
-            if (middleRow)
+            for (var px = 0; px < width; px++)
             {
-                for (var px = 0; px < margin; px++)
+                // 被主窗口盖住的那一段一个字节都不写：它本来就不会显示。
+                if (px >= rowStart && px < rowEnd)
                 {
-                    Write(px, py);
+                    continue;
                 }
 
-                for (var px = margin + appWidth; px < width; px++)
-                {
-                    Write(px, py);
-                }
-            }
-            else
-            {
-                for (var px = 0; px < width; px++)
-                {
-                    Write(px, py);
-                }
+                Write(px, py);
             }
         }
 
         void Write(int px, int py)
         {
-            var dx = Math.Max(0, Math.Max(left - px, px - (right - 1)));
-            var dy = Math.Max(0, Math.Max(top - py, py - (bottom - 1)));
-            var distance = Math.Sqrt((dx * dx) + (dy * dy));
+            var alpha = 0d;
 
-            if (distance <= 0)
+            foreach (var layer in layers)
             {
-                return;
+                var distance = RoundedDistance(
+                    px, py,
+                    left, top + layer.Drop,
+                    right, bottom + layer.Drop,
+                    radius);
+
+                if (distance <= 0)
+                {
+                    continue;
+                }
+
+                alpha += AlphaOf(layer, distance);
             }
 
-            var soft = distance / sigmaSoft;
-            var tight = distance / sigmaTight;
-            var alpha = (18 * Math.Exp(-(soft * soft))) + (16 * Math.Exp(-(tight * tight)));
-            var value = (int)Math.Round(alpha);
+            var value = (int)Math.Round(alpha * 255);
 
             if (value <= 0)
             {
@@ -446,6 +522,43 @@ internal sealed class WindowShadow : IDisposable
             DeleteDC(memoryDc);
             ReleaseDC(IntPtr.Zero, screenDc);
         }
+    }
+
+    /// <summary>
+    /// 点到圆角矩形边界的有符号距离：内部为负、边界为 0、外部为正。像素按中心取（+0.5），
+    /// 否则整条影会偏半个像素、在 1x 屏上看起来像边缘没对齐。
+    /// </summary>
+    /// <remarks>
+    /// 圆角矩形的标准距离场：先在两个轴上各自减掉「半长 - 半径」，得到点相对内缩矩形的位移；
+    /// 落在内缩矩形内的部分取 0 并在轴向上取负（负值代表"在最外圈以内多远"），于是四个圆角
+    /// 只剩角上那一段是斜边，正圆心的距离减去半径即为真实距离。不这么写而直接对整条边用
+    /// 轴向距离的话，角上会留下一个方角——那正是要消掉的那种硬边。
+    /// </remarks>
+    private static double RoundedDistance(
+        int px, int py, double left, double top, double right, double bottom, double radius)
+    {
+        var cx = (left + right) * 0.5;
+        var cy = (top + bottom) * 0.5;
+        var halfWidth = ((right - left) * 0.5) - radius;
+        var halfHeight = ((bottom - top) * 0.5) - radius;
+
+        if (halfWidth < 0)
+        {
+            halfWidth = 0;
+        }
+
+        if (halfHeight < 0)
+        {
+            halfHeight = 0;
+        }
+
+        var dx = Math.Abs(px + 0.5 - cx) - halfWidth;
+        var dy = Math.Abs(py + 0.5 - cy) - halfHeight;
+
+        var ax = Math.Max(dx, 0);
+        var ay = Math.Max(dy, 0);
+
+        return Math.Sqrt((ax * ax) + (ay * ay)) + Math.Min(Math.Max(dx, dy), 0) - radius;
     }
 
     private void UpdateLayeredPosition(int x, int y)

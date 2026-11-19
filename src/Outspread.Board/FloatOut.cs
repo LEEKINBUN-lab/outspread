@@ -28,6 +28,71 @@ internal sealed class FloatingNoteWindow : Window
     private const int GWL_EXSTYLE = -20;
     private const long WS_EX_TOOLWINDOW = 0x0000_0080;
 
+    /// <summary>DWMWA_BORDER_COLOR：Win11 给每个窗口描的那 1px。NONE 是"别描"。</summary>
+    private const int DwmwaBorderColor = 34;
+    private const int DwmwaWindowCornerPreference = 33;
+    private const uint DwmwaColorNone = 0xFFFF_FFFE;
+    private const int DwmwcpDoNotRound = 1;
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+    // ── 窗框：客户区必须等于整个窗口 ──
+    //
+    // 他连着两轮看到的"右边和下边一条黑细线"就出在这里，跟影、跟边框颜色都无关：
+    // 无框窗仍然带着系统那圈**非客户边**（左边上边 0，右边下边各一像素起），客户区比外框小，
+    // 露出来的那一线就是窗口自己的底。主窗早在 WindowChrome 里把 WM_NCCALCSIZE 直接答 0
+    // 解决过同一件事（那里叫 ForceClientFill），浮牌窗从来没做过——所以只有它有这条线。
+    private const uint WmNcCalcSize = 0x0083;
+    private const uint WmNcHitTest = 0x0084;
+    private const int GwlWndProc = -4;
+
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoZOrder = 0x0004;
+    private const uint SwpNoActivate = 0x0010;
+    private const uint SwpFrameChanged = 0x0020;
+
+    /// <summary>边缘多少 DIP 以内算"拖大小"。无框窗没有可见的把手，靠这一圈。</summary>
+    private const double ResizeGripDip = 6;
+
+    private const int HtClient = 1;
+    private const int HtLeft = 10;
+    private const int HtRight = 11;
+    private const int HtTop = 12;
+    private const int HtTopLeft = 13;
+    private const int HtTopRight = 14;
+    private const int HtBottom = 15;
+    private const int HtBottomLeft = 16;
+    private const int HtBottomRight = 17;
+
+    private delegate IntPtr WndProcDelegate(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    private static extern IntPtr SetWindowLongPtrW(IntPtr hWnd, int index, IntPtr value);
+
+    [DllImport("user32.dll", EntryPoint = "CallWindowProcW")]
+    private static extern IntPtr CallWindowProc(IntPtr previous, IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(
+        IntPtr hWnd, IntPtr after, int x, int y, int width, int height, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect rect);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hWnd);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
     /// <summary>按住挪过这条死区才算"要拖"：轻点、双击都不惊动。</summary>
     private const double DragDeadZonePx = 3;
 
@@ -37,8 +102,22 @@ internal sealed class FloatingNoteWindow : Window
     private bool _returnFired;
     private bool _dragging;
     private bool _dragEngaged;
+
+    /// <summary>拖右下角改大小：手动挪窗那套的镜像——不走系统的 NC 缩放循环（无框窗没有 WS_THICKFRAME）。</summary>
+    private bool _resizing;
+    private bool _resizeRight;
+    private bool _resizeBottom;
+    private Windows.Foundation.Point _resizeCursor0;
+    private SizeInt32 _resizeSize0;
     private Windows.Foundation.Point _dragCursor0;
     private PointInt32 _dragWindow0;
+
+    /// <summary>窗后面那层自绘投影（与主窗同一套）。窗自己画不了影：影要伸到窗框外面去。</summary>
+    private WindowShadow? _shadow;
+
+    /// <summary>子类化之后的原窗口过程，与自己的那枚一起拿着（委托被回收就崩）。</summary>
+    private IntPtr _previousWndProc;
+    private WndProcDelegate? _wndProc;
 
     /// <summary>浮牌以任何途径收掉（回板钮、Esc、Close）都发一次；MainWindow 据此复原格子。只发一次。</summary>
     public event Action? ReturnRequested;
@@ -48,6 +127,9 @@ internal sealed class FloatingNoteWindow : Window
 
     /// <summary>编辑框提交（Ctrl＋Enter／失焦）。带的是正文原文，标记那几行由 MainWindow 保管接回。</summary>
     public event Action<string>? EditCommitted;
+
+    /// <summary>拖边缘改过大小。带的是新的窗口尺寸（物理 px）——大小归账上那一格，窗只是它的镜子。</summary>
+    public event Action<SizeInt32>? Resized;
 
     /// <summary>正在编辑：拖动与 Esc-回板都要让位。</summary>
     public bool Editing => _editorBox is not null;
@@ -63,7 +145,9 @@ internal sealed class FloatingNoteWindow : Window
             // 去框的方法长在 Presenter 上不在 AppWindow 上（WindowChrome 踩过的路）。
             presenter.SetBorderAndTitleBar(false, false);
             presenter.IsAlwaysOnTop = true;
-            presenter.IsResizable = false;
+
+            // 拖边缘改大小（他 11-18 要的）：窗上没有可见把手，靠 NCHITTEST 给边缘那圈热区。
+            presenter.IsResizable = true;
             presenter.IsMaximizable = false;
             presenter.IsMinimizable = false;
         }
@@ -71,9 +155,25 @@ internal sealed class FloatingNoteWindow : Window
         AppWindow.Move(screenPx);
         AppWindow.Resize(sizePx);
 
+        // 客户区＝整个窗口。少了这一步，右边和下边会各留一像素非客户边，露出来的就是那条黑线。
+        _wndProc = WndProc;
+        _previousWndProc = SetWindowLongPtrW(
+            _hwnd, GwlWndProc, Marshal.GetFunctionPointerForDelegate(_wndProc));
+        ForceClientFill();
+
         // 工具窗样式：不占任务栏、不在 Alt-Tab 里占一格（路子同 WindowShadow 的 SetWindowLongPtr）。
         var style = GetWindowLongPtr(_hwnd, GWL_EXSTYLE);
         SetWindowLongPtr(_hwnd, GWL_EXSTYLE, new IntPtr(style.ToInt64() | WS_EX_TOOLWINDOW));
+
+        // 两件"看起来多了一层皮"的事，都出在系统这一侧：
+        // ① Win11 给每个窗口描 1px 边框，它画在最外圈、正好贴着纸边，读起来就是"黑框"；
+        // ② 系统把窗口四角磨圆（DWMWCP_ROUND），而纸是直角的，四角就被裁出一圈内衬。
+        // 影归 WindowShadow、纸归 NodeVisual，这一层不该再有自己的轮廓。
+        var noBorder = unchecked((int)DwmwaColorNone);
+        DwmSetWindowAttribute(_hwnd, DwmwaBorderColor, ref noBorder, sizeof(int));
+
+        var squareCorner = DwmwcpDoNotRound;
+        DwmSetWindowAttribute(_hwnd, DwmwaWindowCornerPreference, ref squareCorner, sizeof(int));
 
         _root = new Grid { Background = new SolidColorBrush(paper) };
 
@@ -104,8 +204,28 @@ internal sealed class FloatingNoteWindow : Window
                     return;
                 }
 
-                if (!e.GetCurrentPoint(_root).Properties.IsLeftButtonPressed)
+                var pointer = e.GetCurrentPoint(_root);
+
+                if (!pointer.Properties.IsLeftButtonPressed)
                 {
+                    return;
+                }
+
+                // 右下角那 10 DIP 是"改大小"，其余地方是"挪位置"。系统那套 NC 缩放循环在无框窗上
+                // 不起作用（没有 WS_THICKFRAME，投 HTBOTTOMRIGHT 也没人接），所以自己算。
+                var edge = (int)Math.Round(10 * (GetDpiForWindow(_hwnd) / 96.0));
+
+                _resizeRight = _root.ActualWidth - pointer.Position.X <= edge;
+                _resizeBottom = _root.ActualHeight - pointer.Position.Y <= edge;
+
+                if (_resizeRight || _resizeBottom)
+                {
+                    _resizeCursor0 = CursorPos();
+                    _resizeSize0 = AppWindow.Size;
+                    _resizing = true;
+                    _root.CapturePointer(e.Pointer);
+                    e.Handled = true;
+
                     return;
                 }
 
@@ -119,6 +239,27 @@ internal sealed class FloatingNoteWindow : Window
 
         _root.PointerMoved += (_, e) =>
         {
+            if (_resizing)
+            {
+                var cursor = CursorPos();
+                var dpi = GetDpiForWindow(_hwnd) / 96.0;
+
+                var width = _resizeRight
+                    ? Math.Max((int)Math.Round(140 * dpi), _resizeSize0.Width + (int)Math.Round(cursor.X - _resizeCursor0.X))
+                    : _resizeSize0.Width;
+
+                var height = _resizeBottom
+                    ? Math.Max((int)Math.Round(90 * dpi), _resizeSize0.Height + (int)Math.Round(cursor.Y - _resizeCursor0.Y))
+                    : _resizeSize0.Height;
+
+                if (width != AppWindow.Size.Width || height != AppWindow.Size.Height)
+                {
+                    AppWindow.Resize(new SizeInt32 { Width = width, Height = height });
+                }
+
+                return;
+            }
+
             if (!_dragging)
             {
                 return;
@@ -145,6 +286,7 @@ internal sealed class FloatingNoteWindow : Window
 
         _root.PointerReleased += (_, e) =>
         {
+            _resizing = false;
             _dragging = false;
             _dragEngaged = false;
             _root.ReleasePointerCapture(e.Pointer);
@@ -152,6 +294,7 @@ internal sealed class FloatingNoteWindow : Window
 
         _root.PointerCanceled += (_, e) =>
         {
+            _resizing = false;
             _dragging = false;
             _dragEngaged = false;
             _root.ReleasePointerCapture(e.Pointer);
@@ -169,11 +312,29 @@ internal sealed class FloatingNoteWindow : Window
 
         _root.Children.Add(note);
         _root.Children.Add(BuildBackButton());
+        _root.Children.Add(BuildResizeGrip());
 
         Content = _root;
 
+        // 影贴在窗后面，窗一动它就跟着重画。浮牌是 always-on-top 的，owner 一挂
+        // （WindowShadow 里那句 SetWindowPos(_hwnd, _owner)）这层影就落在同一档上。
+        Activated += (_, _) => UpdateShadow();
+        AppWindow.Changed += (_, args) =>
+        {
+            UpdateShadow();
+
+            if (args.DidSizeChange)
+            {
+                Resized?.Invoke(AppWindow.Size);
+            }
+        };
+        UpdateShadow();
+
         Closed += (_, _) =>
         {
+            _shadow?.Dispose();
+            _shadow = null;
+
             if (_returnFired)
             {
                 return;
@@ -184,6 +345,117 @@ internal sealed class FloatingNoteWindow : Window
         };
     }
 
+    /// <summary>把自绘投影贴到窗后面。位置／大小都读 <see cref="Window"/> 的现值，拖动后重算。</summary>
+    private void UpdateShadow()
+    {
+        if (_hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        _shadow ??= new WindowShadow(_hwnd);
+
+        var size = AppWindow.Size;
+        var at = AppWindow.Position;
+
+        _shadow.Update(at.X, at.Y, size.Width, size.Height, AppWindow.IsVisible, compact: true);
+    }
+
+    private IntPtr WndProc(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam)
+    {
+        // 客户区＝整个窗口：那圈非客户边连同它后面透出来的东西一起消失。
+        if (message == WmNcCalcSize && wParam != IntPtr.Zero)
+        {
+            return IntPtr.Zero;
+        }
+
+        // 整个客户区都算 HTCLIENT：缩放走 PointerMoved 里那套手动算法。
+        // （上一版把边缘投成 HTBOTTOMRIGHT 交给系统，实测毫无反应——无框窗没有 WS_THICKFRAME，
+        //  DefWindowProc 不肯开缩放循环，那条路在这类窗上是死的。）
+        if (message == WmNcHitTest)
+        {
+            return new IntPtr(HtClient);
+        }
+
+        return _previousWndProc == IntPtr.Zero
+            ? IntPtr.Zero
+            : CallWindowProc(_previousWndProc, hWnd, message, wParam, lParam);
+    }
+
+    /// <summary>客户区若还比外框小，逼系统重算一次非客户区（同 WindowChrome.ForceClientFill）。</summary>
+    private void ForceClientFill()
+    {
+        if (_hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var outer = AppWindow.Size;
+        var client = AppWindow.ClientSize;
+
+        if (outer.Width == client.Width && outer.Height == client.Height)
+        {
+            return;
+        }
+
+        SetWindowPos(
+            _hwnd, IntPtr.Zero, 0, 0, 0, 0,
+            SwpFrameChanged | SwpNoMove | SwpNoSize | SwpNoZOrder | SwpNoActivate);
+
+        // 后置读数：修没修好不靠眼睛——客户区仍比外框小，那条边就还在。
+        var after = AppWindow.ClientSize;
+
+        Diagnostics.Write(
+            $"floater client fill: outer {outer.Width}×{outer.Height}，client {client.Width}×{client.Height} → {after.Width}×{after.Height}"
+            + (after.Width == outer.Width && after.Height == outer.Height ? "（已齐）" : "（还差！）"));
+    }
+
+    /// <summary>
+    /// 右下角那两道斜纹：告诉人"这里可以拖大"。它自己不接指针（<c>IsHitTestVisible=false</c>），
+    /// 按下会落到窗口的 <c>WM_NCHITTEST</c> 上，由系统走缩放——看得见的那一笔与真正接活的
+    /// 那一圈热区是同一处，不会出现"画了个把手但拖不动"。
+    /// </summary>
+    private UIElement BuildResizeGrip()
+    {
+        var ink = NoteStyling.InkFor(((SolidColorBrush)_root.Background).Color);
+        var grip = new Canvas
+        {
+            Width = 12,
+            Height = 12,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 2, 2),
+            IsHitTestVisible = false,
+            Opacity = 0.32,
+        };
+
+        // 两道斜纹，长度递减——惯用的"可拖大"记号。
+        foreach (var length in new[] { 9d, 5d })
+        {
+            grip.Children.Add(new Microsoft.UI.Xaml.Shapes.Line
+            {
+                X1 = 12,
+                Y1 = 12 - length,
+                X2 = 12 - length,
+                Y2 = 12,
+                Stroke = new SolidColorBrush(ink),
+                StrokeThickness = 1.2,
+                StrokeStartLineCap = Microsoft.UI.Xaml.Media.PenLineCap.Round,
+                StrokeEndLineCap = Microsoft.UI.Xaml.Media.PenLineCap.Round,
+            });
+        }
+
+        return grip;
+    }
+
+    /// <summary>
+    /// 回板钮。
+    /// </summary>
+    /// <remarks>
+    /// 原来是一枚 24 的圆、里面一个"回"字、还带一圈描边——板面与浮层里所有按钮都是**画出来的字形**
+    /// （无底无边、悬停才起一层很淡的圆），这一枚用汉字＋描边，放在纸角上确实格格不入（他 11-19 说的）。
+    /// 现在换成同一个图标家族里的叉：与本子上的"收起"是同一枚字形、同一套悬停皮，读作"把这张纸收回去"。
+    /// </remarks>
     private Button BuildBackButton()
     {
         var ink = NoteStyling.InkFor(((SolidColorBrush)_root.Background).Color);
@@ -193,27 +465,33 @@ internal sealed class FloatingNoteWindow : Window
         var back = new Button
         {
             Name = "FloaterBackButton",
-            Width = 24,
-            Height = 24,
+            Width = 30,
+            Height = 30,
             MinWidth = 0,
             MinHeight = 0,
             Padding = new Thickness(0),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(12),
-            Background = new SolidColorBrush(Fade(ink, 0.08)),
-            BorderBrush = new SolidColorBrush(Fade(ink, 0.25)),
-            Foreground = new SolidColorBrush(Fade(ink, 0.70)),
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(15),
+            Background = new SolidColorBrush(Colors.Transparent),
+            Foreground = new SolidColorBrush(Fade(ink, 0.66)),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(0, 5, 5, 0),
-            Content = new TextBlock
-            {
-                Text = "回",
-                FontFamily = NoteStyling.NoteFont,
-                FontSize = 11,
-            },
+            Margin = new Thickness(0, 3, 3, 0),
+            Content = FluentIcons.Glyph(FluentIcons.Dismiss, 15, Fade(ink, 0.66)),
             TabNavigation = KeyboardNavigationMode.Once,
         };
+
+        // 悬停才起一层很淡的圆，和浮层里那两枚（结掉／收起）同一档——不悬停就只是一枚字形。
+        var rest = new SolidColorBrush(Colors.Transparent);
+        var over = new SolidColorBrush(Fade(ink, 0.10));
+
+        back.Resources["ButtonBackground"] = rest;
+        back.Resources["ButtonBackgroundPointerOver"] = over;
+        back.Resources["ButtonBackgroundPressed"] = new SolidColorBrush(Fade(ink, 0.16));
+        back.Resources["ButtonBorderBrush"] = rest;
+        back.Resources["ButtonBorderBrushPointerOver"] = rest;
+        back.Resources["ButtonBorderBrushPressed"] = rest;
+
         ToolTipService.SetToolTip(back, "回板（Esc）");
         back.Click += (_, _) =>
         {
@@ -387,6 +665,9 @@ public sealed partial class MainWindow
         var visual = new NodeVisual(node, (relative) => AssetForNode(node, relative), DescribeEntity(node));
         visual.GateMark = source?.GateMark;
 
+        // 影交给窗后面那层 WindowShadow：格子自己在窗里画影，伸不出去的那一截就是窗边一条硬线。
+        visual.ShadowSuppressed = true;
+
         var host = new Canvas
         {
             Width = Math.Max(2, node.Width) * zoom + FloaterPadPx * 2,
@@ -445,6 +726,8 @@ public sealed partial class MainWindow
                 RefitFloater(id, scale);
             }
         };
+
+        window.Resized += size => OnFloaterResized(id, size, scale);
 
         _floaters[id] = (window, previous);
         window.ReturnRequested += () => ReturnNote(id);
@@ -517,6 +800,101 @@ public sealed partial class MainWindow
 
         return true;
     }
+
+    /// <summary>
+    /// 浮牌被拖边缘改了大小：大小归账上那一格，窗只是它的镜子。
+    /// </summary>
+    /// <remarks>
+    /// 拖动途中每一帧都会来一发，所以不在这里落账（一次拖动只该留一步撤销）：先把格子的尺寸
+    /// 改掉、把浮窗里的那枚重排一遍（看得见的就是这个），落账交给停手后的 <see cref="_floaterSettle"/>。
+    /// <see cref="RefitFloater"/> 自己也会改窗尺寸，那一发算出来的尺寸与现值相同，直接被挡掉。
+    /// </remarks>
+    private void OnFloaterResized(string id, SizeInt32 sizePx, double scale)
+    {
+        if (!_floaters.TryGetValue(id, out var entry)
+            || NodeOf(id) is not { } node
+            || entry.Window.Content is not Grid root
+            || root.Children.FirstOrDefault() is not Canvas host)
+        {
+            return;
+        }
+
+        var zoom = Math.Max(0.05, _view.Zoom);
+        var width = sizePx.Width / scale / zoom;
+        var height = sizePx.Height / scale / zoom;
+
+        if (Math.Abs(node.Width - width) < 2 && Math.Abs(node.Height - height) < 2)
+        {
+            return;
+        }
+
+        if (_floaterResizeOpen is null)
+        {
+            BeginGesture("改了大小（浮牌）");
+            _floaterResizeOpen = id;
+        }
+
+        node.Width = Math.Max(60, width);
+        node.Height = Math.Max(40, height);
+        _view.MarkManualSize(id);
+
+        host.Width = Math.Max(2, node.Width) * zoom;
+        host.Height = Math.Max(2, node.Height) * zoom;
+
+        // 两份都要跟着改：浮窗里那一份（拖的时候眼睛看的就是它），和画板上那一份。
+        foreach (var target in host.Children.OfType<NodeVisual>())
+        {
+            target.Update(node, _view, scale);
+            Canvas.SetLeft(target, FloaterPadPx);
+            Canvas.SetTop(target, FloaterPadPx);
+        }
+
+        if (_realized.TryGetValue(id, out var visual))
+        {
+            visual.Update(node, _view, scale);
+        }
+
+        RestartFloaterSettle();
+    }
+
+    /// <summary>停手以后落一次账：一步撤销、一次重排、一次存盘。</summary>
+    private void RestartFloaterSettle()
+    {
+        _floaterSettle ??= new Microsoft.UI.Xaml.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(220),
+        };
+
+        _floaterSettle.Tick -= FloaterSettleTick;
+        _floaterSettle.Tick += FloaterSettleTick;
+        _floaterSettle.Stop();
+        _floaterSettle.Start();
+    }
+
+    private void FloaterSettleTick(object? sender, object e)
+    {
+        _floaterSettle?.Stop();
+
+        if (_floaterResizeOpen is not { } id)
+        {
+            return;
+        }
+
+        _floaterResizeOpen = null;
+        EndGesture();
+        Rebuild();
+        SaveSoon();
+        DrainPendingReload();
+
+        // Rebuild 重铸了画板那格，"浮出中"的降透明标记跟着丢了——补回去。
+        if (_realized.TryGetValue(id, out var redimmed))
+        {
+            redimmed.Opacity = FloaterSourceOpacity;
+        }
+    }
+
+    private Microsoft.UI.Xaml.DispatcherTimer? _floaterSettle;
+    private string? _floaterResizeOpen;
 
     /// <summary>落账后格子可能长高/变矮：画布、浮窗与格子的布局盒一起跟上，弹窗位置不跑出屏幕。</summary>
     private void RefitFloater(string id, double scale)
@@ -639,6 +1017,12 @@ public sealed partial class MainWindow
             if (floated is null || floated.ActualWidth < 8 || floated.ActualHeight < 8)
             {
                 problems.Add($"浮出自检: 浮窗里没铸出同款格子（{(floated is null ? "树上没有 NodeVisual" : $"量到 {floated.ActualWidth:0.#}×{floated.ActualHeight:0.#}")}）");
+            }
+            else if (floated.PaintsShadow)
+            {
+                // 窗只能裁到格子边界：格子自己在窗里画影，伸不出去的那一截就是沿右、下两条的硬线。
+                // 影归窗后面那层 WindowShadow，这一份必须是"纸＋一圈发丝"。
+                problems.Add("浮出自检: 浮窗里那份还在自己画影，窗边会被裁出一条硬线");
             }
         }
 

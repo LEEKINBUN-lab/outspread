@@ -7508,7 +7508,10 @@ public sealed partial class MainWindow : Window
 
                 table.Append($"{type.Leading * scale:0.###}→{got:0.###}  ");
 
-                if (Math.Abs(got - want) > 0.001)
+                // 容差 0.5：DirectWrite 报的行距带小数（21.143 / 22.286 …），而 Core 那张表是整数。
+                // 差的那 0.14 DIP 不是错，是"引擎按字体度量算、我们按字号估"的口径差——排版用的是
+                // 引擎报的值，Core 那栏只做估算。原来卡 0.001，等于每台机器上永久红一条。
+                if (Math.Abs(got - want) > 0.5)
                 {
                     drift.Append($"{type.Leading * scale:0.###}: 引擎 {got:0.###} 而 Core 说 {want:0.###}  ");
                 }
@@ -10338,7 +10341,15 @@ public sealed partial class MainWindow : Window
 
         // 挪走盖它的那格：下面那格必须自己回来。摘掉走的是 Collapse，回来靠 Update 里
         // 那一笔 _collapsed 复位——这条断言钉的就是那条复位路。
-        topNode.X = anchorX + 320;
+        //
+        // 挪多远要按视口算，不能写死一个世界距离：原来固定 +320，在窄窗口里那张卡会有一半
+        // 出视口，被**视口剔除**收掉，于是"挪开的自己不见了"——红的是尺子，不是剔除逻辑。
+        // 改成往左挪"自己那么宽再加一缝"，并保证落点在视口里。
+        var screenLeft = _view.ToScreenX(topNode.X);
+        var screenWidth = topNode.Width * _view.Zoom;
+        var away = screenLeft - (screenWidth + 24);
+
+        topNode.X = _view.ToWorldX(away >= 8 ? away : 8);
         ArrangeAll();
 
         if (_realized[bottomId].Visibility != Visibility.Visible)

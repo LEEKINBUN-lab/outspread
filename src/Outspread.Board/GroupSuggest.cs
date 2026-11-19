@@ -121,8 +121,16 @@ public sealed partial class MainWindow
 
         _groupHint.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
 
-        Canvas.SetLeft(_groupHint, _view.ToScreenX(anchor.X));
-        Canvas.SetTop(_groupHint, _view.ToScreenY(anchor.Bottom) + 8);
+        // 落点要夹进板面：框贴着右缘或者底下的时候，胶囊原来会整枚飘到屏幕外——
+        // 自检里那条"提议胶囊塌了：129×25、位 (924,644)、板宽 754"说的就是它
+        // （尺寸好好的，是位置出去了）。夹进来以后它永远看得见。
+        var width = Math.Max(1, _groupHint.DesiredSize.Width);
+        var height = Math.Max(1, _groupHint.DesiredSize.Height);
+        var left = _view.ToScreenX(anchor.X);
+        var top = _view.ToScreenY(anchor.Bottom) + 8;
+
+        Canvas.SetLeft(_groupHint, Math.Clamp(left, 8, Math.Max(8, BoardArea.ActualWidth - width - 8)));
+        Canvas.SetTop(_groupHint, Math.Clamp(top, 8, Math.Max(8, BoardArea.ActualHeight - height - 8)));
     }
 
     /// <summary>拉出＝整格挪到框外右边一点，走一步可撤销的手势；框由 EndGesture 的贴回自己缩。</summary>

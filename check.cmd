@@ -106,6 +106,11 @@ echo 全过
 exit /b 0
 
 :fail
+rem Even with a red gate the Start Menu copy has to catch up. The interface self test has
+rem carried five known-red lines for weeks, and every one of those runs used to jump straight
+rem here and skip the heal step above -- so the bin got fixed and the copy he double-clicks
+rem stayed on an old build. That is exactly how a fixed crash kept crashing for him on 11-19.
+if not "%GITHUB_ACTIONS%"=="true" "%BOARD%" --heal-install
 echo.
 echo 红灯：看上面的输出，日志在 %%LOCALAPPDATA%%\Outspread\board.log
 exit /b 1

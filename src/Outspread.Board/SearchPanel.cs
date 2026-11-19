@@ -223,8 +223,26 @@ public sealed partial class MainWindow
 
         var band = Math.Max(80, BoardArea.ActualHeight - top);
 
-        _view.PanX = BoardArea.ActualWidth / 2 - (node.X + node.Width / 2) * _view.Zoom;
-        _view.PanY = (top + (band / 2)) - (node.Y + node.Height / 2) * _view.Zoom;
+        var zoom = _view.Zoom;
+
+        _view.PanX = BoardArea.ActualWidth / 2 - (node.X + node.Width / 2) * zoom;
+        _view.PanY = (top + (band / 2)) - (node.Y + node.Height / 2) * zoom;
+
+        // 居中只对"带子装得下这一格"成立。窗口不高、面板又高的时候，带子比格子还矮，
+        // 居中会把这格顶到面板底下去——自检那条"目标 (…) 与面板（底 424）重叠"就是这情形，
+        // 而且它正是他 10-24 说的"点了行看不出跳到了哪"。所以居中之后再夹一道：
+        // 上沿不许进面板，下沿不许出板面。
+        var nodeTop = (node.Y * zoom) + _view.PanY;
+        var nodeBottom = nodeTop + (node.Height * zoom);
+
+        if (nodeTop < top + 8)
+        {
+            _view.PanY += (top + 8) - nodeTop;
+        }
+        else if (nodeBottom > BoardArea.ActualHeight - 8)
+        {
+            _view.PanY -= nodeBottom - (BoardArea.ActualHeight - 8);
+        }
 
         ArrangeAll();
     }

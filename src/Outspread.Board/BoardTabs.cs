@@ -169,7 +169,11 @@ public sealed partial class MainWindow
         // 右边让出"加号＋设置＋保存"整条带（TitleBarHost 的 Padding 只含三枚窗口按钮）：
         // 不让的话标签一多，最后一枚就滑到保存／设置底下——11-06 他报的重叠就是这条。
         // 让位之后标签真的放不下了，TabView 自己的滚动箭头才接手，而不是压到钮上。
-        BoardTabs.Margin = new Thickness(0, 0, TabStrip.TabStripRightInsetPx, 0);
+        //
+        // 左边同理让出板列表钮那一格：那两枚滚动箭头**不吃 Padding**（它们挂在 TabView 外层的
+        // 网格上，实测固定在 x=2），只让 Padding 的话左箭头仍旧钻到板列表钮底下。
+        BoardTabs.Margin = new Thickness(
+            TabStrip.TabStripLeftInsetPx, 0, TabStrip.TabStripRightInsetPx, 0);
 
         // 点到别处＝这一格改名到此为止。**不能只等 LostFocus**：这一版按一块不持焦点的区域（板面、
         // 条上的空白、别的标签）不会把焦点从 TextBox 拿走，所以"点了别处还在改名"是必然不是偶发
@@ -367,6 +371,102 @@ public sealed partial class MainWindow
     /// 量最后一枚标签的右缘，把加号放在它后面 4px。标签少时加号跟着最后一枚走；标签多到
     /// 贴住右侧系统按钮时，加号留在最后一个能放下的位置，不钻到最小化底下。
     /// </summary>
+    /// <summary>
+    /// 标题条是手工摆的（加号、右端两枚钮、系统三枚都在同一条带子上），出了重叠只看图是猜谜：
+    /// 这一步把条子里每个有面积的子元素连名字带盒打出来。<c>OUTSPREAD_DUMP_TITLEBAR=1</c> 才跑。
+    /// </summary>
+    private void DumpTitleBarIfAsked()
+    {
+        if (Environment.GetEnvironmentVariable("OUTSPREAD_DUMP_TITLEBAR") != "1")
+        {
+            return;
+        }
+
+        Diagnostics.Write($"titlebar dump: host {TitleBarHost.ActualWidth:0}×{TitleBarHost.ActualHeight:0}");
+
+        static void Walk(DependencyObject node, string path, int depth)
+        {
+            var count = VisualTreeHelper.GetChildrenCount(node);
+
+            for (var i = 0; i < count; i++)
+            {
+                var child = VisualTreeHelper.GetChild(node, i);
+                var name = (child as FrameworkElement)?.Name ?? string.Empty;
+                var here = name.Length > 0 ? $"{path}/{child.GetType().Name}#{name}" : $"{path}/{child.GetType().Name}";
+
+                if (child is FrameworkElement element && element.ActualWidth > 0.5 && element.ActualHeight > 0.5)
+                {
+                    var box = element.TransformToVisual(null).TransformBounds(
+                        new Rect(0, 0, element.ActualWidth, element.ActualHeight));
+
+                    if (depth < 14)
+                    {
+                        Diagnostics.Write(
+                            $"  {new string(' ', depth)}{element.GetType().Name}#{name} {box.X:0},{box.Y:0} {box.Width:0}×{box.Height:0}"
+                            + (element is Microsoft.UI.Xaml.Controls.Primitives.ButtonBase ? " [button]" : string.Empty));
+                    }
+                }
+
+                if (depth < 14)
+                {
+                    Walk(child, here, depth + 1);
+                }
+            }
+        }
+
+        Walk(TitleBarHost, "TitleBarHost", 1);
+
+        foreach (var name in new[] { "ScrollDecreaseButtonContainer", "ScrollIncreaseButtonContainer" })
+        {
+            if (FindDescendant<Border>(BoardTabs, name) is not { } container)
+            {
+                continue;
+            }
+
+            var chevron = FindDescendant<Microsoft.UI.Xaml.Controls.Primitives.RepeatButton>(
+                container, name.Replace("Container", string.Empty, StringComparison.Ordinal));
+
+            Diagnostics.Write(
+                $"  箭头 {name}: 容器 {container.Margin.Top:0.##}/{container.ActualHeight:0.#} 箭头高 {chevron?.ActualHeight:0.#} 对齐 {chevron?.VerticalAlignment}");
+        }
+    }
+
+    /// <summary>
+    /// 把两枚滚动箭头对齐到标签文字那一行。
+    /// </summary>
+    /// <remarks>
+    /// 模板把它们贴着条子下沿摆（实测容器 27 高、落在 y=11，条高 38），比标签文字低两格——
+    /// 他 11-18 说"箭头没有垂直居中"就是这个。它们不在 TabListView 里，Padding 管不到，
+    /// 所以这里按"标签那一带的中心"直接摆：上沿 + (标签高 − 容器高)/2。
+    /// </remarks>
+    private void CenterTabScrollButtons()
+    {
+        // 标签那一带（y = 4…38）的中心：箭头要对齐的是这行字，不是整条 38。
+        var bandCenter = (TabStrip.StripHeight - TabStrip.TabHeight) + (TabStrip.TabHeight / 2);
+
+        foreach (var name in new[] { "ScrollDecreaseButtonContainer", "ScrollIncreaseButtonContainer" })
+        {
+            if (FindDescendant<Border>(BoardTabs, name) is not { } container)
+            {
+                continue;
+            }
+
+            // 居中容器，不是居中那枚钮：模板把钮在容器里 Center（实测 27 的格里一枚 24 的钮、
+            // 对齐 Center），按钮的顶边去对，整套会再低 1.5。
+            var height = container.ActualHeight > 1 ? container.ActualHeight : 27;
+            var top = bandCenter - (height / 2);
+
+            if (container.VerticalAlignment == VerticalAlignment.Top
+                && Math.Abs(container.Margin.Top - top) < 0.5)
+            {
+                continue;
+            }
+
+            container.VerticalAlignment = VerticalAlignment.Top;
+            container.Margin = new Thickness(container.Margin.Left, top, container.Margin.Right, 0);
+        }
+    }
+
     private void PositionAddBoardButton()
     {
         if (_positioningAdd || TitleBarHost.ActualWidth <= 0)
@@ -379,7 +479,29 @@ public sealed partial class MainWindow
         UpdateTabPassthroughRegions();
         UpdateResizeBorderRegions();
 
+        DumpTitleBarIfAsked();
+        CenterTabScrollButtons();
+
         var last = BoardTabs.TabItems.OfType<TabViewItem>().LastOrDefault();
+
+        var stripBox = BoardTabs.TransformToVisual(TitleBarHost).TransformBounds(
+            new Rect(0, 0, BoardTabs.ActualWidth, BoardTabs.ActualHeight));
+
+        // 标签条右缘往右那一格（30 + 4）是按 TabStripRightInsetPx 预留给加号的，它也就是
+        // 加号不许越过的线——越过就钻进右端两枚钮底下。
+        var stripRight = stripBox.Right;
+
+        // 标签放不下时 TabView 会在条子最后长出一枚滚动箭头，占着那 43px。加号按"最后一枚标签
+        // 右缘 + 4"摆，正好落在箭头身上（他 11-18 报的小窗口下两枚叠在一起）。所以先问一句
+        // "这一格还放得下吗"，放不下就退到预留位。
+        var limit = stripRight;
+
+        if (FindDescendant<Border>(BoardTabs, "ScrollIncreaseButtonContainer") is { ActualWidth: > 0.5 } scroll)
+        {
+            limit = scroll.TransformToVisual(TitleBarHost).TransformBounds(
+                new Rect(0, 0, scroll.ActualWidth, scroll.ActualHeight)).Left;
+        }
+
         var left = 8d;
 
         if (last is not null && last.ActualWidth > 0.5)
@@ -390,14 +512,13 @@ public sealed partial class MainWindow
             var box = anchor.TransformToVisual(TitleBarHost).TransformBounds(
                 new Rect(0, 0, anchor.ActualWidth, anchor.ActualHeight));
 
-            left = box.Right + 4;
+            var followed = box.Right + 4;
+
+            left = followed + TabStrip.AddPx <= limit ? followed : stripRight;
         }
 
-        // 右端那两枚（保存／设置）也占地方：加号最多探进按钮带 4px，别在标签多的时候钻到它底下。
-        // 标签条自己的右界（TabStripRightInsetPx）已经在按钮带之前让出加号这一格，
-        // 这个钳位只在标签真的满到头时兜底。
-        var available = TitleBarHost.ActualWidth - TitleBarHost.Padding.Right - TabStrip.EndButtonsZonePx;
-        left = Math.Clamp(left, 8, Math.Max(8, available - TabStrip.AddPx - 4));
+        // 兜底：永远不越过标签条右缘，也永远不进右端按钮带。
+        left = Math.Clamp(left, 8, Math.Max(8, Math.Min(stripRight, TitleBarHost.ActualWidth - TabStrip.AddPx - 4)));
 
         var top = (TabStrip.StripHeight - TabStrip.AddPx) / 2 + TabStrip.AddOpticalDropPx;
         var current = AddBoardButton.Margin;

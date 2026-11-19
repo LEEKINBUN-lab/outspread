@@ -428,6 +428,13 @@ public static class TabStrip
     /// <summary>标签条的右界＝按钮带再加加号一格＋4px 缝：标签再多也在加号左边收住，谁也不压谁。</summary>
     public const double TabStripRightInsetPx = EndButtonsZonePx + AddPx + 4;
 
+    /// <summary>
+    /// 标题条左端那枚"板列表"钮所占的一格（起手 4 + 30 + 4 缝）。标签条从它右边起：
+    /// 不让的话，标签多到出现滚动箭头时，那枚左箭头会落在条子的 x=2 上，跟板列表钮叠成一团
+    /// （他 11-18 的"左侧的依旧重叠"）。
+    /// </summary>
+    public const double TabStripLeftInsetPx = 38;
+
     /// <summary>标签之间的发丝线上下各缩多少。</summary>
     public const double SeparatorInset = 9;
 

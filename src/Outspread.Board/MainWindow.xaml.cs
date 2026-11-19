@@ -65,6 +65,24 @@ public sealed partial class MainWindow : Window
     private int _snapIndexedCount = -1;
 
     /// <summary>
+    /// 命中的二维索引：点在哪一格、框里圈到哪几格。
+    /// </summary>
+    /// <remarks>
+    /// 与对齐索引同一拍重建，但收的是<b>整块板</b>（不只是视口里立着的那几格）：框选要能圈到刚
+    /// 滚出屏的那一排。索引只缩候选集——命中的号仍由调用方回文档复核，与
+    /// <see cref="IntervalIndex"/> 同一条规矩。
+    /// </remarks>
+    private readonly BoxIndex _hitIndex = new();
+
+    private readonly List<Grouping.Rect> _hitBoxes = [];
+
+    /// <summary>上一拍索引是按多少格建的：格数变了（增删格）就重建。</summary>
+    private int _hitIndexedCount = -1;
+
+    /// <summary>结构变过（载入／撤销／恢复／外部并入）：下一拍必须重建，`anyChanged` 看不到屏外的格。</summary>
+    private bool _hitIndexDirty = true;
+
+    /// <summary>
     /// 遮挡那一拍的两本平行账（cells ↔ 待摆的格，一一对应）：视窗内、按文档序（＝绘制序）收上来，
     /// <see cref="Occlusion.CulledCells"/> 的答案落回去——被摘的 Collapse，剩下的 Update。
     /// 与 <see cref="_snapBoxes"/> 同一生命周期：每一发先 Clear。
@@ -802,6 +820,10 @@ public sealed partial class MainWindow : Window
     {
         _rebuildCalls++;
 
+        // 载入／撤销／恢复／外部并入都走这一发：屏外那几格的几何可能变了，而 ArrangeAll 的
+        // anyChanged 只看得见立着的那些。这里先打脏，下一拍必重建。
+        _hitIndexDirty = true;
+
         var started = Stopwatch.GetTimestamp();
 
         // ---- 对账：这一拍的文档 vs 还立着的那些卡片 ----
@@ -1350,6 +1372,28 @@ public sealed partial class MainWindow : Window
             _snapIndexedCount = _snapBoxes.Count;
             _snapIndexX.Rebuild(_snapBoxes, box => box.X, box => box.X + box.Width);
             _snapIndexY.Rebuild(_snapBoxes, box => box.Y, box => box.Y + box.Height);
+        }
+
+        // 命中索引：几何真的动过那一拍才重建（与上面同一判据）。它比对齐索引多收"屏外"的格——
+        // 框选沿着一排拖过去时，刚滚出视口的那一枚照样要能圈到。组框不进索引（组是关系，不是场地），
+        // 零尺寸也不进（点不中、圈不到）。
+        if (_hitIndexDirty || anyChanged || _hitIndexedCount != nodes.Count)
+        {
+            _hitBoxes.Clear();
+
+            foreach (var node in nodes)
+            {
+                if (node.Kind == CanvasNodeKind.Group || node.Width <= 0 || node.Height <= 0)
+                {
+                    continue;
+                }
+
+                _hitBoxes.Add(new Grouping.Rect(node.Id, node.X, node.Y, node.Width, node.Height));
+            }
+
+            _hitIndex.Rebuild(_hitBoxes);
+            _hitIndexedCount = nodes.Count;
+            _hitIndexDirty = false;
         }
 
         var elapsed = Stopwatch.GetElapsedTime(started);
@@ -2702,6 +2746,15 @@ public sealed partial class MainWindow : Window
         // 点过的框去拆（嵌套以后拆错一层不是小事）。
         _groupFocus = null;
 
+        // 候选先由二维索引缩一遍（框选一次只问那一块，不必把整块板读一遍）。
+        // 索引只给号，判定仍按文档现值：两次提交之间被拖走的那几格不会因为索引旧了就错选。
+        // 索引还没建起来（首帧／刚载入）时退回全表扫，判据与原来逐字一致。
+        HashSet<string>? wanted = !_hitIndexDirty && _hitIndex.Count == _hitBoxes.Count
+            ? new HashSet<string>(
+                _hitIndex.Intersecting(worldRect.X, worldRect.Y, worldRect.Width, worldRect.Height),
+                StringComparer.Ordinal)
+            : null;
+
         foreach (var node in _document.Nodes)
         {
             // 组框是关系、不是场上的东西（10-22 定的：框自己从不进选中）。框选必须让它让开——
@@ -2709,6 +2762,16 @@ public sealed partial class MainWindow : Window
             // （他 11-12 报的"一框选分组里的元素就会选中整个分组"）。
             if (node.Kind == CanvasNodeKind.Group)
             {
+                continue;
+            }
+
+            if (wanted is not null)
+            {
+                if (wanted.Contains(node.Id))
+                {
+                    _selection.Add(node.Id);
+                }
+
                 continue;
             }
 

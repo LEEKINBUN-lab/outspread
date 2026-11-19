@@ -319,7 +319,21 @@ public sealed partial class MainWindow
     /// </summary>
     private CanvasNode? NodeAt(Point screen)
     {
-        var world = new Point(_view.ToWorldX(screen.X), _view.ToWorldY(screen.Y));
+        var worldX = _view.ToWorldX(screen.X);
+        var worldY = _view.ToWorldY(screen.Y);
+
+        // 二维索引：O(1) 拿到压在指针最上面的那一号，不再为每一次按下／每一帧悬停把整块板读一遍。
+        // 索引只缩候选集——拿到的号仍回文档确认现值，几何在两次提交之间变过就退回全表那一发。
+        if (!_hitIndexDirty && _hitIndex.Count == _hitBoxes.Count
+            && _hitIndex.TopAt(worldX, worldY) is { } hit
+            && _document.Find(hit) is { } indexed
+            && indexed.Kind != CanvasNodeKind.Group
+            && indexed.Width > 0 && indexed.Height > 0
+            && worldX >= indexed.X && worldX <= indexed.Right
+            && worldY >= indexed.Y && worldY <= indexed.Bottom)
+        {
+            return indexed;
+        }
 
         for (var index = _document.Nodes.Count - 1; index >= 0; index--)
         {
@@ -330,7 +344,7 @@ public sealed partial class MainWindow
                 continue;
             }
 
-            if (world.X < node.X || world.X > node.Right || world.Y < node.Y || world.Y > node.Bottom)
+            if (worldX < node.X || worldX > node.Right || worldY < node.Y || worldY > node.Bottom)
             {
                 continue;
             }

@@ -68,6 +68,12 @@ public static class CanvasStore
     /// </summary>
     public static string GatePath(string boardPath) => boardPath + ".gate.json";
 
+    /// <summary>
+    /// 评论的旁挂文件。与相机、闸门账同一套做法：**不进 `.canvas`**——评论是对话，不是板上的对象，
+    /// 格式对别的工具仍然干净（Obsidian 打开同一份文件看不到半句回复）。
+    /// </summary>
+    public static string CommentsPath(string boardPath) => boardPath + ".comments.json";
+
     public static string ReadAllText(string path)
     {
         using var stream = new FileStream(

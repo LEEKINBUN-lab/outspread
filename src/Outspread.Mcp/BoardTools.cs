@@ -7,6 +7,9 @@ using System.Text.Json.Serialization;
 using ModelContextProtocol.Server;
 using Outspread.Core;
 
+// 类型叫 BoardComments，工具方法也叫 BoardComments（他要按业务名叫），这里给类型留个别名。
+using BoardCommentsStore = Outspread.Core.BoardComments;
+
 namespace Outspread.Mcp;
 
 /// <summary>
@@ -620,9 +623,23 @@ public sealed class BoardTools
             }
         }
 
-        return lines.Count == 0
+        // 他常常把答复写成某一格的**评论**，而不是改正文——只看正文哈希会漏。
+        // 所以对账这一步顺带回一句评论的账（详情用 board_comments 取）。
+        var commentsPath = CanvasStore.CommentsPath(path);
+        var pendingComments = File.Exists(commentsPath)
+            ? BoardCommentsStore.Load(commentsPath).Threads.Where(thread => !thread.Resolved).ToList()
+            : [];
+
+        var commentLine = pendingComments.Count == 0
+            ? null
+            : $"评论：{pendingComments.Count} 条线程未结（{string.Join(", ", pendingComments.Take(4).Select(thread => thread.Node))}"
+              + $"{(pendingComments.Count > 4 ? " …" : string.Empty)}）——board_comments 看全文；他可能把答复写在这里而不是正文";
+
+        var body = lines.Count == 0
             ? "没有新东西：他没动板，也没有工单。"
             : $"{lines.Count} 处要你看：" + (ack ? "（已抹平这次读到的这一版）" : string.Empty) + "\n" + string.Join("\n", lines);
+
+        return commentLine is null ? body : body + "\n" + commentLine;
     }
 
     [McpServerTool(Name = "board_tickets"), Description(
@@ -1458,6 +1475,146 @@ public sealed class BoardTools
 
     /// <summary>编号引用认全串 13 位，也认 @n 短号（"@n8"／"n8"）：先按 id 找，没找着就按卡上的
     /// @n 序号对。序号在板上从不重发，唯一；对出零枚或两枚以上都当作没有——不许猜（archive 那次的教训）。</summary>
+    [McpServerTool(Name = "board_comments"), Description(
+        "读评论：他（或别的 agent）在某格上留的话。id 不填＝整块板的所有线程。"
+        + "评论是挂在格子上的对话，不在 .canvas 里——看板子本身看不到它，只能叫这枚。"
+        + "对账那一步要和 board_inbox 一起叫：他常常把答复写成某格的评论，而不是改正文。")]
+    public static string BoardComments(
+        [Description("画板文件路径。不填就用你的「Agent 出口」板。")] string? board = null,
+        [Description("格子编号（整串 13 位或 @n 短号）。不填＝整块板。")] string? id = null,
+        [Description("true＝只看没结掉的线程")] bool unresolvedOnly = false)
+    {
+        var path = ResolveBoard(board);
+
+        if (!File.Exists(path))
+        {
+            return $"{path} 还没有这块板。";
+        }
+
+        var comments = BoardCommentsStore.Load(CanvasStore.CommentsPath(path));
+        var document = CanvasStore.Load(path);
+        var anchor = string.IsNullOrWhiteSpace(id) ? null : ResolveCardRef(document, id!)?.Id;
+
+        if (!string.IsNullOrWhiteSpace(id) && anchor is null)
+        {
+            return $"{path} 里没有 {id} 这一格（整串 13 位或 @n 短号都认）。";
+        }
+
+        var threads = comments.Threads
+            .Where(thread => anchor is null || string.Equals(thread.Node, anchor, StringComparison.Ordinal))
+            .Where(thread => !unresolvedOnly || !thread.Resolved)
+            .ToList();
+
+        if (threads.Count == 0)
+        {
+            // 过滤空了不等于一条都没有：unresolvedOnly 把已结的全滤掉时，
+            // 说"还没有任何评论"会让他以为评论没写进去。
+            if (unresolvedOnly)
+            {
+                return anchor is null
+                    ? $"{path}：板上没有未解决的评论线程。"
+                    : $"{anchor} 上没有未解决的评论线程。";
+            }
+
+            return anchor is null
+                ? $"{path}：板上还没有任何评论。"
+                : $"{anchor} 上还没有评论。";
+        }
+
+        var lines = threads
+            .OrderBy(thread => thread.Resolved)
+            .Select(thread =>
+            {
+                var last = thread.Messages.Count == 0 ? string.Empty : thread.Messages[^1].Text.Replace('\n', ' ');
+                var who = thread.Messages.Count == 0 ? "?" : thread.Messages[^1].Author;
+
+                return $"{thread.Id} | {thread.Node} | {(thread.Resolved ? "已解决" : "未解决")}"
+                    + $"{(thread.Unread ? " · 未读" : string.Empty)} | {thread.Messages.Count} 条 | {who}：{Clip(last, 40)}";
+            });
+
+        return $"{path}：{threads.Count} 条线程\n" + string.Join("\n", lines);
+    }
+
+    [McpServerTool(Name = "board_comment"), Description(
+        "给某一格留一条评论（这一格还没有线程就开一条）。"
+        + "评论用于对**已有格子**的补充、追问、答复、进度更新；要落一件新东西用 board_post。"
+        + "resolve: true 把这条线程结掉（等同于他在界面上按结掉）。")]
+    public static string BoardComment(
+        [Description("格子编号（整串 13 位或 @n 短号）")] string id,
+        [Description("要说的话。resolve=true 时可以留空。")] string? text = null,
+        [Description("要结掉的那条线程编号；不填＝这格上第一条未解决的线程")] string? thread = null,
+        [Description("true＝把线程结掉（可以同时留一句「怎么解决的」）")] bool resolve = false,
+        [Description("agent 署名，会显示成「by-名字」并带 agent 标记")] string? agent = null,
+        [Description("画板文件路径。不填就用你的「Agent 出口」板。")] string? board = null)
+    {
+        var path = ResolveBoard(board);
+
+        if (!File.Exists(path))
+        {
+            return $"{path} 还没有这块板。";
+        }
+
+        var document = CanvasStore.Load(path);
+        var node = ResolveCardRef(document, id);
+
+        if (node is null)
+        {
+            return $"{path} 里没有 {id} 这一格（整串 13 位或 @n 短号都认）。";
+        }
+
+        var commentsPath = CanvasStore.CommentsPath(path);
+        var comments = BoardCommentsStore.Load(commentsPath);
+        var author = string.IsNullOrWhiteSpace(agent) ? "agent" : $"by-{NormaliseTag(agent!)}";
+
+        if (resolve)
+        {
+            var target = !string.IsNullOrWhiteSpace(thread)
+                ? comments.Find(thread!) is { } found && string.Equals(found.Node, node.Id, StringComparison.Ordinal) ? found : null
+                : comments.Threads.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Node, node.Id, StringComparison.Ordinal) && !candidate.Resolved);
+
+            if (target is null)
+            {
+                return $"{node.Id} 上没有{(!string.IsNullOrWhiteSpace(thread) ? $" {thread} 这条" : "未解决的")}线程。";
+            }
+
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                comments.Reply(target.Id, author, text!, agent: true);
+            }
+
+            comments.SetResolved(target.Id, true);
+            comments.Save(commentsPath);
+
+            return $"{node.Id} 的线程 {target.Id} 已结掉{(string.IsNullOrWhiteSpace(text) ? string.Empty : "，并留了一句")}。";
+        }
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return "要说什么？text 不能为空（只想结掉就传 resolve: true）。";
+        }
+
+        var existing = comments.Threads.FirstOrDefault(candidate =>
+            string.Equals(candidate.Node, node.Id, StringComparison.Ordinal) && !candidate.Resolved);
+
+        if (existing is not null)
+        {
+            comments.Reply(existing.Id, author, text!, agent: true);
+            comments.Save(commentsPath);
+
+            return $"{node.Id} 的线程 {existing.Id} 追加一条（共 {existing.Messages.Count} 条）。";
+        }
+
+        var opened = comments.AddThread(node.Id, author, text!, agent: true);
+        comments.Save(commentsPath);
+
+        return $"{node.Id} 上开了一条新线程 {opened.Id}。";
+    }
+
+    /// <summary>一行摘要用的截断：评论可能是整段，读的人只要看个开头。</summary>
+    private static string Clip(string text, int max)
+        => text.Length <= max ? text : text[..max] + "…";
+
     private static CanvasNode? ResolveCardRef(CanvasDocument document, string reference)
     {
         var trimmed = reference.Trim();

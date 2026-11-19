@@ -803,6 +803,12 @@ public sealed class NodeVisual : ContentControl
 
     internal bool PaintsReadout => _chips.Visibility == Visibility.Visible && _chips.Children.Count > 0;
 
+    /// <summary>
+    /// 这一格"装得下牌带"吗（正文一行 + 牌子带）。牌子画不画就是按它判的：
+    /// <c>PaintsReadout</c> 与它不等，才是真的丢了牌子；两者相等而没画，是"先保正文"那条设计。
+    /// </summary>
+    internal bool ChipsFit { get; private set; }
+
     /// <summary>Self-test reading: the font size the painted chips were built with. It has to follow
     /// the camera — a chip repainted only when its text changes keeps the size of whichever zoom it
     /// was born at, and the marks then disagree with the正文 on the same card.</summary>
@@ -1743,6 +1749,7 @@ public sealed class NodeVisual : ContentControl
             // 卡片小得装不下一行正文加牌子带时，先保正文：色条还在，时间这件事不会变成沉默。
             var showChips = chips.Count > 0 && band > 0 && withChips >= 1;
 
+            ChipsFit = showChips;
             _chips.Visibility = showChips ? Visibility.Visible : Visibility.Collapsed;
 
             // The room the words actually get, in world units: the marks band is chrome and sits

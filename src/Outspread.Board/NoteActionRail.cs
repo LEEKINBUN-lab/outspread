@@ -37,6 +37,7 @@ public sealed partial class MainWindow
     private Border? _railColor;
     private Border? _railArrange;
     private Border? _railTag;
+    private Border? _railComment;
     private Border? _railFloat;
     private Border? _railDelete;
     private Grid? _railStack;
@@ -234,6 +235,10 @@ public sealed partial class MainWindow
         _railArrange = RoundButton("NoteRailArrange", ArrangeIcon(), "排列（按颜色或标签；排选中的，没选中＝整板）");
         _railTag = RoundButton("NoteRailTag", TagIcon(), "批量加标签（选中的便签；可新增标签）");
 
+        // 评论钮（他 11-18 问"怎么新建评论"）：徽标只在有线程时才出现，那是"读"的入口；
+        // "写"必须有一枚常在的钮，选中一格就能按，不用先猜哪里有气泡。
+        _railComment = RoundButton("NoteRailComment", CommentIcon(), "评论（写一句，或看这一格的讨论）");
+
         // 浮钮（他 11-04 拍的 A 档）：把选中的文字便签映到屏幕顶层当只读浮牌。只对 Text 格有意义，
         // 点在 File/Link 上静默跳过；不进设置里那排"左侧按钮"隐藏名单（名单只有组/色/删三枚）。
         _railFloat = RoundButton("NoteRailFloat", FloatOutIcon(), "浮出到屏幕顶层（只读快照；Esc 或回板即收）");
@@ -247,6 +252,7 @@ public sealed partial class MainWindow
 
         host.Children.Add(_railGroup);
         host.Children.Add(_railColor);
+        host.Children.Add(_railComment);
         host.Children.Add(_railFloat);
         host.Children.Add(_railDelete);
 
@@ -274,7 +280,7 @@ public sealed partial class MainWindow
             var halo = Vignette();
             Canvas.SetLeft(halo, 0);
             Canvas.SetTop(halo, i * RailPitchPx);
-            halo.Visibility = i < 4 ? Visibility.Visible : Visibility.Collapsed;
+            halo.Visibility = i < RailStaticCells ? Visibility.Visible : Visibility.Collapsed;
             _railHalos.Add(halo);
             halos.Children.Add(halo);
         }
@@ -316,11 +322,11 @@ public sealed partial class MainWindow
 
     private const double RailPitchPx = RailButtonPx + RailGapPx;
 
-    /// <summary>最多六枚：组、色、浮、排列、批量标签、删。排列/标签只在选中 ≥2 时插进来。</summary>
-    private const int RailMaxCells = 6;
+    /// <summary>最多七枚：组、色、评论、浮、排列、批量标签、删。排列/标签只在选中 ≥2 时插进来。</summary>
+    private const int RailMaxCells = 7;
 
-    /// <summary>常驻钮：组、色、浮、删。外壳起手高度按它算——RelayoutRail 只在排列/标签增减时被叫，静态数变了它不知道。</summary>
-    private const int RailStaticCells = 4;
+    /// <summary>常驻钮：组、色、评论、浮、删。外壳起手高度按它算——RelayoutRail 只在排列/标签增减时被叫，静态数变了它不知道。</summary>
+    private const int RailStaticCells = 5;
 
     /// <summary>外壳：晕影那一圈在左右各扩 10；高度按此刻的钮数算（上下各扩 10）。</summary>
     private const double RailShellWidthPx = RailButtonPx + (2 * ControlKit.VignetteSpreadPx);
@@ -806,6 +812,25 @@ public sealed partial class MainWindow
     }
 
     /// <summary>浮钮：一方框＋斜出右上的一箭，读作"离开这层到顶上去"。墨色跟组钮同一条（随明暗档）。</summary>
+    /// <summary>评论那枚：一枚气泡的轮廓。与浮层里画的是同一个形状（那条路径只该有一个出处）。</summary>
+    private static UIElement CommentIcon()
+    {
+        var ink = new SolidColorBrush(NoteStyling.InkFor(NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark))));
+
+        var canvas = (Canvas)Microsoft.UI.Xaml.Markup.XamlReader.Load(
+            "<Canvas xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Width='22' Height='22' IsHitTestVisible='False'>"
+            + "<Path StrokeThickness='1.5' StrokeStartLineCap='Round' StrokeEndLineCap='Round' StrokeLineJoin='Round'"
+            + " Data='M5.2,5.2 L16.8,5.2 L16.8,14.4 L10.2,14.4 L6.6,17 L6.6,14.4 L5.2,14.4 Z'/>"
+            + "</Canvas>");
+
+        foreach (var path in canvas.Children.OfType<Microsoft.UI.Xaml.Shapes.Path>())
+        {
+            path.Stroke = ink;
+        }
+
+        return canvas;
+    }
+
     private static UIElement FloatOutIcon()
     {
         var ink = new SolidColorBrush(NoteStyling.InkFor(NoteStyling.ToColor(SelectionChrome.HandleFace(NoteStyling.IsDark))));
@@ -846,15 +871,16 @@ public sealed partial class MainWindow
             return;
         }
 
-        // 动态钮的出现条件：选中一格＝四枚（组/色/浮/删）；再加一格＝六枚（排列＋批量标签）。
+        // 动态钮的出现条件：选中一格＝五枚（组/色/评论/浮/删）；再加一格＝七枚（排列＋批量标签）。
+        // 数的是 RailStaticCells + 2——写死数字的那次，加评论钮时这里就红了三条。
         SelectOnly(probe[0].Id);
         ProjectSelection();
 
         var single = RailButtons();
 
-        if (single.Length != 4 || single.Any(button => button.Name is "NoteRailArrange" or "NoteRailTag"))
+        if (single.Length != RailStaticCells || single.Any(button => button.Name is "NoteRailArrange" or "NoteRailTag"))
         {
-            problems.Add($"自检状态层: 选中 1 格时操作条应 4 枚、且没有排列/标签钮，读到 {single.Length} 枚");
+            problems.Add($"自检状态层: 选中 1 格时操作条应 {RailStaticCells} 枚、且没有排列/标签钮，读到 {single.Length} 枚");
         }
 
         _selection.Add(probe[1].Id);
@@ -862,11 +888,11 @@ public sealed partial class MainWindow
 
         var buttons = RailButtons();
 
-        if (buttons.Length != 6
+        if (buttons.Length != RailStaticCells + 2
             || buttons.All(button => button.Name != "NoteRailArrange")
             || buttons.All(button => button.Name != "NoteRailTag"))
         {
-            problems.Add($"自检状态层: 选中 2 格时操作条应 6 枚、且含排列与标签钮，读到 {buttons.Length} 枚");
+            problems.Add($"自检状态层: 选中 2 格时操作条应 {RailStaticCells + 2} 枚、且含排列与标签钮，读到 {buttons.Length} 枚");
         }
 
         // 圆盘列的中心要落在选区中心上（四枚时原来会低 27px）。
@@ -1035,7 +1061,7 @@ public sealed partial class MainWindow
             problems.Add($"自检状态层: 选中 {SelectedNotes().Count} 格时，标签钮{(wantArrange ? "应该出现却没有" : "不该出现却在")}");
         }
 
-        if (cells.Length != (wantArrange ? 6 : 4))
+        if (cells.Length != (wantArrange ? RailStaticCells + 2 : RailStaticCells))
         {
             problems.Add($"自检状态层: 操作条上有 {cells.Length} 枚钮（选中 {SelectedNotes().Count} 格）");
         }
@@ -1432,6 +1458,18 @@ public sealed partial class MainWindow
             RailPress(_railDelete, down: false);
         };
 
+        _railComment!.PointerPressed += (_, e) =>
+        {
+            RailPress(_railComment, down: true);
+            OpenCommentsForSelection();
+            e.Handled = true;
+        };
+
+        _railComment.PointerReleased += (_, e) =>
+        {
+            RailPress(_railComment, down: false);
+        };
+
         _railFloat!.PointerPressed += (_, e) =>
         {
             RailPress(_railFloat, down: true);
@@ -1444,7 +1482,7 @@ public sealed partial class MainWindow
             RailPress(_railFloat, down: false);
         };
 
-        foreach (var button in new[] { _railGroup!, _railColor!, _railArrange!, _railTag!, _railFloat!, _railDelete! })
+        foreach (var button in new[] { _railGroup!, _railColor!, _railComment!, _railArrange!, _railTag!, _railFloat!, _railDelete! })
         {
             var target = button;
 
@@ -1986,6 +2024,8 @@ public sealed partial class MainWindow
         ProjectSelection();
         ApplyTagToSelected("批量自检");
 
+        var painted = 0;
+
         foreach (var id in before.Keys)
         {
             if (NodeOf(id) is not { } after)
@@ -2012,10 +2052,23 @@ public sealed partial class MainWindow
                 problems.Add($"自检批量标签: {id} 的文本根本没变");
             }
 
-            if (!_realized.TryGetValue(id, out var card) || !card.PaintsReadout)
+            // 牌子的"在/不在"必须与"装得下"那条判据一致——小卡片装不下时会**故意**收起整条牌带
+            // （先保正文），那不是丢牌子。原来这条断言要求"一律画出来"，于是夹具里那格 340×138
+            // 永久红：红的是尺子，代码没错。
+            if (!_realized.TryGetValue(id, out var card) || card.PaintsReadout != card.ChipsFit)
             {
-                problems.Add($"自检批量标签: {id} 加了标签但卡片上没画出牌子");
+                problems.Add($"自检批量标签: {id} 的牌带与'装得下'判据不一致（画了={card?.PaintsReadout} 装得下={card?.ChipsFit}）");
             }
+            else if (card.PaintsReadout)
+            {
+                painted++;
+            }
+        }
+
+        // 光"一致"还不够：两格都装不下的时候，这发等于什么都没验。至少得有一格真画出牌子。
+        if (painted == 0)
+        {
+            problems.Add("自检批量标签: 加完标签两格都没画出牌子——牌带这条链断了，或者夹具里没有装得下的卡");
         }
 
         Undo();

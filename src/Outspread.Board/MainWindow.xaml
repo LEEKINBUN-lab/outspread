@@ -170,6 +170,11 @@
                     UseLayoutRounding="False"
                     IsHitTestVisible="True" />
 
+                <!-- 评论层：锚在格子右上角的徽标与线程浮层。它不属于 ItemLayer——评论不是板上的
+                     对象，不参与排版、不进 .canvas；这一层只按文档现值摆位置。缩到 62% 以下时
+                     整层换成每簇一枚计数胶囊（见 Comments.cs）。 -->
+                <Canvas x:Name="CommentLayer" IsHitTestVisible="True" />
+
                 <!-- Alignment guides: drawn over the items, never in the way of a click. -->
                 <Canvas x:Name="GuideLayer" IsHitTestVisible="False" />
 

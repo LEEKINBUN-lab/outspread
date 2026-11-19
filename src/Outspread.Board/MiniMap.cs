@@ -42,6 +42,9 @@ internal sealed class MiniMap
     public const double MapWidthPx = 184;
     public const double MapHeightPx = 126;
 
+    /// <summary>它在板面左上角的外边距（与 <c>_root.Margin</c> 同一处数字）。</summary>
+    public const double MapInsetPx = 10;
+
     /// <summary>原型给小块定的下限：max(1.5, w·s) × max(1.2, h·s)。缩得再远，一格也剩一个点。</summary>
     private const double MinBlockWidthPx = 1.5;
     private const double MinBlockHeightPx = 1.2;
@@ -84,7 +87,7 @@ internal sealed class MiniMap
 
         _root.HorizontalAlignment = HorizontalAlignment.Left;
         _root.VerticalAlignment = VerticalAlignment.Top;
-        _root.Margin = new Thickness(10, 10, 0, 0);
+        _root.Margin = new Thickness(MapInsetPx, MapInsetPx, 0, 0);
         _root.Child = _map;
 
         // 地图这一层吃输入：底色全透明但仍在（Canvas 无底色时空白处不算命中，那一发左键会漏到板子上）。

@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>评论层 · 交互原型</title>
+<style>
+  :root{
+    --ink:#25272A;
+    --muted:#6B7076;
+    --faint:#9AA0A6;
+    --line:#E4E1DA;
+    --line-soft:#EDEAE4;
+    --paper:#FFFDFA;
+    --floor:#FAFAF7;
+    --unread:#E39A2B;
+    --resolved:#8B9096;
+    --danger:#B4342F;
+    --danger-bg:#FBEAEA;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    font-family:-apple-system,"Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+    color:var(--ink);
+    background:#F2F1ED;
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+  }
+
+  header{
+    height:54px;
+    flex:none;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:0 14px;
+    background:#FBFAF7;
+    border-bottom:1px solid var(--line);
+  }
+  .brand{font-size:13.5px;font-weight:500;letter-spacing:.01em}
+  .brand span{color:var(--faint);font-weight:400;margin-left:8px;font-size:12px}
+
+  .sep{width:1px;height:20px;background:var(--line);margin:0 4px}
+
+  button{
+    font:inherit;font-size:12.5px;
+    height:28px;padding:0 10px;
+    border:1px solid var(--line);
+    background:#fff;color:var(--ink);
+    border-radius:7px;cursor:pointer;
+    display:inline-flex;align-items:center;gap:6px;
+    transition:background .12s,border-color .12s,color .12s;
+  }
+  button:hover{background:#F6F5F1;border-color:#D6D2C9}
+  button.on{background:#2C2E31;border-color:#2C2E31;color:#fff}
+  button.on:hover{background:#1F2124}
+  button.ghost{border-color:transparent;background:transparent}
+  button.ghost:hover{background:#F1EFE9}
+
+  .zoom{
+    margin-left:auto;display:flex;align-items:center;gap:8px;
+    font-size:11.5px;color:var(--muted);
+  }
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;
+    width:130px;height:2px;background:#DCD8CF;border-radius:2px;outline:none;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:12px;height:12px;border-radius:50%;
+    background:#fff;border:1px solid #B9B4A9;box-shadow:0 1px 2px rgba(0,0,0,.12);cursor:pointer;
+  }
+
+  main{flex:1;display:flex;min-height:0;overflow:hidden}
+
+  #stage{
+    position:relative;flex:1;min-width:0;overflow:auto;
+    background:var(--floor);
+  }
+
+  #world{
+    position:relative;
+    width:1060px;height:664px;
+    transform-origin:0 0;
+    will-change:transform;
+    transition:transform .18s ease;
+  }
+
+  #grid{
+    position:absolute;inset:0;
+    background-image:radial-gradient(circle,#DEDBD3 1.1px,transparent 1.2px);
+    background-size:24px 24px;
+    opacity:.9;
+  }
+
+  .note{
+    position:absolute;
+    background:var(--paper);
+    border:1px solid #E7E4DC;
+    border-radius:8px;
+    padding:16px 18px 12px;
+    box-shadow:0 1px 2px rgba(16,24,40,.05),0 7px 18px -10px rgba(16,24,40,.22);
+    cursor:default;
+    transition:box-shadow .14s;
+  }
+  .note:hover{box-shadow:0 1px 2px rgba(16,24,40,.05),0 10px 24px -10px rgba(16,24,40,.26)}
+  .note p{margin:0;font-size:15px;line-height:1.55;color:#2B2B28;letter-spacing:.005em}
+  .note .chip{
+    margin-top:10px;display:inline-flex;align-items:center;gap:5px;
+    height:22px;padding:0 9px;border-radius:11px;
+    background:var(--danger-bg);color:var(--danger);
+    font-size:12px;line-height:1;
+  }
+  .note .chip i{
+    width:9px;height:9px;border-radius:50%;
+    background:var(--danger);opacity:.75;display:inline-block;position:relative;
+  }
+  .note .chip i::before,.note .chip i::after{
+    content:"";position:absolute;left:2px;right:2px;top:4px;height:1px;background:#fff;
+  }
+  .note .chip i::before{transform:rotate(45deg)}
+  .note .chip i::after{transform:rotate(-45deg)}
+  .note .corner{
+    position:absolute;top:10px;right:10px;
+    width:24px;height:24px;border-radius:50%;
+    border:1px solid #E2DED5;background:#fff;
+    display:flex;align-items:center;justify-content:center;
+    color:#8E9399;
+  }
+
+  .badge{
+    position:absolute;
+    display:inline-flex;align-items:center;gap:5px;
+    height:24px;padding:0 8px 0 7px;
+    border-radius:12px;
+    background:#fff;
+    border:1px solid #DBD7CE;
+    box-shadow:0 1px 2px rgba(16,24,40,.10);
+    font-size:11.5px;color:#3C4249;
+    cursor:pointer;user-select:none;
+    transform:translate(-50%,-50%);
+    transition:transform .12s,box-shadow .12s,opacity .12s;
+  }
+  .badge:hover{transform:translate(-50%,-50%) scale(1.06);box-shadow:0 3px 10px -2px rgba(16,24,40,.24)}
+  .badge svg{width:12px;height:12px;flex:none}
+  .badge.unread::after{
+    content:"";width:6px;height:6px;border-radius:50%;
+    background:var(--unread);margin-left:-1px;
+  }
+  .badge.resolved{opacity:.5;color:var(--resolved)}
+  .badge.resolved:hover{opacity:.8}
+
+  .cluster{
+    position:absolute;
+    transform:translateY(-50%);
+    display:inline-flex;align-items:center;gap:6px;
+    height:28px;padding:0 11px;border-radius:14px;
+    background:#2C2E31;color:#fff;border:1px solid #2C2E31;
+    font-size:12px;cursor:zoom-in;
+    box-shadow:0 4px 14px -4px rgba(16,24,40,.4),0 0 0 4px rgba(250,250,247,.9);
+  }
+  .cluster b{font-weight:500}
+
+  .thread{
+    position:absolute;z-index:40;
+    width:336px;
+    background:#fff;
+    border:1px solid #E1DDD4;
+    border-radius:12px;
+    box-shadow:0 18px 44px -14px rgba(16,24,40,.34),0 2px 8px rgba(16,24,40,.06);
+    overflow:hidden;
+    animation:pop .14s ease-out;
+  }
+  @keyframes pop{from{opacity:0;transform:translateY(-4px) scale(.99)}to{opacity:1;transform:none}}
+  .thread .head{
+    display:flex;align-items:center;gap:8px;
+    padding:11px 12px 9px;
+    border-bottom:1px solid var(--line-soft);
+  }
+  .thread .head .t{font-size:12.5px;font-weight:500}
+  .thread .head .sub{font-size:11px;color:var(--faint)}
+  .thread .head .acts{margin-left:auto;display:flex;gap:4px}
+  .iconbtn{
+    width:24px;height:24px;padding:0;border-radius:6px;
+    border:1px solid transparent;background:transparent;color:#7C8289;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .iconbtn:hover{background:#F3F1EC;border-color:var(--line);color:var(--ink)}
+
+  .msgs{
+    max-height:264px;overflow:auto;
+    padding:10px 12px 4px;
+  }
+  .msg{display:flex;gap:8px;padding:7px 0}
+  .msg .av{
+    width:22px;height:22px;border-radius:50%;flex:none;
+    display:flex;align-items:center;justify-content:center;
+    font-size:10.5px;color:#fff;background:#9AA0A6;
+  }
+  .msg.agent .av{background:#3F6F5E}
+  .msg .body{min-width:0;flex:1}
+  .msg .who{display:flex;align-items:center;gap:6px;font-size:11.5px;color:#4A4F55}
+  .msg .who time{color:var(--faint);font-size:10.5px}
+  .msg .tag{
+    font-size:9.5px;letter-spacing:.04em;
+    padding:1px 5px;border-radius:4px;
+    background:#EAF0EC;color:#3F6F5E;
+  }
+  .msg p{margin:3px 0 0;font-size:12.5px;line-height:1.55;color:#33373B;word-break:break-word}
+
+  .more{
+    margin:2px 0 8px;font-size:11.5px;color:#5C636A;
+    background:none;border:0;padding:2px 0;height:auto;cursor:pointer;
+  }
+  .more:hover{text-decoration:underline;background:none}
+
+  .composer{
+    display:flex;gap:7px;padding:9px 10px;
+    border-top:1px solid var(--line-soft);
+    background:#FCFBF8;
+  }
+  .composer input{
+    flex:1;height:30px;border:1px solid var(--line);border-radius:7px;
+    padding:0 9px;font:inherit;font-size:12.5px;background:#fff;outline:none;color:var(--ink);
+  }
+  .composer input:focus{border-color:#B9B4A9;box-shadow:0 0 0 3px rgba(44,46,49,.06)}
+
+  .resolvedBar{
+    display:flex;align-items:center;gap:6px;
+    padding:7px 12px;font-size:11.5px;color:var(--resolved);
+    background:#F7F6F2;border-top:1px solid var(--line-soft);
+  }
+  .resolvedBar button{height:22px;font-size:11px;padding:0 8px;margin-left:auto}
+
+  #rail{
+    width:286px;flex:none;background:#FBFAF7;
+    border-left:1px solid var(--line);
+    display:flex;flex-direction:column;min-height:0;
+  }
+  #rail .rhead{padding:13px 14px 10px;border-bottom:1px solid var(--line-soft)}
+  #rail .rhead .row{display:flex;align-items:baseline;gap:8px}
+  #rail .rhead h2{font-size:13px;font-weight:500;margin:0}
+  #rail .rhead .n{font-size:11.5px;color:var(--faint)}
+  #rail .filters{display:flex;gap:6px;margin-top:9px}
+  #rail .filters button{height:24px;font-size:11px;padding:0 8px;border-radius:12px}
+
+  #threadList{flex:1;overflow:auto;padding:6px}
+  .titem{
+    padding:9px 10px;border-radius:8px;cursor:pointer;
+    border:1px solid transparent;
+  }
+  .titem:hover{background:#F3F1EB}
+  .titem.active{background:#EFEDE6;border-color:#E2DED3}
+  .titem .top{display:flex;align-items:center;gap:6px}
+  .titem .who{font-size:11.5px;color:#4A4F55}
+  .titem .dot{width:6px;height:6px;border-radius:50%;background:var(--unread);margin-left:auto;flex:none}
+  .titem.resolved .who{color:var(--faint)}
+  .titem p{
+    margin:4px 0 0;font-size:11.5px;line-height:1.45;color:#54595F;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  }
+  .titem .where{
+    margin-top:5px;font-size:10.5px;color:var(--faint);
+    display:flex;align-items:center;gap:4px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+
+  .legend{
+    position:absolute;left:16px;bottom:16px;z-index:20;
+    background:rgba(255,253,250,.94);
+    border:1px solid var(--line);border-radius:9px;
+    padding:9px 11px;font-size:11px;color:var(--muted);
+    box-shadow:0 2px 10px -4px rgba(16,24,40,.18);
+    line-height:1.75;backdrop-filter:blur(4px);
+    max-width:330px;
+  }
+  .legend b{color:var(--ink);font-weight:500}
+  .legend .k{display:inline-block;width:10px;height:10px;border-radius:3px;vertical-align:-1px;margin-right:5px}
+
+  .tip{
+    position:absolute;z-index:60;max-width:264px;
+    background:#2C2E31;color:#F2F1ED;
+    font-size:11.5px;line-height:1.5;
+    padding:7px 9px;border-radius:8px;
+    box-shadow:0 8px 22px -8px rgba(0,0,0,.5);
+    pointer-events:none;opacity:0;transform:translateY(4px);
+    transition:opacity .1s,transform .1s;
+  }
+  .tip.show{opacity:1;transform:none}
+  .tip .src{color:#B9BEC4;font-size:10.5px;display:block;margin-top:3px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">铺陈 <span>评论层 · 交互原型</span></div>
+  <div class="sep"></div>
+  <button id="tShow" class="on">显示评论</button>
+  <button id="tOnly">只看未解决</button>
+  <button id="tCompare">对比：每条评论一张便签</button>
+  <div class="zoom">
+    <span id="count">评论 13 条 · 占板 0 格</span>
+    <input id="zoom" type="range" min="40" max="100" value="100" title="拖到 60% 以下看徽标聚合成一枚计数胶囊">
+    <span id="zlabel">100%</span>
+  </div>
+</header>
+
+<main>
+  <div id="stage">
+    <div id="world">
+      <div id="grid"></div>
+      <div id="notes"></div>
+      <div id="comments"></div>
+      <div id="pops"></div>
+    </div>
+    <div class="legend" id="legend">
+      <div><span class="k" style="background:#FFFDFA;border:1px solid #E0DCD3"></span><b>便签</b>：板上的内容，占位置、可排版、有类型色。</div>
+      <div><span class="k" style="background:#fff;border:1px solid #C9C4B8;border-radius:50%"></span><b>评论</b>：锚在格子上的对话，折叠成一枚徽标，不占板面。</div>
+    </div>
+    <div class="tip" id="tip"></div>
+  </div>
+
+  <aside id="rail">
+    <div class="rhead">
+      <div class="row"><h2>评论</h2><span class="n" id="railCount">6 条线程 · 3 条未解决</span></div>
+      <div class="filters">
+        <button id="fAll" class="on">全部</button>
+        <button id="fOpen">未解决</button>
+        <button id="fDone">已解决</button>
+      </div>
+    </div>
+    <div id="threadList"></div>
+  </aside>
+</main>
+
+<script>
+const notes = [
+  {id:'n1', x:70,  y:96,  w:274, h:146, text:'把评论做成锚点：讨论跟着格子走，不再为一句回复新开一张卡。', chip:'未完成', corner:true},
+  {id:'n2', x:430, y:74,  w:254, h:126, text:'缩到 60% 以下时，徽标聚成一枚计数胶囊，别撒成一盘星。', chip:'未完成', corner:false},
+  {id:'n3', x:104, y:342, w:306, h:156, text:'线程同一时间只开一个，点下一个自动收起上一个。', chip:'未完成', corner:false},
+  {id:'n4', x:492, y:310, w:248, h:118, text:'已解决的线程退成灰牌，收进抽屉，不删、也不占视野。', chip:'已完成', corner:false},
+  {id:'n5', x:806, y:96, w:206, h:150, text:'同一格上的多条评论，共用一个徽标；点开是叠起来的线程。', chip:'未完成', corner:false},
+  {id:'n6', x:806, y:330, w:206, h:132, text:'评论正文不进 .canvas：旁挂一份文件，板子格式对别的工具仍是干净的。', chip:'已完成', corner:false}
+];
+
+let threads = [
+  {id:'t1', note:'n1', resolved:false, unread:true, msgs:[
+    {who:'他', me:false, agent:false, time:'19:41', text:'每次想说一句就得新建一张卡，评论区一多板子就挤满了。'},
+    {who:'Claude', me:false, agent:true, time:'19:42', text:'收到。评论不该是板上的对象，它是挂在格子边上的对话：折叠成一枚徽标，展开是一列消息。'},
+    {who:'他', me:false, agent:false, time:'19:43', text:'那它跟便签怎么一眼分开？'}
+  ]},
+  {id:'t2', note:'n1', resolved:true, unread:false, msgs:[
+    {who:'Claude', me:false, agent:true, time:'18:02', text:'徽标用白底胶囊＋对话气泡，便签是纸面＋类型色；不共用同一套壳。'},
+    {who:'他', me:false, agent:false, time:'18:05', text:'可以，这条结了。'}
+  ]},
+  {id:'t3', note:'n2', resolved:false, unread:false, msgs:[
+    {who:'他', me:false, agent:false, time:'19:20', text:'缩得小的时候一堆小圆点更烦，能不能合成一个数？'}
+  ]},
+  {id:'t4', note:'n3', resolved:false, unread:true, msgs:[
+    {who:'他', me:false, agent:false, time:'19:02', text:'两个线程同时开着，遮挡比便签还严重。'},
+    {who:'Claude', me:false, agent:true, time:'19:04', text:'改成同一时间只有一个线程浮层；列表在右栏，点哪条开哪条。'},
+    {who:'他', me:false, agent:false, time:'19:05', text:'长一点的讨论呢？'},
+    {who:'Claude', me:false, agent:true, time:'19:06', text:'超过两条先折起来，点「展开其余」再看，浮层高度不跳。'}
+  ]},
+  {id:'t5', note:'n4', resolved:true, unread:false, msgs:[
+    {who:'他', me:false, agent:false, time:'17:40', text:'解决完的就别再飘在板上了。'},
+    {who:'Claude', me:false, agent:true, time:'17:41', text:'钉住：徽标变灰、默认不显示，抽屉里留着可回看。'}
+  ]},
+  {id:'t6', note:'n4', resolved:false, unread:false, msgs:[
+    {who:'他', me:false, agent:false, time:'19:30', text:'这条还没完：已解决的能不能一键回到板面？'}
+  ]},
+  {id:'t7', note:'n5', resolved:false, unread:false, msgs:[
+    {who:'他', me:false, agent:false, time:'19:12', text:'这一格下面已经有三条讨论了，难道要长出三张卡？'},
+    {who:'Claude', me:false, agent:true, time:'19:13', text:'不用。一格一枚徽标，点开是三条线程叠在一起；板上永远只多一枚胶囊。'}
+  ]}
+];
+
+const ui = {show:true, only:false, compare:false, zoom:1, filter:'all', open:null, expanded:{}};
+
+const world = document.getElementById('world');
+const notesEl = document.getElementById('notes');
+const commentsEl = document.getElementById('comments');
+const popsEl = document.getElementById('pops');
+const tipEl = document.getElementById('tip');
+
+const noteById = id => notes.find(n => n.id === id);
+const threadsOf = id => threads.filter(t => t.note === id);
+const openCount = id => threadsOf(id).filter(t => !t.resolved).length;
+const msgCount = () => threads.reduce((n,t) => n + t.msgs.length, 0);
+
+function esc(s){
+  return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+function renderNotes(){
+  notesEl.innerHTML = notes.map(n => `
+    <div class="note" data-note="${n.id}" style="left:${n.x}px;top:${n.y}px;width:${n.w}px;min-height:${n.h}px">
+      ${n.corner ? `<div class="corner" title="弹出到桌面（另见原型）">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3">
+          <rect x="2.5" y="4.5" width="8" height="9" rx="1.2"/>
+          <path d="M6 4.5V2.6h7.4v8H11"/>
+        </svg></div>` : ''}
+      <p>${esc(n.text)}</p>
+      <div class="chip"><i></i>${esc(n.chip)}</div>
+    </div>`).join('');
+}
+
+function renderBadges(){
+  if(!ui.show){ commentsEl.innerHTML = ''; return; }
+
+  if(ui.compare){
+    commentsEl.innerHTML = compareCards();
+    return;
+  }
+
+  if(ui.zoom <= 0.62){
+    commentsEl.innerHTML = clusterPills();
+    return;
+  }
+
+  let html = '';
+  for(const n of notes){
+    const all = threadsOf(n.id);
+    if(!all.length) continue;
+
+    const shown = ui.filter === 'open' ? all.filter(t => !t.resolved)
+               : ui.filter === 'done' ? all.filter(t => t.resolved)
+               : all;
+    if(ui.only && !shown.some(t => !t.resolved)) continue;
+    if(!shown.length) continue;
+
+    const unresolved = shown.filter(t => !t.resolved).length;
+    const unread = shown.some(t => t.unread);
+    const resolved = unresolved === 0;
+    const messages = shown.reduce((n, t) => n + t.msgs.length, 0);
+
+    html += `<div class="badge${unread && !resolved ? ' unread' : ''}${resolved ? ' resolved' : ''}"
+      data-badge="${n.id}" data-threads="${shown.length}" style="left:${n.x + n.w - 10}px;top:${n.y - 12}px">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+        <path d="M2.6 3.4h10.8v7.2H7.4L4.2 13V10.6H2.6z" stroke-linejoin="round"/>
+      </svg>${messages}
+    </div>`;
+  }
+  commentsEl.innerHTML = html;
+}
+
+function compareCards(){
+  let html = `<div style="position:absolute;left:70px;top:20px;display:flex;align-items:center;gap:8px;
+      font-size:11.5px;color:#9B3A34;background:#FBEAEA;border:1px solid #F0CFCF;
+      padding:5px 9px;border-radius:7px">
+      <b style="font-weight:500">旧做法</b> ${msgCount()} 条评论 = ${msgCount()} 张便签，板面被回复占满
+    </div>`;
+
+  let ordinal = 0;
+  for(const t of threads){
+    const n = noteById(t.note);
+    t.msgs.forEach((m, i) => {
+      const x = n.x + n.w + 18 + (ordinal % 3) * 16;
+      const y = n.y + 26 + (ordinal % 4) * 74;
+      html += `<div style="position:absolute;left:${x}px;top:${y}px;width:190px;
+        background:#FFFDFA;border:1px dashed #E3B4B0;border-radius:7px;padding:8px 10px;
+        box-shadow:0 4px 10px -6px rgba(16,24,40,.25);font-size:11.5px;line-height:1.45;color:#3B3F44">
+        <div style="font-size:10px;color:#9AA0A6;margin-bottom:3px">${esc(m.who)} · ${esc(m.time)}</div>
+        ${esc(m.text.slice(0, 34))}${m.text.length > 34 ? '…' : ''}
+      </div>`;
+      ordinal++;
+    });
+  }
+  return html;
+}
+
+function clusterPills(){
+  const anchors = [];
+  for(const n of notes){
+    const list = threadsOf(n.id).filter(t => ui.filter === 'open' ? !t.resolved : ui.filter === 'done' ? t.resolved : true);
+    if(!list.length) continue;
+    if(ui.only && !list.some(t => !t.resolved)) continue;
+    anchors.push({x:n.x + n.w - 10, y:n.y - 12, list, note:n.id});
+  }
+
+  const used = new Array(anchors.length).fill(false);
+  const clusters = [];
+  for(let i = 0; i < anchors.length; i++){
+    if(used[i]) continue;
+    const group = [anchors[i]];
+    used[i] = true;
+    for(let j = i + 1; j < anchors.length; j++){
+      if(used[j]) continue;
+      if(Math.hypot(anchors[j].x - anchors[i].x, anchors[j].y - anchors[i].y) < 720){
+        group.push(anchors[j]); used[j] = true;
+      }
+    }
+    clusters.push(group);
+  }
+
+  return clusters.map(group => {
+    // 缩到这一档就不该再有"一堆小点"：一枚胶囊挂在整簇的最上沿，数给总数。
+    const left = Math.min(...group.map(a => a.x));
+    const top = Math.min(...group.map(a => a.y)) - 30;
+    const total = group.reduce((s,a) => s + a.list.reduce((n,t) => n + t.msgs.length, 0), 0);
+    const unresolved = group.reduce((s,a) => s + a.list.filter(t => !t.resolved).length, 0);
+    const first = group.flatMap(a => a.list).find(t => !t.resolved) || group[0].list[0];
+    return `<div class="cluster" data-cluster="${first.id}" style="left:${left}px;top:${top}px">
+      <b>${total}</b> 条 · ${unresolved} 未解决
+    </div>`;
+  }).join('');
+}
+
+function renderRail(){
+  const list = threads.filter(t =>
+    ui.filter === 'open' ? !t.resolved : ui.filter === 'done' ? t.resolved : true);
+
+  document.getElementById('threadList').innerHTML = list.map(t => {
+    const n = noteById(t.note);
+    const last = t.msgs[t.msgs.length - 1];
+    return `<div class="titem${t.resolved ? ' resolved' : ''}${ui.open === t.id ? ' active' : ''}" data-thread="${t.id}">
+      <div class="top">
+        <span class="who">${esc(t.msgs[0].who)}${t.resolved ? ' · 已解决' : ''}</span>
+        ${t.unread && !t.resolved ? '<span class="dot"></span>' : ''}
+      </div>
+      <p>${esc(last.text)}</p>
+      <div class="where">
+        <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+          <rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/>
+        </svg>
+        ${esc(n.text.slice(0, 16))}…
+      </div>
+    </div>`;
+  }).join('') || `<div style="padding:24px 14px;font-size:11.5px;color:#9AA0A6">这一档没有线程。</div>`;
+
+  const openN = threads.filter(t => !t.resolved).length;
+  document.getElementById('railCount').textContent = `${threads.length} 条线程 · ${openN} 条未解决`;
+  document.getElementById('count').textContent =
+    `评论 ${msgCount()} 条 · 占板 ${ui.compare ? msgCount() : 0} 格`;
+}
+
+function placePopover(t, anchorEl){
+  // 定位：优先贴在徽标右侧；右边放不下就翻到左侧；再夹进世界矩形里。
+  const threadEl = document.createElement('div');
+  threadEl.className = 'thread';
+  threadEl.dataset.thread = t.id;
+
+  const note = noteById(t.note);
+  const anchorX = note.x + note.w - 10;
+  const anchorY = note.y - 12;
+
+  let left = anchorX + 18;
+  if(left + 336 > 1040) left = anchorX - 336 - 18;
+  left = Math.max(8, Math.min(left, 1040 - 344));
+  let top = Math.max(8, Math.min(anchorY - 10, 664 - 120));
+
+  threadEl.style.left = left + 'px';
+  threadEl.style.top = top + 'px';
+
+  const shown = ui.expanded[t.id] ? t.msgs : t.msgs.slice(0, 2);
+  const rest = t.msgs.length - shown.length;
+
+  threadEl.innerHTML = `
+    <div class="head">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#4A4F55" stroke-width="1.4">
+        <path d="M2.6 3.4h10.8v7.2H7.4L4.2 13V10.6H2.6z" stroke-linejoin="round"/>
+      </svg>
+      <span class="t">评论</span>
+      <span class="sub">${t.msgs.length} 条${t.resolved ? ' · 已解决' : ''}</span>
+      <div class="acts">
+        <button class="iconbtn" data-act="resolve" title="${t.resolved ? '重新打开' : '标为已解决'}">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+            ${t.resolved
+              ? '<path d="M3 8a5 5 0 1 0 5-5"/><path d="M8 1v3.2"/><path d="M6.4 2.6 8 4.2l1.6-1.6"/>'
+              : '<path d="M3 8.6 6.2 12 13 4.6"/>'}
+          </svg>
+        </button>
+        <button class="iconbtn" data-act="close" title="收起">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4 4l8 8M12 4l-8 8"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="msgs">
+      ${shown.map(m => `
+        <div class="msg${m.agent ? ' agent' : ''}">
+          <div class="av">${esc(m.who.slice(0,1))}</div>
+          <div class="body">
+            <div class="who">${esc(m.who)}<time>${esc(m.time)}</time>${m.agent ? '<span class="tag">agent</span>' : ''}</div>
+            <p>${esc(m.text)}</p>
+          </div>
+        </div>`).join('')}
+      ${rest > 0 ? `<button class="more" data-act="more">展开其余 ${rest} 条</button>` : ''}
+    </div>
+    ${t.resolved ? `<div class="resolvedBar">
+        <span>已解决 · 徽标已退成灰牌</span>
+        <button data-act="resolve">重新打开</button>
+      </div>` : ''}
+    <div class="composer">
+      <input placeholder="${t.resolved ? '已解决，回复会重新打开' : '回复…（回车发送）'}" data-input="${t.id}">
+      <button data-act="send">发送</button>
+    </div>`;
+
+  return threadEl;
+}
+
+function openThread(id){
+  ui.open = id;
+  const t = threads.find(x => x.id === id);
+  if(!t) return;
+  t.unread = false;
+
+  popsEl.innerHTML = '';
+  const el = placePopover(t, null);
+  popsEl.appendChild(el);
+
+  const input = el.querySelector('input');
+  if(input) setTimeout(() => input.focus(), 30);
+  renderRail();
+  renderBadges();
+}
+
+function closeThread(){
+  ui.open = null;
+  popsEl.innerHTML = '';
+  renderRail();
+}
+
+function send(id){
+  const t = threads.find(x => x.id === id);
+  const box = popsEl.querySelector(`input[data-input="${id}"]`);
+  const text = (box.value || '').trim();
+  if(!text) return;
+
+  t.msgs.push({who:'他', me:true, agent:false, time:nowTime(), text});
+  t.resolved = false;
+  t.unread = false;
+  box.value = '';
+
+  // 发送后保持打开：重建浮层，滚动到底
+  openThread(id);
+  const sc = popsEl.querySelector('.msgs');
+  if(sc) sc.scrollTop = sc.scrollHeight;
+  renderBadges();
+}
+
+function nowTime(){
+  const d = new Date();
+  return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+
+function refresh(){
+  world.style.transform = `scale(${ui.zoom})`;
+  document.getElementById('zlabel').textContent = Math.round(ui.zoom * 100) + '%';
+  renderBadges();
+  renderRail();
+  if(ui.open && !(ui.show && !ui.compare && ui.zoom > 0.62)) closeThread();
+}
+
+/* ---- events ---- */
+
+document.getElementById('tShow').onclick = e => {
+  ui.show = !ui.show;
+  e.currentTarget.classList.toggle('on', ui.show);
+  refresh();
+};
+
+document.getElementById('tOnly').onclick = e => {
+  ui.only = !ui.only;
+  e.currentTarget.classList.toggle('on', ui.only);
+  refresh();
+};
+
+document.getElementById('tCompare').onclick = e => {
+  ui.compare = !ui.compare;
+  e.currentTarget.classList.toggle('on', ui.compare);
+  e.currentTarget.textContent = ui.compare ? '回到评论层' : '对比：每条评论一张便签';
+  closeThread();
+  refresh();
+};
+
+document.getElementById('zoom').oninput = e => {
+  ui.zoom = Number(e.target.value) / 100;
+  refresh();
+};
+
+document.getElementById('fAll').onclick = () => setFilter('all');
+document.getElementById('fOpen').onclick = () => setFilter('open');
+document.getElementById('fDone').onclick = () => setFilter('done');
+
+function setFilter(f){
+  ui.filter = f;
+  for(const [id, key] of [['fAll','all'],['fOpen','open'],['fDone','done']]){
+    document.getElementById(id).classList.toggle('on', key === f);
+  }
+  refresh();
+}
+
+commentsEl.addEventListener('click', e => {
+  const badge = e.target.closest('[data-badge]');
+  if(badge){ openThread(threadsOf(badge.dataset.badge)[0].id); return; }
+
+  const cluster = e.target.closest('[data-cluster]');
+  if(cluster){
+    ui.zoom = 1;
+    document.getElementById('zoom').value = 100;
+    refresh();
+    setTimeout(() => openThread(cluster.dataset.cluster), 190);
+  }
+});
+
+commentsEl.addEventListener('mouseover', e => {
+  const badge = e.target.closest('[data-badge]');
+  if(!badge) return;
+  const list = threadsOf(badge.dataset.badge).filter(t => ui.filter === 'open' ? !t.resolved : ui.filter === 'done' ? t.resolved : true);
+  if(!list.length) return;
+  const t = list.find(x => !x.resolved) || list[0];
+  const last = t.msgs[t.msgs.length - 1];
+
+  tipEl.innerHTML = `${esc(last.text.slice(0, 60))}${last.text.length > 60 ? '…' : ''}
+    <span class="src">${esc(noteById(t.note).text.slice(0, 18))}… · ${list.length} 条线程</span>`;
+  tipEl.classList.add('show');
+
+  const r = badge.getBoundingClientRect();
+  const s = document.getElementById('stage').getBoundingClientRect();
+  tipEl.style.left = Math.max(8, Math.min(r.left - s.left, s.width - 280)) + 'px';
+  tipEl.style.top = (r.bottom - s.top + 8) + 'px';
+});
+
+commentsEl.addEventListener('mouseout', e => {
+  if(e.target.closest('[data-badge]')) tipEl.classList.remove('show');
+});
+
+popsEl.addEventListener('click', e => {
+  const btn = e.target.closest('[data-act]');
+  if(!btn) return;
+  const host = btn.closest('.thread');
+  const id = host.dataset.thread;
+  const t = threads.find(x => x.id === id);
+
+  if(btn.dataset.act === 'close'){ closeThread(); return; }
+  if(btn.dataset.act === 'more'){ ui.expanded[id] = true; openThread(id); return; }
+  if(btn.dataset.act === 'resolve'){
+    t.resolved = !t.resolved;
+    if(t.resolved) t.unread = false;
+    openThread(id);
+    renderBadges();
+    return;
+  }
+  if(btn.dataset.act === 'send'){ send(id); }
+});
+
+popsEl.addEventListener('keydown', e => {
+  if(e.key === 'Enter' && e.target.matches('input')){
+    const host = e.target.closest('.thread');
+    send(host.dataset.thread);
+  }
+  if(e.key === 'Escape') closeThread();
+});
+
+document.getElementById('threadList').addEventListener('click', e => {
+  const item = e.target.closest('[data-thread]');
+  if(!item) return;
+  if(ui.compare){ ui.compare = false; document.getElementById('tCompare').classList.remove('on');
+    document.getElementById('tCompare').textContent = '对比：每条评论一张便签'; }
+  ui.zoom = 1; document.getElementById('zoom').value = 100;
+  refresh();
+  setTimeout(() => openThread(item.dataset.thread), 60);
+});
+
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape') closeThread();
+});
+
+renderNotes();
+
+/* 用地址栏参数直接进某一态，方便截图核对：#compare / #zoom=55 / #only */
+const hash = new URLSearchParams(location.hash.slice(1));
+if(hash.has('compare')){
+  ui.compare = true;
+  const b = document.getElementById('tCompare');
+  b.classList.add('on'); b.textContent = '回到评论层';
+}
+if(hash.get('zoom')){
+  ui.zoom = Math.max(0.4, Math.min(1, Number(hash.get('zoom')) / 100));
+  document.getElementById('zoom').value = Math.round(ui.zoom * 100);
+}
+if(hash.has('only')){
+  ui.only = true;
+  document.getElementById('tOnly').classList.add('on');
+}
+
+refresh();
+
+if(hash.get('open')){
+  setTimeout(() => openThread(hash.get('open')), 80);
+}
+</script>
+</body>
+</html>

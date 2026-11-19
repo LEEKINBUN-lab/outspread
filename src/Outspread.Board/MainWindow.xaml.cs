@@ -590,6 +590,10 @@ public sealed partial class MainWindow : Window
             _gateByCard = LoadGateChips(_boardPath);
             Diagnostics.Write($"gate projection at load: {_gateByCard.Count} 卡有账 ← {CanvasStore.GatePath(_boardPath)}");
 
+            // 评论与相机、闸门账同一类旁挂状态：换板就得整份换掉，否则上一块的回复会挂在
+            // 这一块的格子上（id 前缀一样、撞上了就是别人的讨论）。
+            LoadComments();
+
             NoteStyling.IsDark = Root.ActualTheme == ElementTheme.Dark;
             StyleTabStripChrome();
 
@@ -1379,6 +1383,9 @@ public sealed partial class MainWindow : Window
 
         var miniDoneAt = Stopwatch.GetTimestamp();
 
+        // 评论层：徽标与浮层按文档现值重摆。签名没变就什么都不做，所以平移提交那一拍不重铺。
+        RefreshCommentLayer();
+
         if (timing)
         {
             NodeVisual.Timing = false;
@@ -1516,6 +1523,10 @@ public sealed partial class MainWindow : Window
         CloseChordPage();
         ClearGroupHint();
         CloseColorPopover();
+
+        // 评论浮层与那几个面板同一档：手回到板子上，它就收起（那一格留在原处，徽标也在）。
+        // 徽标与浮层自己把按下吃掉了，所以点它们身上到不了这里。
+        CloseCommentThread();
 
         // 聚焦里按到空白＝看完了：退回正常布局（这一发不再去起框选/平移）。
         if (_lensKind is not null)
@@ -2917,6 +2928,16 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void ProjectSelection()
     {
+        ProjectSelectionChrome();
+
+        // 评论层那枚"写第一条"的占位徽标只在选中一格时出现，所以选中的每一发投影都要顺着
+        // 问一遍评论层。它按签名短路，选中的格没变就什么都不做——这一发是零成本。
+        // 少了它，选中一格以后什么都不动，占位徽标要等下一次平移缩放才肯出来。
+        RefreshCommentLayer();
+    }
+
+    private void ProjectSelectionChrome()
+    {
         // 选择是单一的：只要有格子在选中，线就必须让位——不管它是从哪条路被选进来的。
         if (_selection.Count > 0)
         {
@@ -3216,6 +3237,10 @@ public sealed partial class MainWindow : Window
         _gateWatcher?.Dispose();
         _gateWatcher = new FileWatcher(gatePath);
         _gateWatcher.Changed += () => DispatcherQueue.TryEnqueue(ApplyGateChange);
+
+        // 评论也是旁挂文件，而且现在 agent 会往里写（board_comment）——不盯它，agent 的话
+        // 要等重开板子才看得见。与我们自己 SaveComments 的那一发靠签名比对挡掉，不会自激。
+        StartWatchingComments();
 
         Diagnostics.Write($"watching {_boardPath} for outside writes");
     }
@@ -11374,8 +11399,40 @@ public sealed partial class MainWindow : Window
 
                         break;
 
+                    case "comments":
+                    case "comments-new":
+                    case "comments-delete":
+                        // 浮层只在"点开了一条线程"时才存在，所以取证要真的点开：拿第一格有未解决
+                        // 线程的，没有就退回第一格有评论的；comments-new 反过来，专挑一条评论都没有
+                        // 的那格——那是"写第一条"那一屏。板上一条都没有就明说，不拍空图充数。
+                        if (OpenFirstCommentThreadForShot(
+                                blank: panelArg == "comments-new",
+                                askDelete: panelArg == "comments-delete") is not { } commentNode)
+                        {
+                            return new ShotReply(false, null,
+                                Error: panelArg == "comments-new"
+                                    ? "板上每一格都有评论了，没有「写第一条」这一屏可拍"
+                                    : "板上没有一条评论，评论浮层无从可开");
+                        }
+
+                        Diagnostics.Write($"shot {panelArg}: 开的是 {commentNode} 的线程");
+                        break;
+
+                    case "float":
+                        // 浮牌是一个独立的顶层窗，板面那档拍不到它；这一档的意义是"把它推到屏幕上"，
+                        // 让取证的人（或另一个窗口的截图）看见那张纸和它外面那圈影。
+                        PopOutSelectedNotes();
+
+                        if (_floaters.Count == 0)
+                        {
+                            return new ShotReply(false, null, Error: "选中的格子里没有能浮出的文字便签（先 --select 指一格）");
+                        }
+
+                        Diagnostics.Write($"shot {panelArg}: 浮出 {_floaters.Count} 张");
+                        break;
+
                     default:
-                        return new ShotReply(false, null, Error: $"不懂的 panel \"{panelArg}\"，可给 filter / cheat / banner / search / restore / rename / fold / unfold / pair / pull / shrink / scrolled / lens");
+                        return new ShotReply(false, null, Error: $"不懂的 panel \"{panelArg}\"，可给 filter / cheat / banner / search / restore / rename / fold / unfold / pair / pull / shrink / scrolled / lens / comments / comments-new / comments-delete / float");
                 }
 
                 panelsOpened = true;
@@ -11772,6 +11829,13 @@ public sealed partial class MainWindow : Window
         switch (e.Key)
         {
             case Windows.System.VirtualKey.Escape:
+                // 评论浮层是最上面那一层：Esc 先收它，再轮到聚焦、拉线、面板与选中。
+                if (CloseCommentThread())
+                {
+                    e.Handled = true;
+                    break;
+                }
+
                 // 聚焦算一层：正在看那几格时，Esc 先把镜头退回正常布局，再轮到下面的面板与选中。
                 if (_lensKind is not null && _editingId is null)
                 {

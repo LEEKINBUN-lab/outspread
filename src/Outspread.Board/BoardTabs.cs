@@ -2765,9 +2765,21 @@ public sealed partial class MainWindow
             File.Move(oldPath, newPath);
         }
 
-        var oldSidecar = CanvasStore.SidecarPath(oldPath);
-        var newSidecar = CanvasStore.SidecarPath(newPath);
+        MoveSidecar(
+            CanvasStore.SidecarPath(oldPath),
+            CanvasStore.SidecarPath(newPath),
+            "camera");
 
+        // 评论是旁挂的对话账：不跟着搬，改名后它会留在一个没人再打开的文件名下。
+        MoveSidecar(
+            CanvasStore.CommentsPath(oldPath),
+            CanvasStore.CommentsPath(newPath),
+            "comments");
+    }
+
+    /// <summary>搬一份旁挂文件。只改大小写的改名要走临时名；搬不动只记一行，不回滚已成的改名。</summary>
+    private static void MoveSidecar(string oldSidecar, string newSidecar, string label)
+    {
         if (!File.Exists(oldSidecar))
         {
             return;
@@ -2790,8 +2802,8 @@ public sealed partial class MainWindow
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // 相机不是板子本体：它搬不过去只丢这一块板的视野，不能让一个已经成功的改名回滚。
-            Diagnostics.Write($"rename moved the board but not its camera sidecar: {ex.Message}");
+            // 旁挂不是板子本体：它搬不过去只丢那一样东西，不能让一个已经成功的改名回滚。
+            Diagnostics.Write($"rename moved the board but not its {label} sidecar: {ex.Message}");
         }
     }
 

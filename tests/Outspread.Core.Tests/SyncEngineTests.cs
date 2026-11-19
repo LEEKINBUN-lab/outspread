@@ -1057,4 +1057,194 @@ public class SyncEngineTests
             SynchronizationContext.SetSynchronizationContext(previous);
         }
     }
+
+    // ---------------------------------------------------------------------
+    // 评论那一通道：独立的文件、并集合并、未读只留本机
+    // ---------------------------------------------------------------------
+
+    private const string CommentsPath = "boards/scratch.comments.json";
+
+    private static string CommentsFile(Scratch scratch) => CanvasStore.CommentsPath(scratch.BoardPath);
+
+    private static void WriteComments(Scratch scratch, params (string Id, string Text)[] threads)
+    {
+        var comments = new BoardComments();
+
+        foreach (var (id, text) in threads)
+        {
+            comments.AddThread("uone", "他", text, agent: false, threadId: id);
+        }
+
+        comments.Save(CommentsFile(scratch));
+    }
+
+    [Fact]
+    public async Task Comments_ride_along_with_the_first_round()
+    {
+        using var scratch = new Scratch("sync-comments-first");
+        WriteBoard(scratch, Board(("uone", "one")));
+        WriteComments(scratch, ("c1", "这条要跨端"));
+
+        var far = new FakeRemote();
+        var (engine, _, _) = Build(scratch, far);
+
+        await engine.SynchronizeAsync();
+
+        var text = far.Text(CommentsPath);
+
+        Assert.NotNull(text);
+        Assert.Contains("这条要跨端", text);
+
+        var published = BoardComments.Parse(text!);
+
+        Assert.Null(published.Problem);
+        Assert.Single(published.Threads);
+
+        // 未读是本机视图：发出去的那份不许带它。
+        Assert.DoesNotContain("unread", text);
+    }
+
+    [Fact]
+    public async Task Both_sides_appending_land_in_a_union_not_a_last_writer_wins()
+    {
+        using var left = new Scratch("sync-comments-left");
+        using var right = new Scratch("sync-comments-right");
+
+        WriteBoard(left, Board(("uone", "one")));
+        WriteBoard(right, Board(("uone", "one")));
+
+        var far = new FakeRemote();
+        var (leftEngine, _, _) = Build(left, far);
+        var (rightEngine, _, _) = Build(right, far);
+
+        WriteComments(left, ("cl", "左边这句"));
+        await leftEngine.SynchronizeAsync();
+
+        WriteComments(right, ("cr", "右边那句"));
+        await rightEngine.SynchronizeAsync();
+
+        var afterRight = BoardComments.Load(CommentsFile(right));
+        Assert.Equal(2, afterRight.Threads.Count);
+
+        // 左边再补一句：它要能看见右边那条，并且把新的一句推上去。
+        var extra = BoardComments.Load(CommentsFile(left));
+        extra.AddThread("uone", "他", "左边第二句", agent: false, threadId: "cl2");
+        extra.Save(CommentsFile(left));
+
+        await leftEngine.SynchronizeAsync();
+
+        var published = BoardComments.Parse(far.Text(CommentsPath)!);
+
+        Assert.Equal(3, published.Threads.Count);
+        Assert.Contains(published.Threads, thread => thread.Id == "cr");
+    }
+
+    [Fact]
+    public async Task Idle_rounds_do_not_read_or_write_the_comments_file()
+    {
+        using var scratch = new Scratch("sync-comments-idle");
+        WriteBoard(scratch, Board(("uone", "one")));
+        WriteComments(scratch, ("c1", "一条"));
+
+        var far = new FakeRemote();
+        var (engine, _, _) = Build(scratch, far);
+
+        await engine.SynchronizeAsync();
+
+        far.ResetCounters();
+
+        var report = await engine.SynchronizeAsync();
+
+        Assert.Equal(SyncOutcome.NothingToDo, report.Outcome);
+        Assert.Null(report.Comments);
+        Assert.Equal(1, far.TreeCalls);
+        Assert.Equal(0, far.ReadCalls);
+        Assert.Equal(0, far.WriteCalls);
+    }
+
+    [Fact]
+    public async Task A_comment_only_change_is_reported_as_its_own_push()
+    {
+        using var scratch = new Scratch("sync-comments-only");
+        WriteBoard(scratch, Board(("uone", "one")));
+
+        var far = new FakeRemote();
+        var (engine, _, _) = Build(scratch, far);
+
+        await engine.SynchronizeAsync();
+
+        var boardBefore = far.Text(DocPath);
+
+        WriteComments(scratch, ("c1", "板没动，只有评论"));
+
+        var report = await engine.SynchronizeAsync();
+
+        Assert.Equal(SyncOutcome.Pushed, report.Outcome);
+        Assert.Equal("评论已同步", report.Detail);
+        Assert.NotNull(report.Comments);
+
+        // 板那条通道的字节一个没动：评论走自己的文件。
+        Assert.Equal(boardBefore, far.Text(DocPath));
+        Assert.Contains("板没动", far.Text(CommentsPath)!);
+    }
+
+    [Fact]
+    public async Task A_deleted_thread_does_not_walk_back_from_the_other_device()
+    {
+        using var left = new Scratch("sync-comments-del-left");
+        using var right = new Scratch("sync-comments-del-right");
+
+        WriteBoard(left, Board(("uone", "one")));
+        WriteBoard(right, Board(("uone", "one")));
+
+        var far = new FakeRemote();
+        var (leftEngine, _, _) = Build(left, far);
+        var (rightEngine, _, _) = Build(right, far);
+
+        WriteComments(left, ("c1", "留下"), ("c2", "删掉"));
+        await leftEngine.SynchronizeAsync();
+        await rightEngine.SynchronizeAsync();
+
+        Assert.Equal(2, BoardComments.Load(CommentsFile(right)).Threads.Count);
+
+        var onLeft = BoardComments.Load(CommentsFile(left));
+        onLeft.RemoveThread("c2");
+        onLeft.Save(CommentsFile(left));
+
+        await leftEngine.SynchronizeAsync();
+        await rightEngine.SynchronizeAsync();
+
+        Assert.Single(BoardComments.Load(CommentsFile(right)).Threads);
+        Assert.Equal("c1", BoardComments.Load(CommentsFile(right)).Threads[0].Id);
+    }
+
+    [Fact]
+    public async Task Pulled_threads_arrive_unread_but_reading_them_stays_local()
+    {
+        using var left = new Scratch("sync-comments-unread-left");
+        using var right = new Scratch("sync-comments-unread-right");
+
+        WriteBoard(left, Board(("uone", "one")));
+        WriteBoard(right, Board(("uone", "one")));
+
+        var far = new FakeRemote();
+        var (leftEngine, _, _) = Build(left, far);
+        var (rightEngine, _, _) = Build(right, far);
+
+        WriteComments(left, ("c1", "远端来的"));
+        await leftEngine.SynchronizeAsync();
+        await rightEngine.SynchronizeAsync();
+
+        var onRight = BoardComments.Load(CommentsFile(right));
+
+        Assert.True(onRight.Threads[0].Unread);
+
+        // 打开＝已读；这一发只改本机文件，不产生要上传的内容。
+        onRight.MarkRead("c1");
+        onRight.Save(CommentsFile(right));
+        await rightEngine.SynchronizeAsync();
+
+        Assert.DoesNotContain("unread", far.Text(CommentsPath)!);
+        Assert.False(BoardComments.Load(CommentsFile(right)).Threads[0].Unread);
+    }
 }

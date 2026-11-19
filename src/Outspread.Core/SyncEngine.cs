@@ -74,7 +74,10 @@ public sealed record SyncReport(
     AssetReport? Assets = null,
 
     /** 只在 <see cref="SyncOutcome.FollowedRename"/> 那一格有值：改名标记指着的新板名。 */
-    string? RenameTo = null)
+    string? RenameTo = null,
+
+    /** 评论那条通道这一轮说了什么（同步了／没同步＋原因）。板没有变化时它可以是唯一的变化。 */
+    string? Comments = null)
 {
     /// <summary>
     /// The one line a status bar shows. Readings, not adjectives: "synced" is not a
@@ -271,7 +274,23 @@ public sealed class SyncEngine
             // request: the candidates are checked against the tree already in hand.
             await ReapAsync(localDoc, state.PendingDeletions, tree, idleAssets, state, cancel).ConfigureAwait(false);
 
-            return new SyncReport(SyncOutcome.NothingToDo, "neither side moved", state.Rev, 0, 0, [], null, idleAssets);
+            // 板没动不代表评论没动：评论区有自己的令牌与内容指纹，空转那一发不读任何文件。
+            var idleComments = await SyncCommentsAsync(state, tree, cancel).ConfigureAwait(false);
+
+            return idleComments.Moved
+                ? new SyncReport(
+                    idleComments.Pushed ? SyncOutcome.Pushed : SyncOutcome.Pulled,
+                    "评论已同步",
+                    state.Rev,
+                    0,
+                    0,
+                    [],
+                    null,
+                    idleAssets,
+                    Comments: idleComments.Comments)
+                : new SyncReport(
+                    SyncOutcome.NothingToDo, "neither side moved", state.Rev, 0, 0, [], null, idleAssets,
+                    Comments: idleComments.Comments);
         }
 
         var ancestor = _ledger.ReadBase(state);
@@ -392,8 +411,190 @@ public sealed class SyncEngine
         // Reported at the one place every non-idle path leaves through, rather than inside the
         // two branches: a round that carried pictures and then refused to publish the board
         // still has to say which pictures it moved.
-        return assets.DidAnything ? round with { Assets = assets } : round;
+        var result = assets.DidAnything ? round with { Assets = assets } : round;
+
+        // 评论走自己的文件与自己的一套合并规则；只有远端这一轮还是"讲道理"的那几档才碰它。
+        // 远端读不懂或一直在变的时候，先把板弄稳，评论留到下一轮。
+        if (result.Outcome is SyncOutcome.Pushed or SyncOutcome.Pulled or SyncOutcome.DiskMovedUnderneath)
+        {
+            var comments = await SyncCommentsAsync(state, tree, cancel).ConfigureAwait(false);
+
+            if (comments.Comments is not null)
+            {
+                result = result with { Comments = comments.Comments };
+            }
+        }
+
+        return result;
     }
+
+    /// <summary>
+    /// 评论那一轮：本地与远端按消息号取并集，再各写一边。
+    /// </summary>
+    /// <remarks>
+    /// 评论是追加日志，合并只需要并集＋墓碑，不需要 `.canvas` 那样的三方祖先——并集幂等、可交换，
+    /// 顺序无关。空转靠两枚廉价读数：远端令牌与"本机上次发出去的内容指纹"（未读不算内容）。
+    /// </remarks>
+    private async Task<CommentRound> SyncCommentsAsync(
+        SyncState state, RemoteTree tree, CancellationToken cancel)
+    {
+        var localPath = CanvasStore.CommentsPath(_boardPath);
+        var local = BoardComments.Load(localPath);
+
+        if (local.Problem is not null)
+        {
+            return new CommentRound(false, false, $"评论未同步：本地那份读不出（{local.Problem}）");
+        }
+
+        var localDigest = BoardComments.ContentDigest(local);
+        var farToken = tree.TokenFor(_paths.CommentsPath);
+
+        if (farToken == state.CommentsToken && localDigest == state.PublishedCommentsSha)
+        {
+            return new CommentRound(false, false, null);
+        }
+
+        var far = new BoardComments();
+        var farDigest = BoardComments.ContentDigest(far);
+
+        if (farToken is not null)
+        {
+            var file = await _remote.ReadAsync(_paths.CommentsPath, cancel).ConfigureAwait(false);
+
+            if (file is null)
+            {
+                farToken = null;
+            }
+            else
+            {
+                far = BoardComments.Parse(Encoding.UTF8.GetString(file.Content));
+
+                if (far.Problem is not null)
+                {
+                    return new CommentRound(false, false, $"评论未同步：远端那份读不懂（{far.Problem}）");
+                }
+
+                farToken = file.Token;
+                farDigest = BoardComments.ContentDigest(far);
+            }
+        }
+
+        var merged = BoardComments.Merge(local, far);
+        var pulled = false;
+
+        if (BoardComments.ContentDigest(merged) != localDigest)
+        {
+            try
+            {
+                // 锁内再并一次盘上的那份：同步跑着的时候，agent 可能又写了一条。
+                merged.Save(localPath);
+                pulled = true;
+            }
+            catch (IOException e)
+            {
+                return new CommentRound(false, false, $"评论未同步：本地写不进去（{e.Message}）");
+            }
+        }
+
+        var pushed = false;
+
+        for (var attempt = 1; attempt <= MaxRounds; attempt++)
+        {
+            var bytes = Ledger.Encode(merged.ToJson(includeUnread: false));
+            var digest = Ledger.Digest(bytes);
+
+            if (farToken is not null && digest == farDigest)
+            {
+                break;
+            }
+
+            if (farToken is null && merged.Threads.Count == 0 && merged.Tombstones.Count == 0)
+            {
+                break;
+            }
+
+            var written = await _remote.WriteAsync(_paths.CommentsPath, bytes, farToken, cancel).ConfigureAwait(false);
+
+            if (written.Outcome == WriteOutcome.Written)
+            {
+                pushed = true;
+                farToken = written.Token;
+                farDigest = digest;
+                break;
+            }
+
+            if (written.Outcome != WriteOutcome.Conflict)
+            {
+                var (_, detail) = Describe(written.Outcome, written.Detail);
+
+                state.CommentsToken = farToken;
+                _ledger.Save(state);
+
+                return new CommentRound(pulled, pushed, $"评论未同步：{detail}");
+            }
+
+            Note($"评论第 {attempt} 发被远端挡回，它已不是我们合并时那份；重新合并");
+
+            var fresh = await _remote.ReadAsync(_paths.CommentsPath, cancel).ConfigureAwait(false);
+
+            if (fresh is null)
+            {
+                farToken = null;
+                far = new BoardComments();
+                farDigest = BoardComments.ContentDigest(far);
+            }
+            else
+            {
+                far = BoardComments.Parse(Encoding.UTF8.GetString(fresh.Content));
+
+                if (far.Problem is not null)
+                {
+                    return new CommentRound(pulled, pushed, $"评论未同步：远端那份读不懂（{far.Problem}）");
+                }
+
+                farToken = fresh.Token;
+                farDigest = BoardComments.ContentDigest(far);
+            }
+
+            merged = BoardComments.Merge(merged, far);
+
+            try
+            {
+                merged.Save(localPath);
+                pulled = true;
+            }
+            catch (IOException e)
+            {
+                return new CommentRound(pulled, pushed, $"评论未同步：本地写不进去（{e.Message}）");
+            }
+        }
+
+        var finalDigest = Ledger.Digest(Ledger.Encode(merged.ToJson(includeUnread: false)));
+        var inSync = farToken is null
+            ? merged.Threads.Count == 0 && merged.Tombstones.Count == 0
+            : finalDigest == farDigest;
+
+        state.CommentsToken = farToken;
+
+        if (inSync)
+        {
+            state.PublishedCommentsSha = farDigest;
+        }
+
+        _ledger.Save(state);
+
+        var moved = pulled || pushed;
+
+        return new CommentRound(
+            moved,
+            pushed,
+            inSync
+                ? moved ? $"评论已同步（{merged.Threads.Count} 线程 / {merged.MessageTotal} 条）" : null
+                : "评论未同步：远端一直在变（本地这份已保住，下一轮再试）");
+    }
+
+    private sealed record CommentRound(bool Moved, bool Pushed, string? Comments);
+
 
     /// <summary>
     /// Publishes the merged board. Comes back with what it finally put up there, because a

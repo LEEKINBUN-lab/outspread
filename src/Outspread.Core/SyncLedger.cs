@@ -29,6 +29,15 @@ public sealed class SyncState
 
     public string? ManifestToken { get; set; }
 
+    /// <summary>远端评论文件上次带着的令牌：空转判断与比较交换都用它。</summary>
+    public string? CommentsToken { get; set; }
+
+    /// <summary>
+    /// 本机最后发出去的那份评论内容的指纹（不含未读）。与本机当前指纹相同＝评论没有待发的东西；
+    /// 未读翻一下不该算"有东西要发"，所以它不进指纹。
+    /// </summary>
+    public string? PublishedCommentsSha { get; set; }
+
     /// <summary>Revision the ancestor and the far file agreed on last time.</summary>
     public int Rev { get; set; }
 
@@ -357,6 +366,12 @@ public sealed class SyncWorkspace
 /// <summary>Where a board lives on the far side. Derived from the file name so several boards can share one folder.</summary>
 public sealed record SyncPaths(string DocPath, string ManifestPath)
 {
+    /// <summary>
+    /// 仓里那份评论账：与板同名、挨着放。它是独立文件而不是塞进 `.canvas`——评论是对话，
+    /// 板要留给别的工具打开；也正因为独立，它才能按消息号取并集合，不必挤进三方差分。
+    /// </summary>
+    public string CommentsPath => DocPath[..^".canvas".Length] + ".comments.json";
+
     /// <summary>仓里那份板文件的键：板名（文件名去掉 `.canvas`）。改名标记存的就是它。</summary>
     public static string BoardStem(string boardPath)
     {

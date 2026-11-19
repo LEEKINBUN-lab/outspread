@@ -333,6 +333,9 @@ internal sealed class SyncHost
     /// <summary>Deletions this window has already told the user about, so a retry loop is not a loop of toasts.</summary>
     private readonly HashSet<string> _warnedRetries = new(StringComparer.Ordinal);
 
+    /// <summary>上一条说出口的评论同步警告：同一句不重复弹。</summary>
+    private string? _lastCommentWarning;
+
     private void Say(SyncReport report)
     {
         switch (report.Outcome)
@@ -417,5 +420,24 @@ internal sealed class SyncHost
 
         // A path that stopped being a problem is allowed to become one again, and say so.
         _warnedRetries.IntersectWith(report.Assets?.Retry ?? []);
+
+        if (report.Comments is { } comments)
+        {
+            Diagnostics.Write($"sync comments: {comments}");
+
+            if (comments.StartsWith("评论未同步", StringComparison.Ordinal))
+            {
+                // 评论是另一条通道：板同步成功不代表它成功。同一句只提醒一次，免得每两分钟一条。
+                if (_lastCommentWarning != comments)
+                {
+                    _lastCommentWarning = comments;
+                    _say(comments);
+                }
+            }
+            else
+            {
+                _lastCommentWarning = null;
+            }
+        }
     }
 }
